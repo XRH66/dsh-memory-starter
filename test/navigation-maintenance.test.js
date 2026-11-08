@@ -6,7 +6,7 @@ import os from 'node:os';
 import { memoryStore } from './fake-memory.js';
 import { fakeAgent, fakeLlm, directUser, runPreStep, turnStart, userMessage, assistantMessage, turnEnd, TARGET_SESSION } from './helpers.js';
 import { resolveConfig } from '../lib/config.js';
-import { recallNavigation } from '../lib/navigation.js';
+import { recallNavigation, noteMatchesProjectPath } from '../lib/navigation.js';
 import { maintainIndexes } from '../lib/maintenance.js';
 import { createBridge } from '../lib/index.js';
 import { readMemoryStatus } from '@local/dsh-global-settings/memory-status';
@@ -31,6 +31,13 @@ const plan = JSON.stringify({
   assignments:[],
   headings:[{index:indexId,find:'## 不要评价',replace:'## 评价与回应'}],
   profile:[{entryIndex:1,find:oldText,text:newText}],
+});
+
+test('group maintenance updates group index without reading personal profile and rejects another subject',async()=>{
+  const store=memoryStore();seed(store);const groupFact='personal/members/710000001/facts/qq-710000001-偏好',groupIndex='personal/index/表达偏好',source=structuredClone(store.notes.get(factId));source.permalink=groupFact;source.title='成员 - 偏好';source.filePath='members/710000001/facts/qq-710000001-偏好.md';source.frontmatter.subject='qq:710000001';store.notes.set(groupFact,source);store.notes.get(groupIndex).content='# 表达偏好\n\n- [[成员 - 偏好]] —— 旧内容\n';
+  let profileReads=0;const tools={get(...args){const tool=store.tools.get(...args);return tool&&{...tool,execute:(input,exec)=>{if(input.identifier===profileId){profileReads++;throw Error('group must not access profile');}return tool.execute(input,exec);}};}},llm=fakeLlm(JSON.stringify({assignments:[],headings:[],profile:[{entryIndex:1,find:oldText,text:newText}]})),ctx={maintenanceScope:'group',config:resolveConfig({}),tools,agent:fakeAgent(TARGET_SESSION),sessionId:TARGET_SESSION,llm};
+  const result=await maintainIndexes(ctx,[{action:'CORRECT',permalink:groupFact}]);assert.equal(result.updated,1);assert.equal(result.profileUpdated,0);assert.equal(profileReads,0);assert.match(store.notes.get(groupIndex).content,/不要每句话都评价我/);
+  source.frontmatter.subject='qq:710000003';await assert.rejects(maintainIndexes(ctx,[{action:'UPDATE',permalink:groupFact}]),/GROUP_SCOPE_MISMATCH/);await assert.rejects(maintainIndexes(ctx,[{action:'UPDATE',permalink:factId}]),/GROUP_SCOPE_MISMATCH/);source.frontmatter.subject='qq:710000001';delete source.frontmatter.memory_id;await assert.rejects(maintainIndexes(ctx,[{action:'UPDATE',permalink:groupFact}]),/GROUP_FACT_NOT_ELIGIBLE/);
 });
 
 test('navigation independently reads latest facts; ignores obsolete prose, missing-id index is usable', async () => {
@@ -103,6 +110,36 @@ test('correction synchronizes linked rows and one self-profile entry through exi
   assert.match(store.notes.get(profileId).content,/可以有点皮，正事认真/);
   assert.match(store.notes.get(profileId).content,/记录日期: 2026-10-24 10:00/);
   assert.equal(store.notes.get(factId).frontmatter.memory_id,'fact-1');
+});
+
+test('main project accepts migrated personal permalinks only with matching real paths', async () => {
+  const store=memoryStore();seed(store);
+  const ctx={config:resolveConfig({project:'main'}),tools:store.tools,agent:fakeAgent(TARGET_SESSION),sessionId:TARGET_SESSION,llm:fakeLlm(plan)};
+  const result=await maintainIndexes(ctx,[{action:'CORRECT',permalink:factId,memoryId:'fact-1'}]);
+  assert.equal(result.updated,1);assert.equal(result.profileUpdated,1);
+  assert.equal(store.notes.get(factId).permalink,factId);
+  assert.equal(store.notes.get(profileId).permalink,profileId);
+  assert.match(store.notes.get(indexId).content,/不要每句话都评价我/);
+  assert.match(store.notes.get(profileId).content,/可以有点皮，正事认真/);
+});
+
+test('the personal migration alias is limited to main and needs a safe real path', () => {
+  const note={permalink:'personal/dafeiyu/thoughts/自我档案',file_path:'dafeiyu/thoughts/自我档案.md'};
+  assert.equal(noteMatchesProjectPath(note,'main','dafeiyu/thoughts/自我档案',{exact:true}),true);
+  assert.equal(noteMatchesProjectPath(note,'other','dafeiyu/thoughts/自我档案',{exact:true}),false);
+  for (const file_path of [path.resolve(os.tmpdir(),'vault','dafeiyu','thoughts','自我档案.md'),'dafeiyu/../elsewhere/自我档案.md','dafeiyu/thoughts/../thoughts/自我档案.md']) {
+    assert.equal(noteMatchesProjectPath({...note,file_path},'main','dafeiyu/thoughts/自我档案',{exact:true}),false);
+  }
+});
+
+test('main project rejects a legacy permalink whose real file path is elsewhere', async () => {
+  const store=memoryStore();seed(store);
+  store.notes.get(profileId).filePath='dafeiyu/thoughts/别人的档案.md';
+  const ctx={config:resolveConfig({project:'main'}),tools:store.tools,agent:fakeAgent(TARGET_SESSION),sessionId:TARGET_SESSION,llm:fakeLlm(plan)};
+  await assert.rejects(maintainIndexes(ctx,[{action:'CORRECT',permalink:factId}]),/INVALID_SELF_PROFILE/);
+  store.notes.get(profileId).filePath='dafeiyu/thoughts/自我档案.md';
+  store.notes.get(profileId).permalink='other/dafeiyu/thoughts/自我档案';
+  await assert.rejects(maintainIndexes(ctx,[{action:'CORRECT',permalink:factId}]),/INVALID_SELF_PROFILE/);
 });
 
 test('a concurrent index edit is preserved and reported for retry', async () => {

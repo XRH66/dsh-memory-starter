@@ -11,6 +11,8 @@ import { memoryCall, recallNavigation } from '../lib/navigation.js';
 import { requestedIndexTopic } from '../lib/index-pages.js';
 import { createRecoveryStore, mergePending } from '../lib/recovery.js';
 import { createBridge } from '../lib/index.js';
+// QQBridge is an optional add-on; the ordinary package omits lib/qqbridge.
+const attachQQBridgeMemory=await import('../lib/qqbridge/attachment.js').then(m=>m.attachQQBridgeMemory,()=>null);
 
 const empty={assignments:[],creations:[],removals:[],headings:[],profile:[]};
 const plan=(p)=>JSON.stringify({...empty,...p});
@@ -110,6 +112,36 @@ test('persisted topic plan survives restart after overview failure without anoth
   assert.equal(llm.calls.length,1);assert.equal(noModel.calls.length,0);
   assert.equal([...memory.notes.values()].filter(n=>n.title==='摄影').length,1);
   assert.match(memory.notes.get(overview.permalink).content,/摄影/);
+});
+
+test('a suspended QQ plan resumes its saved partial edit after unrelated DSH work and restart',async(t)=>{
+  const {ctx,memory,facts,overview}=await setup(),root=await fs.mkdtemp(path.join(os.tmpdir(),'dafeiyu-index-growth-'));
+  const vault=path.join(root,'vault');await fs.mkdir(vault);const config=resolveConfig({vaultPath:vault}),qq='qqb-p-710000001';let qqAllowed=true,fail=true;
+  const tools={get(name,agent){const def=ctx.tools.get(name,agent);return {...def,async execute(args,exec){if(fail&&name.endsWith('__edit_note')&&args.identifier===overview.permalink)throw new Error('overview temporarily unavailable');return def.execute(args,exec);}};}};
+  const llm=fakeLlm(topicPlan(facts)),findAgent=id=>fakeAgent(id),maintenanceOwnerAllowed=id=>id===TARGET_SESSION||(id===qq&&qqAllowed);
+  let store=createRecoveryStore(config),bridge=createBridge({config,tools,llm,findAgent,maintenanceOwnerAllowed,recoveryStore:store});
+  t.after(async()=>{await bridge.dispose();assert.ok(root.startsWith(path.join(os.tmpdir(),'dafeiyu-index-growth-')));await fs.rm(root,{recursive:true,force:true});});
+  await store.update(s=>mergePending(s,{...change(facts[0]),sessionId:qq,turn:1}));await bridge.retryPending({force:true});
+  let state=await store.read();assert.ok(state.indexMaintenance.bundle);assert.ok(memory.notes.has('personal/index/摄影'));
+  qqAllowed=false;fail=false;await store.update(s=>mergePending(s,{...change(facts[1]),sessionId:TARGET_SESSION,turn:2}));
+  await bridge.retryPending({force:true});state=await store.read();assert.ok(state.suspendedIndexMaintenance?.[0]?.bundle);assert.ok(!state.pending.some(p=>p.owners.some(o=>o.sessionId===TARGET_SESSION)));assert.ok(state.pending.some(p=>p.owners.some(o=>o.sessionId===qq)));
+  await bridge.dispose();qqAllowed=true;store=createRecoveryStore(config);const resumed=fakeLlm(new Error('saved QQ plan must not call the model'));bridge=createBridge({config,tools,llm:resumed,findAgent,maintenanceOwnerAllowed,recoveryStore:store});
+  await bridge.retryPending({force:true});state=await store.read();assert.equal(state.pending.length,0);assert.equal(state.suspendedIndexMaintenance,undefined);assert.equal(resumed.calls.length,0);assert.equal([...memory.notes.values()].filter(n=>n.title==='摄影').length,1);assert.match(memory.notes.get(overview.permalink).content,/摄影/);
+});
+
+test('owner resume finishes an exhausted shared partial plan without recreating its index',{skip:!attachQQBridgeMemory&&'QQBridge add-on not present'},async()=>{
+  const {ctx,memory,facts,overview}=await setup(),root=await fs.mkdtemp(path.resolve('.local/qq-shared-plan-')),vault=path.join(root,'vault');await fs.mkdir(vault);
+  const config=resolveConfig({vaultPath:vault,captureProvider:'fixture',captureModel:'fixture'}),qq='qqb-p-710000001';let fail=true,gate=()=>false;
+  const tools={get(name,agent){const def=ctx.tools.get(name,agent);return {...def,async execute(args,exec){if(fail&&name.endsWith('__edit_note')&&args.identifier===overview.permalink)throw new Error('overview temporarily unavailable');return def.execute(args,exec);}};}};
+  const store=createRecoveryStore(config),maintenanceOwnerAllowed=(id,item)=>id===TARGET_SESSION||gate(id,item),llm=fakeLlm(topicPlan(facts)),bridge=createBridge({config,tools,llm,findAgent:id=>fakeAgent(id),maintenanceOwnerAllowed,recoveryStore:store});
+  const recentStore={async bindQQ(){return()=>{};},async idle(){}},personal={directory:root,config,memory:{tools},recentStore,recoveryStore:store,dsh:bridge,registerPlatformMaintenance(fn){gate=fn;return()=>{gate=()=>false;};}};
+  let attachment;try{
+    gate=()=>true;await store.update(s=>{mergePending(s,{...change(facts[0]),sessionId:qq,turn:1});mergePending(s,{...change(facts[0]),sessionId:TARGET_SESSION,turn:2});});await bridge.retryPending({force:true});
+    let state=await store.read();assert.ok(state.indexMaintenance.bundle);const revision=state.pending[0].revision;await store.update(s=>{s.pending[0].attempts=3;});gate=()=>false;fail=false;
+    attachment=await attachQQBridgeMemory({ctx:{on(){return()=>{};}},personal,binding:{botId:'710000002',ownerId:'710000001'},selection:{resolve:()=>null},acquireMemory:async()=>({tools}),decodeSessionKey:id=>id===qq?'private:710000001':null,llm:fakeLlm(new Error('saved plan must not need a new model'))});
+    await bridge.retryPending({force:false});state=await store.read();assert.equal(state.suspendedIndexMaintenance[0].changes[0].revision,revision);assert.equal(state.pending[0].attempts,3);
+    await attachment.resumeOwnerPending();await attachment.close();state=await store.read();assert.equal(state.pending.length,0);assert.equal(state.suspendedIndexMaintenance,undefined);assert.equal(llm.calls.length,1);assert.equal([...memory.notes.values()].filter(n=>n.title==='摄影').length,1);assert.match(memory.notes.get(overview.permalink).content,/摄影/);
+  }finally{await attachment?.close();await bridge.dispose();}
 });
 
 test('lost create response reuses page; changed source invalidates saved plan',async()=>{

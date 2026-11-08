@@ -9,6 +9,15 @@ import { memoryStore, makeVault } from './fake-memory.js';
 
 const SESSION = TARGET_SESSION;
 
+test('trusted bound self subject overrides generated identity and refuses a foreign update',async()=>{
+  const store=memoryStore(),config=resolveConfig({captureTimeoutMs:2000}),agent=fakeAgent(SESSION);
+  const base={sessionId:SESSION,turn:1,userText:'我平时喜欢蓝色笔记本',subject:'qq:710000001',agent,config,tools:store.tools};
+  const result=await captureTurn({...base,llm:fakeLlm(JSON.stringify({actions:[{action:'ADD',kind:'fact',category:'preference',subject:'invented-user',attribute:'笔记本偏好',value:'蓝色笔记本',evidence:base.userText}]}))});
+  assert.equal(result.persisted,true);assert.ok(JSON.stringify([...store.notes.values()]).includes('qq:710000001'));assert.ok(!JSON.stringify([...store.notes.values()]).includes('invented-user'));
+  const bad=await captureTurn({...base,turn:2,llm:fakeLlm(JSON.stringify({actions:[{action:'UPDATE',kind:'fact',category:'preference',subject:'invented',attribute:'笔记本偏好',value:'蓝色笔记本',evidence:base.userText,target_memory_id:'foreign-id'}]}))});
+  assert.equal(bad.persisted,false);assert.match(bad.error,/bound owner/);
+});
+
 function emptyTools(writes) {
   return fakeTools((input) => {
     if (input.name === 'mcp__basic_memory__search_notes') return mcpResult({ results: [] });

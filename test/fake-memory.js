@@ -12,17 +12,22 @@ function slug(value) {
  * vault-relative path and optimistic checksum. Only the tool surface the bridge
  * uses is implemented.
  */
-export function memoryStore({ vault = null } = {}) {
+export function memoryStore({ vault = null, project = 'personal' } = {}) {
   const notes = new Map();
   let seq = 0;
   const filePathOf = (permalink) => {
     if (!permalink) return '';
-    return permalink.replace(/^personal\//, '') + '.md';
+    return (permalink.startsWith(project+'/')?permalink.slice(project.length+1):permalink) + '.md';
   };
   const find = (identifier) => {
     const raw = String(identifier ?? '');
-    const direct = notes.get(raw) || notes.get(raw.replace(/^personal\//, ''));
+    const direct = notes.get(raw) || notes.get(raw.startsWith(project+'/')?raw.slice(project.length+1):raw);
     if (direct) return direct;
+    const byFile=[...notes.values()].find(note=>note.filePath===raw||note.filePath===raw.replace(project+'/','')||note.directory+'/'+note.title+'.md'===raw);
+    if(byFile)return byFile;
+    const relative = raw.startsWith(project+'/') ? raw.slice(project.length+1) : raw;
+    const migrated = notes.get('personal/' + relative) || notes.get('personal/' + raw.replace(/^[^/]+\//, ''));
+    if (migrated) return migrated;
     const byTitle = [...notes.values()].filter((note) => note.title === raw);
     return byTitle.length === 1 ? byTitle[0] : undefined;
   };
@@ -33,11 +38,12 @@ export function memoryStore({ vault = null } = {}) {
       const dir = String(args.dir_name ?? '').replace(/\/+$/, '');
       const nodes = [];
       for (const note of notes.values()) {
-        const relative = note.permalink.replace(/^personal\//, '');
-        if (!relative.startsWith(dir + '/')) continue;
-        const rest = relative.slice(dir.length + 1);
+        const relative = note.permalink.startsWith(project+'/')?note.permalink.slice(project.length+1):note.permalink;
+        const file = String(note.filePath ?? '').replace(/\\/g, '/') || (relative + '.md');
+        if (!file.startsWith(dir + '/')) continue;
+        const rest = file.slice(dir.length + 1);
         if (rest.includes('/')) continue;
-        nodes.push({ type: 'file', name: note.title, title: note.title, directory_path: dir, permalink: note.permalink, updated_at: note.updated });
+        nodes.push({ type: 'file', name: note.title, title: note.title, directory_path: dir, permalink: note.permalink, file_path: file, updated_at: note.updated });
       }
       return mcpResult({ nodes });
     }
@@ -55,7 +61,7 @@ export function memoryStore({ vault = null } = {}) {
     }
     if (input.name === 'mcp__basic_memory__write_note') {
       const directory = String(args.directory ?? '').replace(/^\/+|\/+$/g, '');
-      const permalink = 'personal/' + directory + '/' + slug(args.title);
+      const permalink = project + '/' + directory + '/' + slug(args.title);
       const existing = notes.get(permalink);
       if (existing && !args.overwrite) throw new Error('note already exists');
       if (existing && args.expected_checksum && String(args.expected_checksum) !== existing.checksum) {
@@ -136,7 +142,7 @@ export function memoryStore({ vault = null } = {}) {
       const results = [...notes.values()]
         .filter((note) => tags.every((tag) => note.tags.includes(tag)))
         .filter((note) => !query || note.content.toLowerCase().includes(query) || note.title.toLowerCase().includes(query) || query.split(/\s+/).some((part) => part.length > 1 && note.content.toLowerCase().includes(part)))
-        .map((note) => ({ title: note.title, permalink: note.permalink, score: 1, matched_chunk: note.content }));
+        .map((note) => ({ title: note.title, permalink: note.permalink, file_path: note.filePath, score: 1, matched_chunk: note.content }));
       return mcpResult({ results });
     }
     throw new Error('unexpected tool ' + input.name);

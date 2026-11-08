@@ -17,3 +17,8 @@ state/
 sessions/
 .DS_Store
 Thumbs.db
+/$null
+.dsh-ops-update-*.lock
+
+# Local-only working material (not part of the release allowlist)
+AGENTS.md

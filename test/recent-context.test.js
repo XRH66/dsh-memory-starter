@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createRecentConversationStore,estimateRecentTokens,RECENT_SOURCE} from '../lib/recent-context.js';
+import {createRecentConversationStore,estimateRecentTokens,originalRecentStats,RECENT_SOURCE} from '../lib/recent-context.js';
 import {createBridge} from '../lib/index.js';
 import {resolveConfig} from '../lib/config.js';
 import {directUser,fakeAgent,turnStart,turnEnd,assistantMessage} from './helpers.js';
@@ -21,6 +21,30 @@ async function add(store,n,text='今天随便出去走了走。',sessionId='sess
   await store.record({sessionId,turn:n,status:'completed',assistant:{id:'assistant-'+n,text:'路上有没有遇见好玩的？',seq:n*3+1}});
   return result.id;
 }
+test('handoff sample counts only current nonempty sources from the supplied page',()=>{
+  const source={isCurrent:true,sessionId:'session-A',turn:1,text:'窗口正文',recordedAt:2000};
+  const rows=[source,{...source,text:'回答',time:1000},{...source,sessionId:'session-B'},
+    {...source,isCurrent:false},{...source,withdrawn:true},{...source,text:''}];
+  const sampledAt=new Date(3000).toISOString();
+  assert.equal(originalRecentStats(false,rows,sampledAt).storage,'disabled');
+  assert.equal(originalRecentStats(true).sampledAt,null);
+  const stats=originalRecentStats(true,rows,sampledAt);
+  assert.equal(stats.source,'original-handoff-sample');
+  assert.equal(stats.sampledAt,sampledAt);
+  assert.equal(stats.sampledMessages,3);
+  assert.equal(stats.turns,2);
+  assert.equal(stats.estimatedTokens,2*estimateRecentTokens(source.text)+estimateRecentTokens('回答'));
+  assert.equal(stats.oldestAt,new Date(1000).toISOString());
+  assert.equal(stats.newestAt,new Date(2000).toISOString());
+  assert.equal(stats.capacityTokens,null);
+  assert.equal(stats.evictedTurns,null);
+  assert.doesNotMatch(JSON.stringify(stats),/窗口正文|回答|session-A|session-B/);
+});
+test('read-only recent access never recovers or rewrites pending source data',async t=>{
+  const {config,store}=await fixture(t);await store.record({sessionId:'session-A',turn:1,user:{id:'pending',text:'虚构近期内容',seq:1,time:'2026-10-01T00:01:00Z'}});
+  const before=await fs.readFile(store.file,'utf8'),reader=createRecentConversationStore({config,readOnly:true});const page=await reader.page({sessionId:'session-B',maxChars:2400});
+  assert.match(page.text,/虚构近期内容/);assert.equal(await fs.readFile(store.file,'utf8'),before);await assert.rejects(reader.record({}),/read-only/);
+});
 
 test('default 16K keeps original roles across midnight and restarts, outside Vault',async t=>{
   const {config,store}=await fixture(t);assert.equal(config.recentContextTokens,16384);
