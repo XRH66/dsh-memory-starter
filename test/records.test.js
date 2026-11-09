@@ -5,7 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { resolveConfig } from '../lib/config.js';
 import { createRecordsTool, recallPersonalForTurn } from '../lib/records.js';
+import { setPersonalTimeZone } from '../lib/personal-namespace.js';
 import { fakeTools, mcpResult } from './helpers.js';
+
+setPersonalTimeZone('Asia/Shanghai');
 
 const NOW = () => new Date('2026-10-24T04:00:00.000Z');
 

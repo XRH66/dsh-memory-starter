@@ -9,6 +9,7 @@ import {createMemoryEntryAccess} from '../lib/memory-entry-access.js';
 import {createMemoryQueryAnswer,createMemoryQueryTools,createMemoryReferenceLoader,vectorQueryText} from '../lib/memory-query.js';
 import {createUnifiedProfiles} from '../lib/unified/profiles.js';
 import {resolveConfig} from '../lib/config.js';
+import {personalTimeZone,setPersonalTimeZone} from '../lib/personal-namespace.js';
 import {memoryStore} from './fake-memory.js';
 import {fakeAgent} from './helpers.js';
 
@@ -91,7 +92,7 @@ test('organizer requests eligible vector candidates before the limit and thresho
   const found=await load({sources:[{role:'user',text:'虚构背景'}]},
     {agent:f.agent,scope:{ownerSubject:'owner',project:'main'},signal:new AbortController().signal,check(){}});
   assert.deepEqual(found,[{id:'softened',revision:'one'}]);
-  assert.equal(calls[0].referenceOnly,true);assert.equal(calls[0].minSimilarity,f.config.rawRecallMinScore);assert.equal(calls[0].limit,8);
+  assert.equal(calls[0].referenceOnly,true);assert.equal(calls[0].minSimilarity,0.45);assert.equal(calls[0].limit,8);
 });
 
 test('actual original reader and native tools share the answer ledger without model or vector preparation',async t=>{
@@ -124,7 +125,7 @@ test('recent bypasses vector configuration and later searches share a pending an
   const waiting=f.answer.search({query:'桌面'});
   assert.equal(await Promise.race([textStarted.then(()=>true),nextTurn()]),true);
   await nextTurn();
-  t.mock.timers.tick(1950);
+  t.mock.timers.tick(2450);
   const partial=await Promise.race([waiting,nextTurn()]);
   assert.equal(partial?.channels.vector.state,'timeout');assert.deepEqual(partial.records.map(row=>row.id),[second.id]);
   assert.equal(snapshots,1);assert.equal(profiles.length,0);
@@ -193,6 +194,32 @@ test('a failed duplicate loses its vector score but keeps its independent text r
   assert.equal(found.status,'partial');assert.equal(found.channels.vectorValidation.state,'failed');
   assert.deepEqual(reads,[duplicate.id]);assert.deepEqual(found.records.map(row=>[row.id,row.text]),[[first.id,first.text],[duplicate.id,duplicate.text]]);
   assert.doesNotMatch(JSON.stringify(found),/private document path/);
+});
+
+test('vector similarity is ranked once and final merge applies weight once',async t=>{
+  const f=await fixture(t);
+  f.save({messageId:'high',text:'书架高层候选',time:1000});
+  f.save({messageId:'low',text:'书架低层候选',time:2000});
+  const {sources}=f.raw.queryReader({ownerSubject:'owner',project:'main'},{authorize:()=>true}).search({query:'书架',limit:40});
+  const high=sources.find(source=>source.messageId==='high'),low=sources.find(source=>source.messageId==='low');
+  const row=(source,similarity,weight)=>({...source,similarity,score:similarity,weight,
+    anchor:{id:source.id,revision:source.revision,ref:source.ref}});
+  const rows=[row(high,.9,.5),row(low,.3,1)];
+  const vectors={async getSnapshot(){return {id:'fixture',revision:1};},async query(){return {records:rows};},
+    async resolveDocument({id,revision}){return rows.find(item=>item.id===id&&item.revision===revision);}};
+  const answer=createMemoryQueryAnswer({access:f.access,agent:f.agent,raw:f.raw,entries:f.entries,tools:f.notes.tools,config:f.config,vectors});
+  t.after(()=>answer.dispose());
+  const found=await answer.search({query:'书架',limit:2});
+  assert.deepEqual(found.records.map(record=>record.id),[low.id,high.id]);
+});
+
+test('memory search total wait derives from the configured model and device',async t=>{
+  const f=await fixture(t);
+  const config=resolveConfig({...f.config,rawRecallModel:'Qwen/Qwen3-Embedding-4B',rawRecallDevice:'cpu'});
+  const answer=createMemoryQueryAnswer({access:f.access,agent:f.agent,raw:f.raw,entries:f.entries,tools:f.notes.tools,config});
+  t.after(()=>answer.dispose());
+  const found=await answer.search({query:'书架',limit:1});
+  assert.ok(found.budget.remainingMs>3900&&found.budget.remainingMs<=4000);
 });
 
 test('P02 committed Markdown entries are found with typed state and importance, then expand to their original evidence',async t=>{
@@ -450,11 +477,12 @@ test('vector lane folds multi-line and padded queries the vector service would r
   assert.doesNotMatch(calls[0].query,/[\u0000-\u001f]/u);assert.equal(calls[0].query,calls[0].query.trim());
 });
 
-test('search records carry a readable host-local time next to epoch milliseconds',async()=>{
+test('search records carry a readable personal time next to epoch milliseconds',async t=>{
+  const original=personalTimeZone();t.after(()=>setPersonalTimeZone(original));setPersonalTimeZone('Asia/Shanghai');
   const {localTime,VECTOR_LANE_LIMIT}=await import('../lib/memory-query.js');
   const ms=Date.UTC(2026,2,22,6,5);const text=localTime(ms);
   assert.match(text,/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} [+-]\d{2}:\d{2}$/u);
-  const d=new Date(ms);assert.ok(text.startsWith(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`));
+  assert.equal(text,'2026-03-22 14:05 +08:00');// personal zone Asia/Shanghai, independent of the host zone
   assert.equal(localTime(undefined),undefined);assert.equal(VECTOR_LANE_LIMIT,10);
 });
 

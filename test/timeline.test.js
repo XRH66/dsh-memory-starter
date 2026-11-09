@@ -7,10 +7,12 @@ import { resolveConfig, Config } from '../lib/config.js';
 import { createBridge } from '../lib/index.js';
 import { createTimelineReader, invalidateTimeline, renderTimeline, timelineCandidate } from '../lib/timeline.js';
 import { applyMemoryActions, softenMemory } from '../lib/memory.js';
+import { setPersonalTimeZone } from '../lib/personal-namespace.js';
 import { memoryStore } from './fake-memory.js';
 import { directUser, fakeAgent, fakeLlm, fakeTools, mcpResult, runPreStep } from './helpers.js';
 
 const NOW = Date.parse('2026-10-27T02:00:00.000Z');
+setPersonalTimeZone('Asia/Shanghai');
 const BASE = resolveConfig({ vaultPath: '', autoCapture: false, personalRecall: false, maxIndexNotes: 0 });
 function note(id = 'one', patch = {}, value = '用户周六已经空出来了') {
   const meta = { memory_id: id, memory_kind: 'fact', status: 'active', permalink: 'personal/chats/facts/' + id,

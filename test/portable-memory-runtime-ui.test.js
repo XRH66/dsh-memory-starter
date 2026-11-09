@@ -97,6 +97,7 @@ const BASE='/api/basic-memory-settings';
 const MODEL='Qwen/Qwen3-Embedding-4B';
 const CLOUD='text-embedding-v4';
 const snapshot=()=>({ok:true,revision:'r1',runtime:'loaded',directory:'/fictional-memory',sessions:[],
+  timeZone:'America/Los_Angeles',timeZoneConfigured:'',timeZoneHost:'America/Los_Angeles',timeZoneError:'',activeTimeZone:'America/Los_Angeles',
   sessionMemory:{defaultEnabled:false,effective:'next-user-turn',enabledSessions:[],states:[]},
   rawModel:{fields:{rawRecallModel:MODEL,rawRecallThreads:3,rawRecallDimensions:0,rawRecallGgufModel:'/fixture/model.gguf',rawRecallLlamaServer:'/fixture/llama.exe'}},
   rawModels:[{id:MODEL,label:'Qwen 4B',engine:'llamacpp',dimensions:2560},
@@ -113,6 +114,26 @@ const select=(tree,label)=>{const node=nodes(tree,n=>n.type==='select'&&n.props[
 const field=(tree,label)=>{const parent=nodes(tree,n=>n.type==='label'&&text(n).startsWith(label))[0];assert.ok(parent,'Missing field: '+label);return nodes(parent,n=>n.type==='input')[0];};
 const writes=env=>env.calls.filter(call=>call.body);
 async function modelPage(env){const page=env.page();await page.flush();button(page.tree,'维护').props.onClick();await page.flush();const model=env.component(component(page.tree,'RawModelSettings'));await model.flush();return {page,model};}
+
+test('maintenance time zone shows the active and host zones and saves the configured IANA name',async t=>{
+  let info=snapshot();
+  const env=environment((url,body)=>{
+    if(url===BASE+'/time-zone'){
+      info={...info,revision:'tz-two',timeZone:body.timeZone,timeZoneConfigured:body.timeZone};
+      return info;
+    }
+    return info;
+  });
+  t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'维护').props.onClick();await page.flush();
+  const zone=env.component(component(page.tree,'TimeZoneSettings'));await zone.flush();
+  assert.match(text(zone.tree),/当前生效：America\/Los_Angeles；本机时区：America\/Los_Angeles/);
+  field(zone.tree,'个人时区').props.onChange({target:{value:'Asia/Shanghai'}});await zone.flush();
+  await button(zone.tree,'保存时区').props.onClick();await zone.flush();
+  const write=writes(env).at(-1);
+  assert.equal(write.path,BASE+'/time-zone');
+  assert.deepEqual(JSON.parse(JSON.stringify(write.body)),{timeZone:'Asia/Shanghai',revision:'r1'});
+});
 
 test('cloud credential reuse is explicit, resets on address edits, and stays out of the password field',async t=>{
   const info=snapshot();info.rawModel={hasSavedApiKey:true,fields:{rawRecallModel:CLOUD,rawRecallApiBase:'https://fictional-a.example/v1',rawRecallApiKeyEnv:'FICTIONAL_A_KEY',rawRecallAllowCloud:true}};
@@ -220,11 +241,16 @@ test('saving runtime settings posts new fields and retains legacy threads withou
   field(model.tree,'CPU llama-server 程序').props.onChange({target:{value:'/fixture/cpu.exe'}});await model.flush();
   field(model.tree,'CUDA llama-server 程序').props.onChange({target:{value:'/fixture/cuda.exe'}});await model.flush();
   field(model.tree,'空闲后多少分钟').props.onChange({target:{value:'3'}});await model.flush();
+  field(model.tree,'单次编码超时（毫秒）').props.onChange({target:{value:'10000'}});await model.flush();
+  assert.equal(field(model.tree,'检索总等待（毫秒，0 为自动）').props.value,0);
+  field(model.tree,'检索总等待（毫秒，0 为自动）').props.onChange({target:{value:'3500'}});await model.flush();
   await button(model.tree,'应用运行设置').props.onClick();await model.flush();
   assert.equal(writes(env).length,1);const call=writes(env)[0];assert.equal(call.path,BASE+'/model');
   assert.equal(call.body.settings.rawRecallDevice,'cuda');
   assert.equal(call.body.settings.rawRecallCpuThreads,6);assert.equal(call.body.settings.rawRecallGpuThreads,4);
   assert.equal(call.body.settings.rawRecallIdleMs,180000);assert.equal(call.body.settings.rawRecallThreads,3);
+  assert.equal(call.body.settings.rawRecallTimeoutMs,10000);
+  assert.equal(call.body.settings.rawRecallQueryWaitMs,3500);
   assert.equal(call.body.settings.rawRecallLlamaCpuServer,'/fixture/cpu.exe');
   assert.equal(call.body.settings.rawRecallLlamaCudaServer,'/fixture/cuda.exe');
   assert.match(text(model.tree),/保存不会启动模型/);

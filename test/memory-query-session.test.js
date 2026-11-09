@@ -38,6 +38,17 @@ test('2-second waiting budget is fresh for each request rather than shared activ
   clock+=100000;assert.equal((await session.search({query:'second'})).status,'ok');assert.equal(session.budget().remainingMs,2000);
 });
 
+test('search total wait is separate from the open budget',async t=>{
+  let clock=0;const deadlines=[];
+  const {session}=fixture({tokenLimits:{waitMs:20},searchWaitMs:50,now:()=>clock,
+    search:async()=>({records:[record()]}),expand:async()=>({records:[record()]})});t.after(()=>session.dispose());
+  const found=await session.search({query:'first'});
+  deadlines.push(found.budget.remainingMs);
+  const opened=await session.expand({anchor:found.records[0].anchor});
+  deadlines.push(opened.budget.remainingMs);
+  assert.deepEqual(deadlines,[50,20]);
+});
+
 test('one timed out query aborts its own work without poisoning later calls in the same answer',async t=>{
   let calls=0,signal;const late=deferred();
   const {session}=fixture({tokenLimits:{waitMs:20},search:async request=>{calls++;signal=request.signal;return calls===1?late.promise:{records:[record('ready')]};}});t.after(()=>session.dispose());

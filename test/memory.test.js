@@ -4,8 +4,11 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { applyMemoryActions, createSoftenTool, loadCaptureCandidates, MEMORY_MARKER, MemoryError, softenMemory } from '../lib/memory.js';
+import { setPersonalTimeZone } from '../lib/personal-namespace.js';
 import { fakeAgent } from './helpers.js';
 import { memoryStore, makeVault } from './fake-memory.js';
+
+setPersonalTimeZone('Asia/Shanghai');
 
 const SESSION = 'session-memory-test';
 const NOW = () => new Date('2026-10-24T04:00:00.000Z');

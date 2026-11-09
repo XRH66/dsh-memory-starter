@@ -429,7 +429,7 @@ test('cancelled preparation cannot be resumed by its old intent, including after
   await assert.rejects(f.api.incremental({ grant: f.g, intentId }), { code: 'PROFILE_CANCELLED' });
 });
 
-test('query weights all resolved candidates before limit and uses live weights without reencoding', async t => {
+test('query ranks all resolved candidates by cosine and preserves live weights without reencoding', async t => {
   const f = await fixture(t);
   const weak = Array.from({ length: 8 }, (_, i) => ({ ...doc(`weak-${i}`), weight: 0.05 }));
   f.setRows([...weak, doc('strong')]); await f.choose();
@@ -441,26 +441,29 @@ test('query weights all resolved candidates before limit and uses live weights w
   await f.api.prepare({ grant: f.g });
   const before = f.calls.filter(row => row.op === 'embed' && row.kind === 'document').length;
   let result = await f.api.query({ query: 'query', grant: f.g, limit: 1 });
-  assert.equal(result.records[0].id, 'strong');
+  assert.equal(result.records[0].id, 'weak-0');
+  assert.equal(result.records[0].weight, 0.05);
   f.setRows([...weak.map(row => ({ ...row, weight: 1 })), { ...doc('strong'), weight: 0.01 }]);
   result = await f.api.query({ query: 'query', grant: f.g, limit: 1 });
   assert.equal(result.records[0].id, 'weak-0');
+  assert.equal(result.records[0].weight, 1);
   assert.equal(f.calls.filter(row => row.op === 'embed' && row.kind === 'document').length, before);
 });
 
-test('weakening a negative cosine cannot promote it; weights are rechecked after query encoding', async t => {
-  const f = await fixture(t); f.setRows([doc('closer'), doc('negative')]); await f.choose();
+test('vector order uses similarity while retaining weight for final merge', async t => {
+  const f = await fixture(t); f.setRows([doc('high'), doc('low')]); await f.choose();
   f.hooks.vectors = (texts, options, profile) => texts.map(text => {
-    const cosine = options.kind === 'query' ? 1 : text === 'closer' ? -0.2 : -0.8;
+    const cosine = options.kind === 'query' ? 1 : text === 'high' ? 0.9 : 0.3;
     return Array.from({ length: profile.dimensions }, (_, i) => i === 0 ? cosine : i === 1 ? Math.sqrt(1 - cosine ** 2) : 0);
   });
   await f.api.prepare({ grant: f.g });
-  f.hooks.embed = async (_, options) => {
-    if (options.kind === 'query') f.setRows([{ ...doc('closer'), weight: 0.1 }, doc('negative')]);
-  };
+  f.setRows([{ ...doc('high'), weight: 0.5 }, { ...doc('low'), weight: 1 }]);
   const result = await f.api.query({ query: 'query', grant: f.g, limit: 2 });
-  assert.deepEqual(result.records.map(row => row.id), ['negative', 'closer']);
-  assert.ok(Math.abs(result.records[1].score + 0.92) < 0.00001);
+  assert.deepEqual(result.records.map(row => row.id), ['high', 'low']);
+  assert.ok(Math.abs(result.records[0].similarity-0.9)<0.00001);assert.equal(result.records[0].weight,0.5);
+  assert.equal(result.records[0].score,result.records[0].similarity);
+  assert.ok(Math.abs(result.records[1].similarity-0.3)<0.00001);assert.equal(result.records[1].weight,1);
+  assert.equal(result.records[1].score,result.records[1].similarity);
 });
 
 const referenceDoc = (id, validity = 'current', storage = 'entry', weight = 1) => ({
@@ -502,10 +505,10 @@ test('bounded query filters on cosine and exposes it separately from the weighte
   f.setRows([referenceDoc('softened', 'current', 'entry', 0.5), referenceDoc('below-threshold')]);
   const query = { query: 'query', grant: f.g, limit: 1 };
   const ordinary = await f.api.query(query);
-  assert.equal(ordinary.records[0].id, 'below-threshold');
+  assert.equal(ordinary.records[0].id, 'softened');
   const filtered = await f.api.query({ ...query, minSimilarity: 0.2 });
   assert.deepEqual(filtered.records.map(({ id, similarity, score }) => ({ id, similarity, score })), [
-    { id: 'softened', similarity: 1, score: 0 },
+    { id: 'softened', similarity: 1, score: 1 },
   ]);
 });
 
