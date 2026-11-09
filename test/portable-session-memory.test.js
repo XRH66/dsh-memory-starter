@@ -15,6 +15,14 @@ import {fakeAgent,fakeLlm,runPreStep,directUser} from './helpers.js';
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 const USER='我今后改用青瓷杯喝茶，这是新的独立约定。';
 const logger={warn(){}};
+const notesIn=(memory,directory)=>[...memory.notes.values()].filter(note=>note.directory===directory);
+function assertTopicPage(memory,label){
+  const note=notesIn(memory,'chats/topics').find(item=>item.title===label);
+  assert.ok(note,'missing topic page: '+label);
+  assert.equal(note.filePath,'chats/topics/'+label+'.md');
+  assert.deepEqual(note.frontmatter,{title:label,type:'note',tags:['dsh-topic'],embed:false});
+  assert.equal(note.content,'# '+label+'\n\n本页由记忆框架自动维护，可在下方自由补充\n');
+}
 async function fixture(t,overrides={}) {
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'portable-session-memory-'));
   const actors=new Map(),sessions=new Map();
@@ -226,7 +234,7 @@ test('structured writers use original message proofs while later authorized chat
   const record=await bridge.entries.forAgent(b).read(saved.id);assert.equal(record.content,input.proposed.content);assert.equal(record.sourceStatus.eligible,true);
   await f.access.set(a.session.id,true);f.begin(a,2,bridge);
   assert.throws(()=>bridge.entries.forBatch(a,refs),{code:'MEMORY_NOT_AUTHORIZED'});
-  assert.equal(f.memory.notes.size,1);
+  assert.equal(notesIn(f.memory,'chats/entries').length,1);assertTopicPage(f.memory,'测试');
 });
 
 test('native pre-step does not presearch; an explicit memory tool can read before the user source is committed',async t=>{
@@ -267,7 +275,7 @@ test('the new batch owner consumes real committed source proofs and P02 writes w
     async prepare(input,context){
       preparedTarget=context.target;
       assert.deepEqual(input.sources.map(source=>source.role),['user','assistant']);
-      return {refs:input.sources.map(({id,revision})=>({id,revision})),proposed:{type:'preference',content:'QA虚构偏好：改用青瓷杯喝茶。',subject_ref:'u',source_refs:['s0'],state:{validity:'current',progress:null},tags:['QA'],importance:null}};
+      return {refs:input.sources.map(({id,revision})=>({id,revision})),proposed:{type:'preference',content:'QA虚构偏好：改用青瓷杯喝茶。',subject_ref:'u',source_refs:['s0'],state:{validity:'current',progress:null},tags:['测试'],importance:null}};
     },
     async commit(result,context){
       const writer=bridge.entries.forBatch(context.agent,result.refs),saved=await writer.commit({operationId:context.batchId+':0',proposed:result.proposed,
@@ -279,7 +287,8 @@ test('the new batch owner consumes real committed source proofs and P02 writes w
   const sources=bridge.messageSources.forAgent(agent).list({}).sources;assert.equal(sources.length,2);assert.ok(sources.every(source=>source.processingContext.owner==='pipeline-v1'));
   const frozen=sources[0].processingContext.target;agent.options={provider:'another-provider',model:'another-model'};
   await bridge.pipeline.wake({force:true});await bridge.waitForIdle();await bridge.retryPending({force:true});
-  assert.equal(llm.calls.length,0);assert.equal(f.memory.notes.size,1);assert.equal(bridge.pipeline.status().completed,2);assert.deepEqual(preparedTarget,frozen);
+  assert.equal(llm.calls.length,0);assert.equal(notesIn(f.memory,'chats/entries').length,1);assertTopicPage(f.memory,'测试');
+  assert.equal(bridge.pipeline.status().completed,2);assert.deepEqual(preparedTarget,frozen);
   assert.equal((await bridge.getRecoveryState()).jobs.length,0);assert.equal(bridge.pipeline.status().batches[0].state,'committed');
 });
 
@@ -295,7 +304,8 @@ test('the default mounted organizer waits for eight full turns, yields to chatti
   await bridge.waitForIdle();assert.equal(llm.calls.length,0,'foreground work retains execution capacity');
   agent.status='idle';await bridge.pipeline.wake();await bridge.waitForIdle();
   assert.equal(llm.calls.length,1);assert.equal(llm.calls[0].purpose,'memory-capture');
-  assert.equal(f.memory.notes.size,1);assert.equal(bridge.pipeline.status().completed,16);
+  assert.equal(notesIn(f.memory,'chats/entries').length,1);assertTopicPage(f.memory,'杯具');
+  assert.equal(bridge.pipeline.status().completed,16);
   const prompt=JSON.parse(llm.calls[0].messages[0].content[0].text);assert.equal(prompt.sources.length,16);
   assert.deepEqual([...new Set(prompt.sources.map(source=>source.role))].sort(),['assistant','user']);
   await bridge.pipeline.resume();await bridge.pipeline.wake({force:true});assert.equal(llm.calls.length,1);

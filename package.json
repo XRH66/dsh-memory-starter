@@ -27,6 +27,7 @@
     "lib/dates.js",
     "lib/delete-guard.js",
     "lib/deployment-config.js",
+    "lib/entry-links.js",
     "lib/entry-priority.js",
     "lib/evidence.js",
     "lib/handoff.js",

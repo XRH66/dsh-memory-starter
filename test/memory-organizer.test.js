@@ -17,6 +17,14 @@ const item=(patch={})=>({type:'plan',content:'用户计划周末整理书架。'
   state:{validity:'current',progress:'planned'},tags:['书架'],importance:{level:'high',basis:'user_explicit',reason:'s1 中用户明确说很重要'},
   evidence_basis:'self_report',speaker_ref:'p1',...patch});
 const response=(items=[],changes=[])=>({items,changes});
+const notesIn=(memory,directory)=>[...memory.notes.values()].filter(note=>note.directory===directory);
+function assertTopicPage(memory,label='书架'){
+  const note=notesIn(memory,'chats/topics').find(item=>item.title===label);
+  assert.ok(note,'missing topic page: '+label);
+  assert.equal(note.filePath,'chats/topics/'+label+'.md');
+  assert.deepEqual(note.frontmatter,{title:label,type:'note',tags:['dsh-topic'],embed:false});
+  assert.equal(note.content,'# '+label+'\n\n本页由记忆框架自动维护，可在下方自由补充\n');
+}
 async function fixture(t,{output=response([item()]),finish='stop',chunks,onUsage,backend:decorate}={}){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'organizer-fixture-'));
   const raw=new RawMemoryStore(path.join(dir,'raw.sqlite'),{warn(){}}),memory=memoryStore({project:'main'});
@@ -57,7 +65,7 @@ test('one organizer stream produces twelve types, preserving frozen route, roles
   const durable=JSON.parse(JSON.stringify(prepared));assert.equal(JSON.stringify(durable).includes(sources[0].text),false);
   assert.equal('text' in durable.sources[0][1],false);
   const result=await organizer.commit(durable,f.ctx);assert.equal(result.applied,12);assert.equal(result.committed,true);
-  assert.equal(f.counts().generated,1);assert.equal(f.memory.notes.size,12);
+  assert.equal(f.counts().generated,1);assert.equal(notesIn(f.memory,'memory/entries').length,12);assertTopicPage(f.memory);
 });
 
 test('zero items is successful, unlike malformed or truncated output',async t=>{
@@ -150,12 +158,15 @@ test('state-only change preserves importance and P02 records history; stale revi
 test('durable prepared plan resumes after lost write acknowledgement, with no second generation or duplicate note',async t=>{
   let writes=0;
   const f=await fixture(t,{output:response([item(),item({type:'event',content:'另一条独立事件。'})]),backend:backend=>({...backend,async write(...args){
-    const value=await backend.write(...args);writes++;if(writes===2)throw Error('lost acknowledgement');return value;
+    const value=await backend.write(...args);
+    if(args[0]?.directory!=='chats/topics'){writes++;if(writes===2)throw Error('lost acknowledgement');}
+    return value;
   }})});
   const prepared=await f.make().prepare(f.input,f.ctx),durable=JSON.parse(JSON.stringify(prepared));
-  await assert.rejects(f.make().commit(durable,f.ctx),/lost acknowledgement/);assert.equal(f.memory.notes.size,2);
+  await assert.rejects(f.make().commit(durable,f.ctx),/lost acknowledgement/);
+  assert.equal(notesIn(f.memory,'memory/entries').length,2);assertTopicPage(f.memory);
   const recovered=await f.make().commit(durable,f.ctx);assert.equal(recovered.applied,2);assert.equal(recovered.results[0].duplicate,true);assert.equal(recovered.results[1].recovered,true);
-  await f.make().commit(durable,f.ctx);assert.equal(writes,2);assert.equal(f.memory.notes.size,2);assert.equal(f.counts().generated,1);
+  await f.make().commit(durable,f.ctx);assert.equal(writes,2);assert.equal(notesIn(f.memory,'memory/entries').length,2);assertTopicPage(f.memory);assert.equal(f.counts().generated,1);
 });
 
 test('cancellation before generation, during stream and before commit prevents further work',async t=>{
@@ -183,10 +194,11 @@ test('cancellation between commits resumes remaining operations with stable IDs 
     const result=await service.commit(input);f.controller.abort();return result;
   }};}};
   const o=createMemoryOrganizer({entries,llm:f.llm}),prepared=await o.prepare(f.input,f.ctx);
-  await assert.rejects(o.commit(prepared,f.ctx),{name:'AbortError'});assert.equal(f.memory.notes.size,1);
+  await assert.rejects(o.commit(prepared,f.ctx),{name:'AbortError'});
+  assert.equal(notesIn(f.memory,'memory/entries').length,1);assertTopicPage(f.memory);
   const resumed={...f.ctx,signal:new AbortController().signal};
   const result=await f.make().commit(JSON.parse(JSON.stringify(prepared)),resumed);
-  assert.equal(result.applied,2);assert.equal(result.results[0].duplicate,true);assert.equal(f.memory.notes.size,2);assert.equal(f.counts().generated,1);
+  assert.equal(result.applied,2);assert.equal(result.results[0].duplicate,true);assert.equal(notesIn(f.memory,'memory/entries').length,2);assertTopicPage(f.memory);assert.equal(f.counts().generated,1);
 });
 
 test('revocation, changed durable source revision and wrong batch context block recovered submission',async t=>{
@@ -275,7 +287,7 @@ test('onUsage failure cannot discard successful prepared output or cause a secon
     assert.equal(prepared.usageReportFailed,true);assert.equal(prepared.usage.total_tokens,100);
     const durable=JSON.parse(JSON.stringify(prepared));
     await o.commit(durable,f.ctx);await o.commit(durable,f.ctx);
-    assert.equal(f.counts().generated,1);assert.equal(f.memory.notes.size,1);
+    assert.equal(f.counts().generated,1);assert.equal(notesIn(f.memory,'memory/entries').length,1);assertTopicPage(f.memory);
   }
 });
 
