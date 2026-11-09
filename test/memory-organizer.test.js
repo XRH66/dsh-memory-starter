@@ -39,12 +39,12 @@ async function fixture(t,{output=response([item()]),finish='stop',chunks,onUsage
     yield {type:'text-delta',index:0,text:json.slice(0,mid)};yield {type:'text-delta',index:0,text:json.slice(mid)};
     yield {type:'finish',reason:{kind:finish},usage:{inputTokens:80,outputTokens:20,totalTokens:100,cacheReadTokens:12}};
   }};
-  const make=(options={})=>createMemoryOrganizer({entries,llm,config:{captureMaxTokens:2048,organizerMaxTokens:2048},onUsage:async receipt=>{receipts.push(receipt);await onUsage?.(receipt);},...options});
+  const make=(options={})=>createMemoryOrganizer({entries,llm,config:{organizerMaxTokens:2048},onUsage:async receipt=>{receipts.push(receipt);await onUsage?.(receipt);},...options});
   return {ctx,controller,calls,entries,llm,service,raw,memory,originals,batchRefs,receipts,make,
     revoke:()=>{allowed=false;},counts:()=>({generated,commits}),input:{sources}};
 }
 
-test('one capture stream produces twelve types, preserving frozen route, roles, fragments and usage',async t=>{
+test('one organizer stream produces twelve types, preserving frozen route, roles, fragments and usage',async t=>{
   const f=await fixture(t,{output:response(MEMORY_ENTRY_TYPES.map(type=>item({type})))}),organizer=f.make();
   const prepared=await organizer.prepare(f.input,f.ctx);
   assert.equal(f.counts().generated,1);assert.deepEqual(prepared.operations.map(op=>op.proposed.type),MEMORY_ENTRY_TYPES);
@@ -292,12 +292,11 @@ test('onUsage failure never replaces a generation or parsing error and preserves
   assert.equal(f.counts().generated,1);assert.equal(invalid.counts().generated,1);
 });
 
-test('organizer output budget is independent of the legacy per-turn capture limit',()=>{
+test('organizer uses its independent output budget',()=>{
   assert.equal(ORGANIZER_MAX_TOKENS,32768);
 });
 
-test('organizer has its own generation timeout, longer than the legacy capture limit',async()=>{
+test('organizer has its own generation timeout',async()=>{
   const {ORGANIZER_TIMEOUT_MS}=await import('../lib/memory-organizer.js');
-  const {HARD_MAX_CAPTURE_TIMEOUT_MS}=await import('../lib/config.js');
-  assert.ok(ORGANIZER_TIMEOUT_MS>HARD_MAX_CAPTURE_TIMEOUT_MS);
+  assert.equal(ORGANIZER_TIMEOUT_MS,600000);
 });

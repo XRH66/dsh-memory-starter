@@ -11,8 +11,6 @@ test('config defaults apply the product limits without a session allowlist', () 
   assert.equal(config.maxRecallNotes, 3);
   assert.equal(config.maxRecallChars, 1200);
   assert.equal(config.recallTimeoutMs, 1500);
-  assert.equal(config.captureTimeoutMs, 90000);
-  assert.equal(config.captureMaxTokens, 8192);
   assert.equal(config.captureFolder, 'chats');
   assert.equal(config.minRecallScore, 0);
 });
@@ -21,13 +19,11 @@ test('config clamps values above the hard limits', () => {
   const config = resolveConfig({
     maxRecallChars: 99999,
     recallTimeoutMs: 99999,
-    captureTimeoutMs: 99999,
     maxRecallNotes: 99,
     minRecallScore: 9,
   });
   assert.equal(config.maxRecallChars, DEFAULT_CONFIG.maxRecallChars);
   assert.equal(config.recallTimeoutMs, DEFAULT_CONFIG.recallTimeoutMs);
-  assert.equal(config.captureTimeoutMs, DEFAULT_CONFIG.captureTimeoutMs);
   assert.equal(config.maxRecallNotes, 10);
   assert.equal(config.minRecallScore, 1);
 });
@@ -35,8 +31,6 @@ test('config clamps values above the hard limits', () => {
 test('schemastery schema accepts an empty config and applies defaults', () => {
   const value = Config({});
   assert.equal(value.maxRecallChars, 1200);
-  assert.equal(value.captureTimeoutMs, 90000);
-  assert.equal(value.captureMaxTokens, 8192);
   assert.equal(value.minRecallScore, 0);
 });
 
@@ -59,5 +53,4 @@ test('public bundle parameters preserve current schema and runtime defaults', ()
   }
   assert.deepEqual(Config(config), Config({}));
   assert.deepEqual(resolveConfig(config), resolveConfig({}));
-  assert.equal(resolveConfig(Config(config)).captureTimeoutMs, 90000);
 });

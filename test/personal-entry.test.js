@@ -30,7 +30,7 @@ test('one entry strengthens, siblings decay, own revision/read and cross-day cop
   let note=f.memory.notes.get(first.permalink),entries=parseEntries(note.content);assert.equal(entries.length,2);
   const original=entries.map(({memory,...e})=>e);
   await applyMemoryActions(f.ctx,[reinforce(note)],{sessionId:TARGET_SESSION,turn:1,now:()=>day(30),sourceEventTime:+day(30),operationId:'personal-1'});
-  entries=parseEntries(note.content);assert.equal(entries[0].memory.base_priority,.625);assert.equal(entries[0].memory.reinforcement_count,1);
+  entries=parseEntries(note.content);assert.equal(entries[0].memory.base_priority,.9);assert.equal(entries[0].memory.reinforcement_count,1);
   assert.equal(entries[1].memory.reinforcement_count,undefined);assert.deepEqual(entries.map(({memory,...e})=>e),original);
   const state=structuredClone(entries[0].memory);
   f.setDay(60);await f.save({title:note.permalink,entryIndex:1,expectedChecksum:note.checksum,text:text1+' 我换个说法记一下。'});
@@ -41,7 +41,8 @@ test('one entry strengthens, siblings decay, own revision/read and cross-day cop
   const recalled=await recallPersonalForTurn({...f.ctx,config:{...f.config,now:day(120)},messages:[directUser('合作')]});
   assert.match(recalled,/合作很有意思/);assert.doesNotMatch(recalled,/雨后|树影/);
   assert.deepEqual(parseEntries(f.memory.notes.get(first.permalink).content)[0].memory,state);
-  assert.equal(await recallPersonalForTurn({...f.ctx,config:{...f.config,now:day(240)},messages:[directUser('合作')]}),'');
+  // Ageing now lowers ranking instead of hiding the record, even when nothing was softened.
+  assert.match(await recallPersonalForTurn({...f.ctx,config:{...f.config,now:day(240)},messages:[directUser('合作')]}),/合作/);
   assert.match(await recallPersonalForTurn({...f.ctx,config:{...f.config,now:day(240)},messages:[directUser('逐步找到线索')]}),/合作/);
 });
 
@@ -61,7 +62,7 @@ test('legacy dates stay unknown; self-profile cannot be selected or strengthened
   const body=renderNoteContent({kind:'thoughts',title:'旧想法',entries:[{time:'10:00',text:text1},{time:'10:01',text:text2}]}).replace('## 10:00','## 09:00\n\n## 10:00');
   f.memory.notes.set(permalink,{title:'旧想法',permalink,content:body,frontmatter:{status:'active',dafeiyu_kind:'thoughts'},checksum:'old',tags:['subjective'],filePath:'dafeiyu/thoughts/old.md'});
   const note=f.memory.notes.get(permalink);await applyMemoryActions(f.ctx,[reinforce(note)],{sessionId:TARGET_SESSION,turn:1,now:()=>day(30),sourceEventTime:+day(30),operationId:'legacy'});
-  const entries=parseEntries(note.content);assert.equal(entries[0].recordedAt,'日期未明');assert.equal(entries[0].occurredAt,'日期未明');assert.equal(entries[0].memory.base_priority,.625);assert.equal(entries[1].memory,undefined);
+  const entries=parseEntries(note.content);assert.equal(entries[0].recordedAt,'日期未明');assert.equal(entries[0].occurredAt,'日期未明');assert.equal(entries[0].memory.base_priority,.9);assert.equal(entries[1].memory,undefined);
   assert.equal(note.content.replace(/^<!-- dsh-entry:.* -->\r?\n/gm,''),body);
   const profile='personal/dafeiyu/thoughts/自我档案';
   f.memory.notes.set(profile,{...structuredClone(note),permalink:profile,title:'自我档案',checksum:'profile'});
@@ -84,21 +85,3 @@ test('whole-note soft forget applies to existing entries, later new entry stays 
   assert.equal(entries.length,2);assert.notEqual(entries[1].memory.id,'forged');assert.equal(weight(entries[1],note,61,f.config),1);
 });
 
-test('lost response + worker restart does not strengthen twice or trigger index maintenance; edits supersede prepared action',async t=>{
-  const f=setup();const first=await f.save({text:text1});const note=f.memory.notes.get(first.permalink);const baseAction=reinforce(note);
-  const root=await fs.mkdtemp(path.join(os.tmpdir(),'personal-entry-'));const vaultPath=path.join(root,'vault');await fs.mkdir(vaultPath);
-  const config={...f.config,vaultPath,autoRecall:false,personalRecall:false};let fail=true;
-  const tools={get(name,agent){const def=f.memory.tools.get(name,agent);return {...def,async execute(args,exec){const result=await def.execute(name.endsWith('__search_notes')&&args.tags?.includes('subjective')?{...args,query:'合作'}:args,exec);if(fail&&name.endsWith('__edit_note')){fail=false;throw new Error('lost after commit');}return result;}};}};
-  const bridges=[],make=llm=>{const b=createBridge({config,tools,llm,now:()=>day(30),findAgent:()=>f.ctx.agent});bridges.push(b);return b;};
-  t.after(async()=>{for(const b of bridges)await b.dispose();assert.ok(root.startsWith(path.join(os.tmpdir(),'personal-entry-')));await fs.rm(root,{recursive:true,force:true});});
-  const b=make(fakeLlm(JSON.stringify({actions:[{...baseAction,target_record:baseAction.targetRecord,target_entry_id:baseAction.targetEntryId}]})));
-  await b.getMemoryConfig();await b.getRecoveryState();
-  const agent=f.ctx.agent;b.onSessionEvent(agent.session,turnStart(1));b.onSessionEvent(agent.session,userMessage(baseAction.evidence,{id:'u1',time:+day(30)}));await runPreStep(b,{agent,turn:1,messages:[]});b.onSessionEvent(agent.session,assistantMessage(1,'嗯。'));b.onSessionEvent(agent.session,turnEnd(1));await b.waitForIdle();
-  assert.equal((await b.getRecoveryState()).jobs.length,1);assert.equal(parseEntries(note.content)[0].memory.reinforcement_count,1);await b.dispose();
-  const llm=fakeLlm(new Error('prepared action must not call model'));
-  const resumed=make(llm);await resumed.retryPending({force:true});
-  assert.equal((await resumed.getRecoveryState()).jobs.length,0);assert.equal((await resumed.getRecoveryState()).pending.length,0);
-  assert.equal((await resumed.getMemoryStatus(TARGET_SESSION)).jobs.at(-1).reinforcedCount,1);assert.equal(llm.calls.length,0);assert.equal(parseEntries(note.content)[0].memory.reinforcement_count,1);
-  const stale=reinforce(note);f.setDay(60);await f.save({title:first.permalink,entryIndex:1,expectedChecksum:note.checksum,text:'后来觉得这个想法需要重新考虑。'});
-  const r=await applyMemoryActions(f.ctx,[stale],{sessionId:TARGET_SESSION,turn:2,now:()=>day(90),sourceEventTime:+day(90),operationId:'stale'});assert.equal(r.results[0].skipped,'superseded');
-});

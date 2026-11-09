@@ -19,7 +19,6 @@
   "files": [
     "lib/bootstrap-host.js",
     "lib/bundle-entry.js",
-    "lib/capture.js",
     "lib/chat-connection.js",
     "lib/client.js",
     "lib/config.js",
@@ -28,7 +27,6 @@
     "lib/dates.js",
     "lib/delete-guard.js",
     "lib/deployment-config.js",
-    "lib/direct-self-statement.js",
     "lib/entry-priority.js",
     "lib/evidence.js",
     "lib/handoff.js",
@@ -60,7 +58,6 @@
     "lib/memory.js",
     "lib/message-recorder.js",
     "lib/navigation.js",
-    "lib/owner-identity.js",
     "lib/paths.js",
     "lib/persona-source.js",
     "lib/personal-access.js",

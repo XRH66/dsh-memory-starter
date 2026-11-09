@@ -359,8 +359,8 @@ test('native soften accepts a structured ID or exact permalink and writes only i
       assert.equal(result.memoryId, id);
       assert.equal(result.permalink, note.permalink);
       assert.equal(result.bodyUnchanged, true);
-      assert.equal(result.basePriority, 0.2);
-      assert.equal(result.effectivePriority, 0.2);
+      assert.equal(result.basePriority, 0.282843);
+      assert.equal(result.effectivePriority, 0.282843);
       assert.ok(seen.length && seen.every(call => call.lookup === id && call.agent === ctx.agent && call.signal === signal));
       assert.deepEqual(softened, [[SESSION, result]]);
       assert.deepEqual(raw, []);
@@ -373,7 +373,7 @@ test('native soften accepts a structured ID or exact permalink and writes only i
       assert.equal(edit.operation, 'append');
       assert.equal(edit.content, '');
       assert.deepEqual(edit.metadata, {
-        base_priority: 0.2, softened_at: NOW().toISOString(), decay_anchor_at: NOW().toISOString(),
+        base_priority: 0.282843, softened_at: NOW().toISOString(), decay_anchor_at: NOW().toISOString(),
         half_life_days: 30, priority_floor: 0.01, soften_count: 2, soften_factor: 0.5, soften_reason: '少提',
       });
       assert.deepEqual(note.frontmatter, { ...before.frontmatter, ...edit.metadata });

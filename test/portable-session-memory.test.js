@@ -6,8 +6,7 @@ import path from 'node:path';
 import {createSessionMemory} from '../lib/session-memory.js';
 import {createBridge} from '../lib/index.js';
 import {createPersonalMemoryRuntime} from '../lib/personal-runtime.js';
-import {createMemoryWorker,authorizedTools} from '../lib/worker.js';
-import {createRecoveryStore,jobId,mergePending} from '../lib/recovery.js';
+import {authorizedTools} from '../lib/worker.js';
 import {resolveConfig} from '../lib/config.js';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {memoryStore} from './fake-memory.js';
@@ -22,7 +21,7 @@ async function fixture(t,overrides={}) {
   const agents={get:id=>actors.get(id),list:()=>[...actors.values()],isOwnedBy:()=>false};
   const options={directory,ownerSubject:'用户',agents,sessions:{get:id=>sessions.get(id)},logger};
   let access=await createSessionMemory(options);
-  const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecallDbPath:path.join(directory,'raw.sqlite'),autoRecall:false,personalRecall:false,recentContext:false,maxTimelineEntries:0,maxIndexNotes:0,rawRecall:false,captureTimeoutMs:2000,...overrides});
+  const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecallDbPath:path.join(directory,'raw.sqlite'),autoRecall:false,personalRecall:false,recentContext:false,maxTimelineEntries:0,maxIndexNotes:0,rawRecall:false,...overrides});
   await fs.mkdir(config.vaultPath,{recursive:true});
   const memory=memoryStore({project:'main'});
   const disposals=[];
@@ -230,20 +229,6 @@ test('structured writers use original message proofs while later authorized chat
   assert.equal(f.memory.notes.size,1);
 });
 
-test('enabling mid-turn waits for the next turn; legacy capture omits history while the original store includes the new assistant',async t=>{
-  const f=await fixture(t,{recentContext:true}),agent=f.actor(),llm=fakeLlm('{"actions":[]}'),bridge=f.bridge(llm);
-  const first=f.begin(agent,1,bridge);await f.access.set(agent.session.id,true);
-  await runPreStep(bridge,{turn:1,agent,messages:[first.data]});f.finish(agent,1,bridge);await bridge.waitForIdle();assert.equal(llm.calls.length,0);
-  const next=f.begin(agent,2,bridge);await runPreStep(bridge,{turn:2,agent,messages:[next.data]});f.finish(agent,2,bridge);await bridge.waitForIdle();
-  assert.equal(llm.calls.length,1);const prompt=JSON.stringify(llm.calls[0].messages);
-  assert.ok(prompt.includes('青瓷'));assert.ok(!prompt.includes('CLOSED_USER_ECHO'));assert.ok(!prompt.includes('CLOSED_ASSISTANT_ECHO'));
-  const sources=bridge.messageSources.forAgent(agent).list({}).sources;
-  assert.equal(sources.length,2);assert.ok(sources.every(source=>source.turn===2));
-  assert.deepEqual(new Set(sources.map(source=>source.role)),new Set(['user','assistant']));
-  assert.ok(sources.find(source=>source.role==='assistant').text.includes('CLOSED_ASSISTANT_ECHO'));
-  await assert.rejects(fs.access(bridge.recentContext.file),{code:'ENOENT'});
-});
-
 test('native pre-step does not presearch; an explicit memory tool can read before the user source is committed',async t=>{
   const f=await fixture(t,{autoRecall:true}),agent=f.actor();await f.access.set(agent.session.id,true);
   let searches=0;
@@ -266,40 +251,6 @@ test('a delayed recall result is discarded after close and reopen rather than us
   const pending=bridge.queryTools.find(tool=>tool.name==='memory_search').execute({query:'青瓷杯'},{agent,signal:new AbortController().signal});await entered.promise;
   await f.access.set(agent.session.id,false);await f.access.set(agent.session.id,true);f.begin(agent,2);
   release.resolve();const result=await pending;assert.equal(result.status,'denied');assert.deepEqual(result.records,[]);
-});
-
-test('late extraction is aborted and its durable job is held after close/reopen with no write or retry charge',async t=>{
-  const f=await fixture(t),agent=f.actor();await f.access.set(agent.session.id,true);
-  const entered=deferred(),release=deferred();let signal;
-  const llm={async *stream(options){signal=options.signal;entered.resolve();await release.promise;yield {type:'text-delta',text:JSON.stringify({actions:[{action:'ADD',kind:'fact',category:'preference',subject:'用户',attribute:'饮茶杯具',value:'今后改用青瓷杯喝茶',occurred_at:'日期未明',evidence:USER}]})};yield {type:'finish',reason:{kind:'stop'}};}};
-  const bridge=f.bridge(llm);const user=f.begin(agent,1,bridge);await runPreStep(bridge,{turn:1,agent,messages:[user.data]});f.finish(agent,1,bridge);await entered.promise;
-  const closing=f.access.set(agent.session.id,false);assert.equal(signal.aborted,true);await closing;await f.access.set(agent.session.id,true);f.begin(agent,2);
-  release.resolve();await bridge.waitForIdle();assert.equal(f.memory.notes.size,0);
-  const state=await bridge.getRecoveryState();assert.equal(state.jobs.length,1);assert.equal(state.jobs[0].attempts,0);assert.ok(state.jobs[0].memoryAuthorization);
-  assert.equal(f.access.checkSource(state.jobs[0]),false);
-});
-
-test('legacy jobs and revoked pending ownership cannot borrow a selected session in the same library',async t=>{
-  const f=await fixture(t),a=f.actor(),b=f.actor('session-other');await f.access.set(a.session.id,true);const user=f.begin(a,1);
-  const source=f.source(a,user,1),grant=f.access.grant(a,{sessionId:source.sessionId,messageId:source.sourceMessageId,sequence:source.sourceEventSeq,turn:1,rootTurn:1,role:'user'});
-  const store=createRecoveryStore(f.config);await store.add({id:jobId(a.session.id,0),sessionId:a.session.id,turn:0,userText:USER,historyPolicy:'user-only',target:{provider:'fake',model:'fake'},attempts:0});
-  await store.update(s=>mergePending(s,{permalink:'main/chats/facts/kept',...source,memoryAuthorization:grant}));
-  await f.access.set(a.session.id,false);await f.access.set(b.session.id,true);const current=f.begin(b,1);
-  const llm=fakeLlm('{"actions":[]}'),bridge=f.bridge(llm,{recoveryStore:store});
-  bridge.onSessionEvent(b.session,{type:'turn/start',data:{turn:1}});bridge.onSessionEvent(b.session,current);
-  await runPreStep(bridge,{turn:1,agent:b,messages:[current.data]});await bridge.retryPending({force:true});
-  const state=await store.read();assert.equal(llm.calls.length,0);assert.equal(state.jobs.length,1);assert.equal(state.pending.length,1);
-  assert.equal(state.pending[0].owners[0].memoryAuthorization.id,grant.id);
-});
-
-test('restart resumes only the original saved source credential and supplies a cancellable signal',async t=>{
-  const f=await fixture(t),agent=f.actor();await f.access.set(agent.session.id,true);const user=f.begin(agent,1);
-  const source=f.source(agent,user,1),grant=f.access.grant(agent,{sessionId:source.sessionId,messageId:source.sourceMessageId,sequence:source.sourceEventSeq,turn:1,rootTurn:1,role:'user'});
-  const store=createRecoveryStore(f.config);await store.add({id:jobId(source.sessionId,1),...source,memoryAuthorization:JSON.parse(JSON.stringify(grant)),userText:USER,assistantText:'CLOSED_ASSISTANT_ECHO',historyPolicy:'user-only',target:{provider:'fake',model:'fake'},attempts:0,completed:{}});
-  f.begin(agent,2);await f.reload();const llm=fakeLlm('{"actions":[]}');
-  const worker=createMemoryWorker({config:f.config,tools:f.memory.tools,llm,logger,status:{set:async()=>{},pending:async()=>{},usage:async()=>{}},access:f.access,available:()=>true,findAgent:()=>agent,recoveryStore:store});f.disposals.push(()=>worker.dispose());worker.attach(agent);await worker.wake();
-  assert.equal(llm.calls.length,1);assert.ok(llm.calls[0].signal instanceof AbortSignal);assert.equal((await store.read()).jobs.length,0);
-  assert.ok(!JSON.stringify(llm.calls[0].messages).includes('CLOSED_ASSISTANT_ECHO'));
 });
 
 test('authorized tool checks both before execution and after asynchronous return',async t=>{

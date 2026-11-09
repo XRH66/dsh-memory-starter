@@ -8,5 +8,4 @@
         maxRecallNotes: 3
         maxRecallChars: 1200
         recallTimeoutMs: 1500
-        captureTimeoutMs: 90000
         captureFolder: chats

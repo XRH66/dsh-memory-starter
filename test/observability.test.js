@@ -21,34 +21,6 @@ async function fixture(t, llm) {
   t.after(async () => { for (const b of bridges) { await b.dispose(); await b.getMemoryStatus(TARGET_SESSION); } await fs.rm(root,{recursive:true,force:true}); });
   return {root,config,memory,agent,make,bridge:make()};
 }
-async function turn(f, n, text = '随便聊两句') {
-  f.bridge.onSessionEvent(f.agent.session,turnStart(n));
-  f.bridge.onSessionEvent(f.agent.session,userMessage(text));
-  await runPreStep(f.bridge,{agent:f.agent,turn:n,messages:[directUser(text)]});
-  f.bridge.onSessionEvent(f.agent.session,assistantMessage(n,'嗯。'));
-  f.bridge.onSessionEvent(f.agent.session,turnEnd(n));
-  await f.bridge.waitForIdle();
-}
-
-test('new turns respect old backoff; three failures pause across restart and do not block fresh work', async t => {
-  const llm = fakeLlm([new Error('offline'),'{"actions":[]}',new Error('offline'),new Error('offline'),'{"actions":[]}']);
-  const f = await fixture(t,llm);
-  await turn(f,1); const due = (await f.bridge.getRecoveryState()).jobs[0].nextAttemptAt;
-  await turn(f,2);
-  assert.equal(llm.calls.length,2); assert.ok(due > Date.now());
-  assert.equal((await f.bridge.getRecoveryState()).jobs[0].attempts,1);
-  await f.bridge.retryPending({force:true}); await f.bridge.retryPending({force:true});
-  assert.equal(llm.calls.length,4);
-  assert.equal((await f.bridge.getMemoryStatus(TARGET_SESSION)).jobs[0].state,'paused');
-  await f.bridge.dispose(); f.bridge=f.make();
-  await f.bridge.retryPending({force:true}); assert.equal(llm.calls.length,4,'force cannot bypass pause');
-  await turn(f,3); assert.equal(llm.calls.length,5,'fresh work is independent');
-  assert.equal((await f.bridge.getRecoveryState()).jobs.length,1,'payload retained');
-  await f.bridge.retryPending({resumeSessionId:TARGET_SESSION});
-  assert.equal((await f.bridge.getRecoveryState()).jobs.length,0);
-  assert.equal(llm.calls.length,6,'explicit resume works');
-});
-
 test('paused old maintenance batch does not starve a new topic, and is retained for manual retry', async t => {
   const llm=fakeLlm([new Error('bad'),new Error('bad'),new Error('bad'),'{"assignments":[],"headings":[],"profile":[],"creations":[],"removals":[]}']);
   const f=await fixture(t,llm);

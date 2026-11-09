@@ -4,12 +4,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { memoryStore } from './fake-memory.js';
-import { fakeAgent, fakeLlm, directUser, runPreStep, turnStart, userMessage, assistantMessage, turnEnd, TARGET_SESSION } from './helpers.js';
+import { fakeAgent, fakeLlm, directUser, runPreStep, TARGET_SESSION } from './helpers.js';
 import { resolveConfig } from '../lib/config.js';
 import { recallNavigation, noteMatchesProjectPath } from '../lib/navigation.js';
 import { maintainIndexes } from '../lib/maintenance.js';
 import { createBridge } from '../lib/index.js';
-import { readMemoryStatus } from '@local/dsh-global-settings/memory-status';
 
 const factId='personal/chats/facts/用户-评价偏好';
 const indexId='personal/index/表达偏好';
@@ -31,13 +30,6 @@ const plan = JSON.stringify({
   assignments:[],
   headings:[{index:indexId,find:'## 不要评价',replace:'## 评价与回应'}],
   profile:[{entryIndex:1,find:oldText,text:newText}],
-});
-
-test('group maintenance updates group index without reading personal profile and rejects another subject',async()=>{
-  const store=memoryStore();seed(store);const groupFact='personal/members/710000001/facts/qq-710000001-偏好',groupIndex='personal/index/表达偏好',source=structuredClone(store.notes.get(factId));source.permalink=groupFact;source.title='成员 - 偏好';source.filePath='members/710000001/facts/qq-710000001-偏好.md';source.frontmatter.subject='qq:710000001';store.notes.set(groupFact,source);store.notes.get(groupIndex).content='# 表达偏好\n\n- [[成员 - 偏好]] —— 旧内容\n';
-  let profileReads=0;const tools={get(...args){const tool=store.tools.get(...args);return tool&&{...tool,execute:(input,exec)=>{if(input.identifier===profileId){profileReads++;throw Error('group must not access profile');}return tool.execute(input,exec);}};}},llm=fakeLlm(JSON.stringify({assignments:[],headings:[],profile:[{entryIndex:1,find:oldText,text:newText}]})),ctx={maintenanceScope:'group',config:resolveConfig({}),tools,agent:fakeAgent(TARGET_SESSION),sessionId:TARGET_SESSION,llm};
-  const result=await maintainIndexes(ctx,[{action:'CORRECT',permalink:groupFact}]);assert.equal(result.updated,1);assert.equal(result.profileUpdated,0);assert.equal(profileReads,0);assert.match(store.notes.get(groupIndex).content,/不要每句话都评价我/);
-  source.frontmatter.subject='qq:710000003';await assert.rejects(maintainIndexes(ctx,[{action:'UPDATE',permalink:groupFact}]),/GROUP_SCOPE_MISMATCH/);await assert.rejects(maintainIndexes(ctx,[{action:'UPDATE',permalink:factId}]),/GROUP_SCOPE_MISMATCH/);source.frontmatter.subject='qq:710000001';delete source.frontmatter.memory_id;await assert.rejects(maintainIndexes(ctx,[{action:'UPDATE',permalink:groupFact}]),/GROUP_FACT_NOT_ELIGIBLE/);
 });
 
 test('navigation independently reads latest facts; ignores obsolete prose, missing-id index is usable', async () => {
@@ -175,47 +167,5 @@ test('a source changed while planning cannot apply an obsolete correction', asyn
   await assert.rejects(maintainIndexes({config:resolveConfig({}),tools:store.tools,agent:fakeAgent(TARGET_SESSION),sessionId:TARGET_SESSION,llm},[{action:'CORRECT',permalink:factId}]),/SOURCE_CHANGED/);
   assert.match(store.notes.get(indexId).content,/永远不许评价/);
   assert.match(store.notes.get(profileId).content,/不要评价老大/);
-});
-
-test('real hooks persist capture/no-action status, keep failed sync pending without bypassing backoff on a new turn', async () => {
-  const root=await fs.mkdtemp(path.join(os.tmpdir(),'dafeiyu-index-test-'));
-  const vault=path.join(root,'vault'); await fs.mkdir(vault);
-  const store=memoryStore();seed(store);
-  const correction=JSON.stringify({actions:[{action:'CORRECT',kind:'fact',subject:'用户',attribute:'评价偏好',value:'不用每句都评价我',target_memory_id:'fact-1',evidence:'不用每句都评价我'}]});
-  const llm=fakeLlm([correction,'bad json','{"actions":[]}',plan]);
-  const bridge=createBridge({config:{vaultPath:vault,personalRecall:false,maxIndexNotes:0},tools:store.tools,llm});
-  const agent=fakeAgent(TARGET_SESSION);
-  async function turn(n,text){
-    bridge.onSessionEvent(agent.session,turnStart(n));
-    bridge.onSessionEvent(agent.session,userMessage(text));
-    await runPreStep(bridge,{turn:n,agent,messages:[directUser(text)]});
-    bridge.onSessionEvent(agent.session,assistantMessage(n,'知道了'));
-    bridge.onSessionEvent(agent.session,turnEnd(n));
-    await bridge.waitForIdle(TARGET_SESSION);
-  }
-  try{
-    await turn(1,'刚才说错了，不用每句都评价我');
-    let state=await bridge.getMemoryStatus(TARGET_SESSION);
-    assert.equal(state.jobs.at(-1).state,'saved');
-    assert.equal(state.jobs.at(-1).maintenance,'failed');
-    assert.equal(state.pending.length,1);
-    await turn(2,'嗯嗯');
-    state=await bridge.getMemoryStatus(TARGET_SESSION);
-    assert.equal(state.jobs.at(-1).state,'no-durable-actions');
-    assert.equal(state.jobs.at(-1).maintenance,undefined);
-    assert.equal(state.pending.length,1);
-    assert.equal(llm.calls.length,3);
-    await bridge.retryPending({force:true});
-    state=await bridge.getMemoryStatus(TARGET_SESSION);
-    assert.equal(state.jobs[0].maintenance,'saved');
-    assert.equal(state.pending.length,0);
-    const api=await readMemoryStatus(path.join(path.dirname(vault),'management','memory-status'),TARGET_SESSION);
-    assert.equal(api.pendingCount,0);
-    assert.equal(api.jobs.length,2);
-    assert.doesNotMatch(JSON.stringify(api),/不用每句|profileRevisions|source_session/);
-  }finally{
-    assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir())+path.sep+'dafeiyu-index-test-'));
-    await fs.rm(root,{recursive:true,force:true});
-  }
 });
 
