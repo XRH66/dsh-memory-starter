@@ -312,3 +312,29 @@ test('organizer has its own generation timeout',async()=>{
   const {ORGANIZER_TIMEOUT_MS}=await import('../lib/memory-organizer.js');
   assert.equal(ORGANIZER_TIMEOUT_MS,600000);
 });
+
+test('unsupported reasoning effort retries once without effort and is remembered per model',async t=>{
+  const f=await fixture(t),calls=[];
+  f.llm.stream=async function*(options){
+    calls.push(options);
+    if(calls.length===1)throw Object.assign(Error('unsupported effort'),{code:'UNSUPPORTED_REASONING_EFFORT'});
+    const json=JSON.stringify(response());
+    yield {type:'text-delta',index:0,text:json};
+    yield {type:'finish',reason:{kind:'stop'}};
+  };
+  const organizer=f.make({config:{organizerReasoningEffort:'low'}});
+  await organizer.prepare(f.input,f.ctx);
+  await organizer.prepare(f.input,f.ctx);
+  assert.equal(calls.length,3);
+  assert.equal(calls[0].reasoningEffort,'low');
+  assert.equal('reasoningEffort' in calls[1],false);
+  assert.equal('reasoningEffort' in calls[2],false);
+});
+
+test('other organizer generation errors are not retried',async t=>{
+  const f=await fixture(t),failure=Object.assign(Error('generation failed'),{code:'HOST_GENERATION_FAILED'});
+  let calls=0;
+  f.llm.stream=async function*(){calls++;throw failure;};
+  await assert.rejects(f.make({config:{organizerReasoningEffort:'low'}}).prepare(f.input,f.ctx),error=>error===failure);
+  assert.equal(calls,1);
+});

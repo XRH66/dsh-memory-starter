@@ -294,7 +294,7 @@ npm run privacy
 
 0.2.0 将过期记忆上下文清理移到原生 Session 已打开 step 的请求边界，保留原始事件历史，并验证严格回放。
 
-0.3.0 发布 portable 个人记忆主链：逐会话正向授权、只保存双方正文的原文库、按变化补入近期原文（4K／8K／自定义至 16K，按本地时间标明）、`memory_search`／`memory_open`／`memory_recent` 按需查回、后台合批整理为十二类条目并支持审核，以及统一向量档位（本地或兼容 API）。整理器使用独立的默认 32768 tokens／10 分钟预算；推理档位默认沿用模型，可用 `organizerReasoningEffort` 指定。结构化条目正文及全文索引写入本地 SQLite，正常结构化检索不经 Basic Memory，Markdown 仍是编辑面；本系统写入的条目和历史归档带 `embed: false`。本地向量模型加载后默认一直常驻，可改为空闲释放或按时段常驻，每回合开始预热。原话向量可带同会话的有限获准前文（最多 4 条、2000 字符）。索引交接、发送前来源复核、维护对账和 API 地址／凭据绑定的修复一并包含。QQBridge 接入、unified 模式和旧逐轮提炼均已移除。旧「回答前召回」开关已从 portable 设置移除，legacy 模式行为不变。
+0.3.0 发布 portable 个人记忆主链：逐会话正向授权、只保存双方正文的原文库、按变化补入近期原文（4K／8K／自定义至 16K，按本地时间标明）、`memory_search`／`memory_open`／`memory_recent` 按需查回、后台合批整理为十二类条目并支持审核，以及统一向量档位（本地或兼容 API）。整理器使用独立的默认 32768 tokens／10 分钟预算；推理档位默认 `low`，模型不支持时自动退回模型默认，可用 `organizerReasoningEffort` 指定，设为空值则沿用模型默认。结构化条目正文及全文索引写入本地 SQLite，正常结构化检索不经 Basic Memory，Markdown 仍是编辑面；本系统写入的条目和历史归档带 `embed: false`。本地向量模型加载后默认一直常驻，可改为空闲释放或按时段常驻，每回合开始预热。原话向量可带同会话的有限获准前文（最多 4 条、2000 字符）。索引交接、发送前来源复核、维护对账和 API 地址／凭据绑定的修复一并包含。QQBridge 接入、unified 模式和旧逐轮提炼均已移除。旧「回答前召回」开关已从 portable 设置移除，legacy 模式行为不变。
 
 升级步骤见 [升级指南](https://github.com/XRH66/codex-deepseek-starter/blob/main/docs/upgrade.md)，旧记忆迁移见 [记忆迁移指南](https://github.com/XRH66/codex-deepseek-starter/blob/main/docs/memory-migration.md)。升级在会话空闲时更新选定 profile 的插件并重载；不要在补写队列未处理完时切换数据目录。配置、Vault 与管理目录在仓库外。rc5 portable 日常链路及后续 0.6B 本地运行已有指定场景的验收记录，但仍须以目标机器的插件版本、配置和召回结果为准。
 

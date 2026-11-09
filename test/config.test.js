@@ -17,6 +17,16 @@ test('config defaults apply the product limits without a session allowlist', () 
   assert.equal(config.rawRecallQueryWaitMs, 0);
   assert.equal(config.captureFolder, 'chats');
   assert.equal(config.minRecallScore, 0);
+  assert.equal(config.organizerReasoningEffort, 'low');
+  assert.equal(Config({}).organizerReasoningEffort, 'low');
+});
+
+test('organizer reasoning effort honors explicit values and empty model defaults', () => {
+  assert.equal(resolveConfig({ organizerReasoningEffort: 'high' }).organizerReasoningEffort, 'high');
+  assert.equal(resolveConfig({ organizerReasoningEffort: '' }).organizerReasoningEffort, '');
+  assert.equal(resolveConfig({ organizerReasoningEffort: null }).organizerReasoningEffort, '');
+  assert.equal(Config({ organizerReasoningEffort: 'high' }).organizerReasoningEffort, 'high');
+  assert.equal(Config({ organizerReasoningEffort: null }).organizerReasoningEffort, null);
 });
 
 test('invalid personal time zones fall back to Beijing time without stopping configuration', () => {
