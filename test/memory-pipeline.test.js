@@ -91,6 +91,15 @@ test('idle is ninety seconds and repeated new messages cannot postpone the five-
   g.setTime(300_000);await g.pipeline.wake();assert.equal(g.prepared.length,1);
 });
 
+test('a chat stuck in running stops blocking background organizing after the stale window',async t=>{
+  let calls=0;
+  const f=await fixture(t,{organizer:{async prepare(){calls++;return {items:[]};},async commit(){return {committed:true};}}});
+  await f.pipeline.notify(f.save().notice);f.agent.status='running';f.setTime(0);
+  await f.pipeline.wake({force:true});assert.equal(calls,0);assert.equal(f.pipeline.status().waitingReason,'foreground-busy');
+  f.setTime(599_000);await f.pipeline.wake({force:true});assert.equal(calls,0);
+  f.setTime(600_000);await f.pipeline.wake({force:true});assert.equal(calls,1);assert.equal(f.pipeline.status().completed,1);
+});
+
 test('forced flush still yields to foreground work; a new chat never cancels an already dispatched organizer',async t=>{
   const entered=deferred(),release=deferred();let calls=0,signal;
   const f=await fixture(t,{organizer:{async prepare(_input,ctx){calls++;signal=ctx.signal;entered.resolve();await release.promise;return {items:[]};},async commit(){return {committed:true};}}});
@@ -240,6 +249,9 @@ test('exhausted failures stay paused across resume and explicit retry cannot res
   await f.pipeline.notify(f.save().notice);await f.pipeline.wake({force:true});f.setTime(1000);await f.pipeline.wake();f.setTime(3000);await f.pipeline.wake();
   assert.equal(calls,3);const batch=f.pipeline.status().batches[0];assert.equal(batch.state,'error');f.setTime(300000);await f.pipeline.resume();await f.pipeline.wake({force:true});assert.equal(calls,3);
   await assert.rejects(f.pipeline.retry(batch.id),{code:'MEMORY_RETRY_EXHAUSTED'});
+  // Exhausted work is visible as held with its failure code, not as ordinary pending work.
+  const status=f.pipeline.status();assert.equal(status.pending,0);assert.equal(status.held,1);
+  assert.equal(status.jobs[0].reason,'TEST_PROVIDER_UNAVAILABLE');
 });
 
 test('a crash during generation is held until explicit retry and is never automatically charged again on resume',async t=>{

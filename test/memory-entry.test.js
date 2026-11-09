@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeSemanticEntry,resolveMemoryEntryState,memoryEntryMetadata,readMemoryEntry} from '../lib/memory-entry.js';
+import {normalizeSemanticEntry,resolveMemoryEntryState,memoryEntryMetadata,readMemoryEntry,customNoteMetadata} from '../lib/memory-entry.js';
 
 const sources=new Map([['s1',{id:'dsh:session-a:user-a',revision:3,role:'user'}],['s2',{id:'dsh:session-a:assistant-a',revision:1,role:'assistant'}]]);
 const subjects=new Map([['u1','owner:one'],['a1','assistant:one']]);
@@ -30,11 +30,14 @@ test('completion does not lower importance or erase validity and null proposals 
 
 test('metadata round trip preserves manual fields while the actual Markdown body remains authoritative',()=>{
   const entry=normalizeSemanticEntry(plan(),{sources,subjects});
-  const metadata=memoryEntryMetadata(entry,{type:'note',title:'旧笔记标题',permalink:'old/path',manual_priority:'defer',obsidian_custom:'手工保留',base_priority:0.25,value:'过期缓存'});
+  const metadata=memoryEntryMetadata(entry,{type:'note',title:'旧笔记标题',permalink:'old/path',embed:true,manual_priority:'defer',obsidian_custom:'手工保留',base_priority:0.25,value:'过期缓存'});
+  assert.deepEqual(customNoteMetadata({embed:true,manual_key:'保留',type:'旧类型'}),{manual_key:'保留'});
   assert.equal(metadata.obsidian_custom,'手工保留');assert.equal(metadata.manual_priority,'defer');assert.equal(metadata.base_priority,0.25);
+  assert.equal(metadata.embed,false);
   assert.equal(metadata.memory_type,'plan');assert.equal('type' in metadata,false);assert.equal('title' in metadata,false);assert.equal('permalink' in metadata,false);
   assert.equal(metadata.state_validity,'current');assert.equal(metadata.state_progress,'planned');
   const read=readMemoryEntry({metadata,content:'人手修改后的条件：周末不再练习。',legacyKind:'fact',legacyStatus:'active'});
+  assert.equal('embed' in read,false);
   assert.equal(read.content,'人手修改后的条件：周末不再练习。');assert.equal(read.type,'plan');assert.deepEqual(read.importance,entry.importance);
   assert.deepEqual(read.source_refs,entry.source_refs);assert.deepEqual(read.tags,['建模']);assert.equal(read.legacy,false);
 });

@@ -52,6 +52,8 @@
     "lib/memory-pipeline.js",
     "lib/memory-policy/index.js",
     "lib/memory-query-lanes.js",
+    "lib/legacy-notes.js",
+    "lib/local-time.js",
     "lib/memory-query.js",
     "lib/memory-vault-watch.js",
     "lib/memory-vectors.js",

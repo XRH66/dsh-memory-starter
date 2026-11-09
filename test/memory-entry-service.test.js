@@ -27,6 +27,7 @@ test('one semantic result creates a real editable note and metadata projection w
   assert.equal(saved.state,'committed');const entry=await service.read(saved.id,f.context);
   assert.equal(entry.type,'plan');assert.equal(entry.content,proposed().content);assert.equal(entry.importance.level,'high');assert.equal(entry.state.progress,'planned');
   assert.deepEqual(entry.source_refs,[{id:original.id,revision:1,role:'user'}]);assert.equal(f.memory.notes.size,1);
+  assert.equal(f.memory.notes.get(saved.permalink).frontmatter.embed,false);
   const stored=f.raw.db.prepare('SELECT metadata_json FROM structured_entries').get();assert.equal('content' in JSON.parse(stored.metadata_json),false);
   assert.equal((await service.list({type:'plan',progress:'planned',tag:'测试计划'},f.context)).entries.length,1);
   assert.equal((await service.list({type:'fact'},f.context)).entries.length,0);
@@ -67,6 +68,8 @@ test('completion preserves importance and human annotations while previous full 
   const result=await service.commit(update,f.context);assert.equal(result.state,'committed');
   const current=await service.read(first.id,f.context);assert.equal(current.state.validity,'current');assert.equal(current.state.progress,'completed');assert.equal(current.importance.level,'high');
   assert.ok(f.memory.notes.get(result.permalink).content.includes('人工附注'));assert.equal(f.memory.notes.get(result.permalink).frontmatter.manual_key,'kept');
+  const archiveNote=[...f.memory.notes.values()].find(note=>note.frontmatter.memory_parent_id===first.id);
+  assert.equal(archiveNote.frontmatter.embed,false);
   const history=(await service.list({validity:'historical'},f.context)).entries;assert.equal(history.length,1);assert.equal(history[0].state.progress,'planned');assert.equal(history[0].importance.level,'high');
   await service.commit(update,f.context);assert.equal(f.memory.notes.size,2);
 });

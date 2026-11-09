@@ -112,7 +112,7 @@ const component=(tree,name)=>{const node=nodes(tree,n=>typeof n.type==='function
 const select=(tree,label)=>{const node=nodes(tree,n=>n.type==='select'&&n.props['aria-label']===label)[0];assert.ok(node,'Missing select: '+label);return node;};
 const field=(tree,label)=>{const parent=nodes(tree,n=>n.type==='label'&&text(n).startsWith(label))[0];assert.ok(parent,'Missing field: '+label);return nodes(parent,n=>n.type==='input')[0];};
 const writes=env=>env.calls.filter(call=>call.body);
-async function modelPage(env){const page=env.page();await page.flush();const model=env.component(component(page.tree,'RawModelSettings'));await model.flush();return {page,model};}
+async function modelPage(env){const page=env.page();await page.flush();button(page.tree,'维护').props.onClick();await page.flush();const model=env.component(component(page.tree,'RawModelSettings'));await model.flush();return {page,model};}
 
 test('cloud credential reuse is explicit, resets on address edits, and stays out of the password field',async t=>{
   const info=snapshot();info.rawModel={hasSavedApiKey:true,fields:{rawRecallModel:CLOUD,rawRecallApiBase:'https://fictional-a.example/v1',rawRecallApiKeyEnv:'FICTIONAL_A_KEY',rawRecallAllowCloud:true}};
@@ -145,7 +145,7 @@ test('review screen sends the displayed revision and allows comparison again aft
     }
     return snapshot();
   });t.after(()=>env.close());
-  const page=env.page();await page.flush();button(page.tree,'状态与维护').props.onClick();await page.flush();
+  const page=env.page();await page.flush();button(page.tree,'状态').props.onClick();await page.flush();
   const review=env.component(component(page.tree,'MemoryReviewSettings'));await review.flush();
   await button(review.tree,'读取待审核').props.onClick();await review.flush();
   await button(review.tree,'plan · 条目已被修改').props.onClick();await review.flush();
@@ -202,7 +202,7 @@ test('standard mode shows one selected model, collapses resource paths and prese
   assert.equal(nodes(model.tree,n=>n.type==='option'&&n.props.value==='cuda')[0].props.disabled,false);
   assert.equal(field(model.tree,'4B CPU 备用线程数').props.value,6);
   assert.equal(field(model.tree,'GPU 辅助 CPU 线程数').props.value,4);
-  assert.equal(field(model.tree,'空闲后多少分钟').props.value,2);
+  assert.equal(field(model.tree,'空闲后多少分钟').props.value,0);
   select(model.tree,'运行设备').props.onChange({target:{value:'cpu'}});await model.flush();
   button(model.tree,'专家模式').props.onClick();await model.flush();
   assert.equal(nodes(model.tree,n=>n.type==='details')[0].props.open,true);
@@ -286,7 +286,7 @@ test('runtime errors do not simulate success and blocked actions never send forc
 
 test('scheduling resume and selected-batch retry use real runtime requests',async t=>{
   const env=environment((url,body)=>url===BASE+'/runtime'?body?{ok:true}:runtime():snapshot());t.after(()=>env.close());
-  const page=env.page();await page.flush();button(page.tree,'状态与维护').props.onClick();await page.flush();
+  const page=env.page();await page.flush();button(page.tree,'维护').props.onClick();await page.flush();
   const view=env.component(component(page.tree,'MemoryRuntimeSettings'));await view.flush();
   assert.match(text(view.tree),/foreground-busy/);assert.match(text(view.tree),/原始授权及前台占用/);
   assert.equal(button(view.tree,'重试所选批次').props.disabled,true);
@@ -435,4 +435,49 @@ test('session HTTP adapter preserves the deployment status string and separates 
   const post=Readable.from([Buffer.from(JSON.stringify({action:'replace',value:[],revision:res.body.revision}))]);
   Object.assign(post,{method:'POST',url:req.url,socket:req.socket,headers:{...req.headers,'content-type':'application/json','x-basic-memory-settings':'1'}});
   await handler(post,res);assert.equal(res.statusCode,200,JSON.stringify(res.body));assert.equal(res.body.runtime,'stopped-or-unreported');assert.deepEqual(res.body.memoryRuntime,value);
+});
+
+test('the model tab offers one card per model and saving a cloud choice requires consent',async t=>{
+  const env=environment(()=>snapshot());t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  const radios=nodes(picker.tree,n=>n.type==='input'&&n.props.type==='radio');
+  assert.ok(radios.length>=2);assert.equal(radios.filter(n=>n.props.checked).length,1);
+  const cloud=nodes(picker.tree,n=>n.type==='label'&&n.props.className==='memory-model-card'&&text(n).includes('云端 · v4'))[0];
+  nodes(cloud,n=>n.type==='input')[0].props.onChange();await picker.flush();
+  assert.equal(button(picker.tree,'保存').props.disabled,true);
+  field(picker.tree,'我知道检索内容会发送到云端').props.onChange({target:{checked:true}});await picker.flush();
+  await button(picker.tree,'保存').props.onClick();await picker.flush();
+  const call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');assert.equal(call.body.settings.rawRecallModel,CLOUD);assert.equal(call.body.settings.rawRecallAllowCloud,true);
+});
+
+test('the model tab saves scheduled residency and resets the idle timeout for always-loaded mode',async t=>{
+  const env=environment(()=>snapshot());t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  const residency=()=>{const label=nodes(picker.tree,n=>n.type==='label'&&text(n).startsWith('模型常驻'))[0];assert.ok(label);const control=nodes(label,n=>n.type==='select')[0];assert.ok(control);return control;};
+  residency().props.onChange({target:{value:'hours'}});await picker.flush();
+  assert.equal(field(picker.tree,'常驻时段').props.value,'08:00-01:00');
+  field(picker.tree,'常驻时段').props.onChange({target:{value:'09:30-23:45'}});await picker.flush();
+  await button(picker.tree,'保存').props.onClick();await picker.flush();
+  let call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');
+  assert.equal(call.body.settings.rawRecallResidentHours,'09:30-23:45');assert.equal(call.body.settings.rawRecallIdleMs,600000);
+  residency().props.onChange({target:{value:'always'}});await picker.flush();
+  await button(picker.tree,'保存').props.onClick();await picker.flush();
+  call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');
+  assert.equal(call.body.settings.rawRecallResidentHours,'');assert.equal(call.body.settings.rawRecallIdleMs,0);
+});
+
+test('the model tab requests installation when the local model has no install receipt',async t=>{
+  const info=snapshot();delete info.rawModel.fields.rawRecallInstallReceipt;
+  const env=environment((url,body)=>{
+    if(url===BASE+'/model-install')return body?{ok:true,job:{id:'download',model:MODEL,state:'running',step:'fixture'}}:{ok:true,job:null};
+    return info;
+  });t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  const preparation=env.component(component(picker.tree,'ModelPreparation'));await preparation.flush();
+  await button(preparation.tree,'下载并启用').props.onClick();await preparation.flush();
+  assert.equal(writes(env).length,1);const call=writes(env)[0];
+  assert.equal(call.path,BASE+'/model-install');assert.equal(call.body.action,'start');assert.equal(call.body.allowDownload,true);
 });

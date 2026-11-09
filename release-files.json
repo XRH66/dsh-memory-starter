@@ -37,6 +37,8 @@
   "lib/memory-entry-service.js",
   "lib/memory-entry-access.js",
   "lib/memory-query-lanes.js",
+  "lib/legacy-notes.js",
+  "lib/local-time.js",
   "lib/memory-query.js",
   "lib/memory.js",
   "lib/navigation.js",
@@ -166,5 +168,14 @@
   "test/raw-scope-view.test.js",
   "test/raw-api-credentials.test.js",
   "test/embedding-material.test.js",
-  "test/raw-context-vectors.test.js"
+  "test/raw-context-vectors.test.js",
+  "test/handoff-local-time.test.js",
+  "test/legacy-notes.test.js",
+  "test/model-install-python.test.js",
+  "test/persona-opt-in.test.js",
+  "test/portable-session-memory-host.test.js",
+  "test/raw-lexical.test.js",
+  "test/raw-memory-authorization.test.js",
+  "test/recent-memory-authorization.test.js",
+  "test/session-memory.test.js"
 ]

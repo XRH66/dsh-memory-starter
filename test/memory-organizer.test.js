@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createMemoryOrganizer} from '../lib/memory-organizer.js';
+import {createMemoryOrganizer,ORGANIZER_MAX_TOKENS} from '../lib/memory-organizer.js';
 import {createMemoryEntryService} from '../lib/memory-entry-service.js';
 import {createMemoryEntryBackend} from '../lib/memory-entry-backend.js';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
@@ -39,7 +39,7 @@ async function fixture(t,{output=response([item()]),finish='stop',chunks,onUsage
     yield {type:'text-delta',index:0,text:json.slice(0,mid)};yield {type:'text-delta',index:0,text:json.slice(mid)};
     yield {type:'finish',reason:{kind:finish},usage:{inputTokens:80,outputTokens:20,totalTokens:100,cacheReadTokens:12}};
   }};
-  const make=(options={})=>createMemoryOrganizer({entries,llm,config:{captureMaxTokens:2048},onUsage:async receipt=>{receipts.push(receipt);await onUsage?.(receipt);},...options});
+  const make=(options={})=>createMemoryOrganizer({entries,llm,config:{captureMaxTokens:2048,organizerMaxTokens:2048},onUsage:async receipt=>{receipts.push(receipt);await onUsage?.(receipt);},...options});
   return {ctx,controller,calls,entries,llm,service,raw,memory,originals,batchRefs,receipts,make,
     revoke:()=>{allowed=false;},counts:()=>({generated,commits}),input:{sources}};
 }
@@ -290,4 +290,14 @@ test('onUsage failure never replaces a generation or parsing error and preserves
     assert.equal(error.code,'MEMORY_OUTPUT_INVALID');assert.equal(error.usage.total_tokens,100);assert.equal(error.usageReportFailed,true);return true;
   });
   assert.equal(f.counts().generated,1);assert.equal(invalid.counts().generated,1);
+});
+
+test('organizer output budget is independent of the legacy per-turn capture limit',()=>{
+  assert.equal(ORGANIZER_MAX_TOKENS,32768);
+});
+
+test('organizer has its own generation timeout, longer than the legacy capture limit',async()=>{
+  const {ORGANIZER_TIMEOUT_MS}=await import('../lib/memory-organizer.js');
+  const {HARD_MAX_CAPTURE_TIMEOUT_MS}=await import('../lib/config.js');
+  assert.ok(ORGANIZER_TIMEOUT_MS>HARD_MAX_CAPTURE_TIMEOUT_MS);
 });

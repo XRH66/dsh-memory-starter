@@ -69,7 +69,7 @@ test('device settings round-trip, defaults and older model thread defaults', () 
   const fields = normalizeRawModelSettings({ ...publicRawModel(config).fields, rawRecallDevice: 'cuda' });
   assert.equal(fields.rawRecallDevice, 'cuda');
   assert.equal(fields.rawRecallCpuThreads, 6); assert.equal(fields.rawRecallGpuThreads, 4);
-  assert.equal(fields.rawRecallIdleMs, 120000);
+  assert.equal(fields.rawRecallIdleMs, 0);
   assert.equal(llamaRuntimeSettings(rawModelSpec(config), config).initialDevice, 'cuda');
   const eight = settings({ rawRecallModel: 'Qwen/Qwen3-Embedding-8B', rawRecallLlamaCudaServer: '', rawRecallLlamaServer: path.resolve('old-cpu') });
   assert.equal(llamaRuntimeSettings(rawModelSpec(eight), eight).initialDevice, 'cpu');
@@ -214,6 +214,26 @@ test('idle release never kills an admitted embedding job', async t => {
   assert.equal(backend.status().prepared, false); assert.equal(f.fake.active, 0);
 });
 
+test('a held backend is not idle-released between prepare and the last embed of its caller', async t => {
+  const f = await backendFixture(t, { rawRecallIdleMs: 10 });
+  const backend = f.create();
+  const unhold = backend.hold(); const identity = await backend.prepare();
+  await delay(45);
+  assert.equal(backend.modelKey, identity.modelKey); assert.equal(f.fake.active, 1);
+  unhold(); await delay(45);
+  assert.equal(backend.status().prepared, false); assert.equal(f.fake.active, 0);
+});
+
+test('a full maintenance queue never refuses a query', async t => {
+  let release; const wait = new Promise(resolve => { release = resolve; });
+  const f = await backendFixture(t, {}, { gate: async texts => { if (texts[0] === 'doc-0') await wait; } });
+  const backend = f.create(); await backend.prepare();
+  const docs = Array.from({ length: 18 }, (_, i) => backend.embed(['doc-' + i]).catch(error => error));
+  const refused = await docs[17]; assert.equal(refused.code, 'EMBEDDING_QUEUE_FULL');
+  const query = backend.embed(['公开查询'], { kind: 'query' });
+  release(); assert.equal((await query)[0].length, 2560); await Promise.all(docs);
+});
+
 test('local query cancellation releases the runtime only after transport dispatch', async t => {
   let authorizing, allow, sent, respond;
   const authorizationStarted = new Promise(resolve => { authorizing = resolve; });
@@ -291,4 +311,13 @@ test('local source boundary waits for async authorization before embedding and t
   await assert.rejects(backend.embed(['FICTIONAL-REVOKED'],{authorize}),/source access changed/);
   await assert.rejects(backend.planChunks('FICTIONAL-REVOKED',{authorize}),/source access changed/);
   assert.equal(f.fake.requests.length,before,'revoked content never reaches either local endpoint');
+});
+
+test('resident hours keep the model loaded inside the window, including across midnight', async () => {
+  const { residentFor } = await import('../lib/raw-rag/backend.js');
+  const at = (h, m) => new Date(2026, 0, 1, h, m);
+  assert.equal(residentFor('08:00-01:00', at(9, 0)).inside, true);
+  assert.equal(residentFor('08:00-01:00', at(0, 30)).untilEndMs, 30 * 60000);
+  assert.equal(residentFor('08:00-01:00', at(3, 0)).inside, false);
+  assert.equal(residentFor('', at(12, 0)).inside, false);
 });

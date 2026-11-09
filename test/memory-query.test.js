@@ -6,13 +6,33 @@ import os from 'node:os';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {createRawRecall} from '../lib/raw-rag/index.js';
 import {createMemoryEntryAccess} from '../lib/memory-entry-access.js';
-import {createMemoryQueryAnswer,createMemoryQueryTools,createMemoryReferenceLoader} from '../lib/memory-query.js';
+import {createMemoryQueryAnswer,createMemoryQueryTools,createMemoryReferenceLoader,vectorQueryText} from '../lib/memory-query.js';
 import {createUnifiedProfiles} from '../lib/unified/profiles.js';
 import {resolveConfig} from '../lib/config.js';
 import {memoryStore} from './fake-memory.js';
 import {fakeAgent} from './helpers.js';
 
 const nextTurn=()=>new Promise(resolve=>setImmediate(resolve));
+const legacyVaultNote=`---
+title: 用户 - 虚构宠物
+permalink: personal/chats/facts/用户-虚构宠物
+memory_id: vault-legacy-qa
+memory_kind: fact
+status: active
+subject: 用户
+attribute: 养的宠物
+value: 养了一只叫阿岑的猫
+recorded_at: '2026-10-25T04:21:07.668Z'
+tags:
+- dsh-memory
+- dsh-fact
+---
+
+<!-- dsh-fact-memory -->
+# 用户 - 虚构宠物
+
+- [fact] 养了一只叫阿岑的猫
+`;
 
 async function fixture(t,options={}){
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'portable-query-')),memory=new RawMemoryStore(path.join(directory,'existing.sqlite'),{warn(){}});
@@ -196,7 +216,7 @@ test('P02 committed Markdown entries are found with typed state and importance, 
   f.memory.setControl({scope:'owner',targetType:'message',targetId:source.messageId,excluded:true});
   before=reads();
   const changed=await f.answer.search({query:'书架',type:'plan'});
-  assert.equal(reads()-before,2);assert.equal(changed.records[0].id,saved.id);
+  assert.equal(reads()-before,1);assert.equal(changed.records[0].id,saved.id);
   assert.notEqual(changed.records[0].revision,saved.revision);assert.equal(changed.records[0].text,manual);
   assert.equal(changed.records[0].sourceStatus.manualBody,true);
 });
@@ -259,6 +279,38 @@ test('long messages begin near a late hit and continuation uses the delivered so
 test('revocation and unissued paths cannot reveal originals or bypass the answer grant',async t=>{
   const f=await fixture(t);f.save();assert.equal((await f.answer.expand({anchor:{ref:{storage:'note',identifier:'private.md'}}})).error.code,'INPUT');
   const found=await f.answer.search({query:'书架'});f.revoke();assert.equal((await f.answer.expand({anchor:found.records[0].anchor})).status,'denied');
+});
+
+test('old-format notes in the Vault bypass Basic Memory search_notes',async t=>{
+  const f=await fixture(t),directory=path.join(f.config.vaultPath,'chats/facts');
+  await fs.mkdir(directory,{recursive:true});
+  await fs.writeFile(path.join(directory,'pet.md'),legacyVaultNote);
+  const original=f.notes.tools.get.bind(f.notes.tools);let searches=0;
+  f.notes.tools.get=(name,agent)=>{const tool=original(name,agent);if(name!=='mcp__basic_memory__search_notes'||!tool)return tool;
+    return {...tool,execute:(...args)=>{searches++;return tool.execute(...args);}};};
+
+  const found=await f.answer.search({query:'阿岑'});
+  assert.equal(searches,0);
+  assert.equal(found.channels.legacy.records,1);
+  assert.equal(found.records[0].id,'legacy-note:vault-legacy-qa');
+  assert.equal(found.records[0].text,'养了一只叫阿岑的猫');
+});
+
+test('Basic Memory remains the old-format fallback when Vault memory directories are absent',async t=>{
+  const f=await fixture(t);
+  assert.equal(await fs.stat(path.join(f.config.vaultPath,'chats/facts')).then(()=>true,()=>false),false);
+  await f.notes.tools.get('mcp__basic_memory__write_note',f.agent).execute({project:'main',title:'QA旧偏好',directory:'chats/facts',tags:['dsh-memory'],
+    content:'<!-- dsh-fact-memory -->\n# QA旧偏好\n\n- [preference] QA用户喜欢靛蓝。\n- subject: owner\n- attribute: 颜色',
+    metadata:{memory_id:'memory-legacy-qa',memory_kind:'fact',status:'active',subject:'owner',attribute:'颜色',value:'QA用户喜欢靛蓝。',recorded_at:'2026-11-06T00:00:00Z'}},{agent:f.agent});
+  const original=f.notes.tools.get.bind(f.notes.tools);let searches=0;
+  f.notes.tools.get=(name,agent)=>{const tool=original(name,agent);if(name!=='mcp__basic_memory__search_notes'||!tool)return tool;
+    return {...tool,execute:(...args)=>{searches++;return tool.execute(...args);}};};
+
+  const found=await f.answer.search({query:'靛蓝'});
+  assert.equal(searches,1);
+  assert.equal(found.channels.legacy.records,1);
+  assert.equal(found.records[0].id,'legacy-note:memory-legacy-qa');
+  assert.equal(found.records[0].text,'QA用户喜欢靛蓝。');
 });
 
 test('a migrated personal permalink remains searchable, expandable and available to the organizer at its real path',async t=>{
@@ -335,7 +387,7 @@ test('portable vectors pin the answer profile, resolve issued anchors and revali
       calls.push({kind:'query',...input});
       assert.deepEqual(input.profile,{id:'Qwen/Qwen3-Embedding-4B',revision:1,modelKey:'fixture-vector-space-one'});
       assert.equal(Object.isFrozen(input.profile),true);assert.notEqual(input.profile,activeProfile);
-      assert.equal(input.limit,40);assert.ok(Number.isFinite(input.deadline));assert.equal(input.signal.aborted,false);
+      assert.equal(input.limit,10);assert.ok(Number.isFinite(input.deadline));assert.equal(input.signal.aborted,false);
       return {records:input.query==='搬运箱子'?[documents.get('vector-one'),documents.get('wrong-role'),documents.get('withdrawn')]:[documents.get('vector-two')]};
     },
     async resolveDocument(input){
@@ -383,4 +435,40 @@ test('portable vectors pin the answer profile, resolve issued anchors and revali
   const grant=calls.find(call=>call.kind==='snapshot').grant;
   assert.ok(calls.every(call=>call.grant===grant));assert.equal(calls.filter(call=>call.kind==='query').length,2);
   assert.equal(f.raw.status().backend.prepared,false);
+});
+
+test('vector lane folds multi-line and padded queries the vector service would reject',async t=>{
+  assert.equal(vectorQueryText('  填个表\n我全名咋写\r\n\t多大来着  '),'填个表 我全名咋写 多大来着');
+  assert.equal(vectorQueryText('\n\t '),'');
+  assert.equal(vectorQueryText('x'.repeat(2100)).length,2000);
+  const f=await fixture(t),calls=[];
+  const vectors={async getSnapshot(){return {id:'fixture'};},async query(input){calls.push(input);return {records:[]};}};
+  const load=createMemoryReferenceLoader({access:f.access,tools:f.notes.tools,vectors,config:f.config});
+  await load({sources:[{role:'user',text:'虚构背景第一行\n第二行  '}]},
+    {agent:f.agent,scope:{ownerSubject:'owner',project:'main'},signal:new AbortController().signal,check(){}});
+  assert.equal(calls.length,1);
+  assert.doesNotMatch(calls[0].query,/[\u0000-\u001f]/u);assert.equal(calls[0].query,calls[0].query.trim());
+});
+
+test('search records carry a readable host-local time next to epoch milliseconds',async()=>{
+  const {localTime,VECTOR_LANE_LIMIT}=await import('../lib/memory-query.js');
+  const ms=Date.UTC(2026,2,22,6,5);const text=localTime(ms);
+  assert.match(text,/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} [+-]\d{2}:\d{2}$/u);
+  const d=new Date(ms);assert.ok(text.startsWith(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`));
+  assert.equal(localTime(undefined),undefined);assert.equal(VECTOR_LANE_LIMIT,10);
+});
+
+test('structured and old-format note lanes share a single Basic Memory search per query',async t=>{
+  const f=await fixture(t);
+  const original=f.notes.tools.get.bind(f.notes.tools);let searches=0;
+  f.notes.tools.get=(name,agent)=>{const tool=original(name,agent);if(name!=='mcp__basic_memory__search_notes'||!tool)return tool;
+    return {...tool,execute:(...args)=>{searches++;return tool.execute(...args);}};};
+  await f.answer.search({query:'靛蓝'});
+  assert.equal(searches,1);
+});
+
+test('records carry a label saying original or entry, speaker, progress and time',async()=>{
+  const {recordLabel}=await import('../lib/memory-query.js');
+  assert.match(recordLabel({kind:'original',role:'user',time:Date.UTC(2026,4,8,6)}),/^原话 · 用户说 · 2026-05-0\d /u);
+  assert.equal(recordLabel({kind:'entry',type:'plan',state:{validity:'current',progress:'planned'}}),'记忆条目 · 计划（尚未发生） · 当前有效 · 依据时间 时间未知');
 });
