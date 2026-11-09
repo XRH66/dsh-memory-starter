@@ -7,7 +7,7 @@ import { hostTimeZone } from '../lib/personal-namespace.js';
 test('config defaults apply the product limits without a session allowlist', () => {
   const config = resolveConfig({});
   assert.equal(config.project, 'personal');
-  assert.equal(config.timeZone, hostTimeZone());
+  assert.equal(config.timeZone, 'Asia/Shanghai');
   assert.equal(config.autoRecall, true);
   assert.equal(config.autoCapture, true);
   assert.equal(config.maxRecallNotes, 3);
@@ -19,9 +19,9 @@ test('config defaults apply the product limits without a session allowlist', () 
   assert.equal(config.minRecallScore, 0);
 });
 
-test('invalid personal time zones fall back to the host zone without stopping configuration', () => {
+test('invalid personal time zones fall back to Beijing time without stopping configuration', () => {
   const config = resolveConfig({ timeZone: 'Not/A_Real_Zone' });
-  assert.equal(config.timeZone, hostTimeZone());
+  assert.equal(config.timeZone, 'Asia/Shanghai');
   assert.equal(config.timeZoneConfigured, 'Not/A_Real_Zone');
   assert.match(config.timeZoneError, /无效时区 Not\/A_Real_Zone/);
 });

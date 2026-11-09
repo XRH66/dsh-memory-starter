@@ -34,11 +34,11 @@ test('the personal time zone changes formatting, date conversion, and timeline g
   }], { config: resolveConfig({}), sessionId: '', now: instant + 1000 }).text, /2026-06-10 11:27/);
 });
 
-test('an invalid personal time zone falls back to the host zone', () => {
+test('an invalid personal time zone falls back to Beijing time', () => {
   const resolved = resolvePersonalTimeZone('Not/A_Real_Zone');
-  assert.equal(resolved.timeZone, hostTimeZone());
-  assert.match(resolved.error, /已使用本机时区/);
-  assert.equal(setPersonalTimeZone('Not/A_Real_Zone'), hostTimeZone());
+  assert.equal(resolved.timeZone, 'Asia/Shanghai');
+  assert.match(resolved.error, /已使用默认时区 Asia\/Shanghai/);
+  assert.equal(setPersonalTimeZone('Not/A_Real_Zone'), 'Asia/Shanghai');
 });
 
 test('the deployment setting saves the configured zone and reports fallback status', async t => {
@@ -67,7 +67,7 @@ test('the deployment setting saves the configured zone and reports fallback stat
 
   await stageDeploymentTimeZone(file, 'Not/A_Real_Zone', deploymentFingerprint(saved));
   saved = await readDeploymentSettings(file);
-  assert.equal(saved.timeZone, hostTimeZone());
+  assert.equal(saved.timeZone, 'Asia/Shanghai');
   assert.equal(saved.timeZoneConfigured, 'Not/A_Real_Zone');
   assert.match(saved.timeZoneError, /无效时区/);
 });
