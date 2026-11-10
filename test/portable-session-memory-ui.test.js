@@ -108,7 +108,7 @@ test('handoff control offers presets and custom tokens, validates capacity and s
     if(url.includes('/handoff')){if(body)info={...info,tokens:body.tokens,activeTokens:body.tokens,revision:'handoff-two'};return info;}
     return snapshot();
   });t.after(()=>env.close());
-  const page=env.page();await page.flush();button(page.tree,'维护').props.onClick();await page.flush();
+  const page=env.page();await page.flush();
   const element=nodes(page.tree,node=>typeof node.type==='function'&&node.type.name==='HandoffSettings')[0];assert.ok(element);
   const control=env.component(element);await control.flush();
   assert.match(text(control.tree),/4K（推荐）/);assert.match(text(control.tree),/8K（保留更多）/);

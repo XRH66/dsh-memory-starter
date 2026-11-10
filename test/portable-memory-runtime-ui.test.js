@@ -125,7 +125,7 @@ test('maintenance time zone shows the active and host zones and saves the config
     return info;
   });
   t.after(()=>env.close());
-  const page=env.page();await page.flush();button(page.tree,'维护').props.onClick();await page.flush();
+  const page=env.page();await page.flush();
   const zone=env.component(component(page.tree,'TimeZoneSettings'));await zone.flush();
   assert.match(text(zone.tree),/当前生效：America\/Los_Angeles；本机时区：America\/Los_Angeles/);
   field(zone.tree,'个人时区').props.onChange({target:{value:'Asia/Shanghai'}});await zone.flush();
@@ -463,18 +463,46 @@ test('session HTTP adapter preserves the deployment status string and separates 
   await handler(post,res);assert.equal(res.statusCode,200,JSON.stringify(res.body));assert.equal(res.body.runtime,'stopped-or-unreported');assert.deepEqual(res.body.memoryRuntime,value);
 });
 
-test('the model tab offers one card per model and saving a cloud choice requires consent',async t=>{
+test('the model tab offers a dropdown of models and saving a cloud choice requires consent',async t=>{
   const env=environment(()=>snapshot());t.after(()=>env.close());
   const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
   const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
-  const radios=nodes(picker.tree,n=>n.type==='input'&&n.props.type==='radio');
-  assert.ok(radios.length>=2);assert.equal(radios.filter(n=>n.props.checked).length,1);
-  const cloud=nodes(picker.tree,n=>n.type==='label'&&n.props.className==='memory-model-card'&&text(n).includes('云端 · v4'))[0];
-  nodes(cloud,n=>n.type==='input')[0].props.onChange();await picker.flush();
+  assert.equal(nodes(picker.tree,n=>n.type==='input'&&n.props.type==='radio').length,0);
+  const select=nodes(picker.tree,n=>n.type==='select'&&n.props['aria-label']==='检索模型')[0];assert.ok(select);
+  const options=nodes(select,n=>n.type==='option');
+  assert.ok(options.length>=2);assert.equal(options.filter(n=>n.props.value===select.props.value).length,1);
+  assert.deepEqual(nodes(select,n=>n.type==='optgroup').map(n=>n.props.label),['本地运行','云端 API']);
+  assert.ok(options.some(n=>n.props.value===CLOUD&&text(n).includes('云端 · v4')));
+  select.props.onChange({target:{value:CLOUD}});await picker.flush();
   assert.equal(button(picker.tree,'保存').props.disabled,true);
   field(picker.tree,'我知道检索内容会发送到云端').props.onChange({target:{checked:true}});await picker.flush();
   await button(picker.tree,'保存').props.onClick();await picker.flush();
   const call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');assert.equal(call.body.settings.rawRecallModel,CLOUD);assert.equal(call.body.settings.rawRecallAllowCloud,true);
+});
+
+test('a custom API model needs an address and a model name, and vendor presets are not offered',async t=>{
+  const env=environment(()=>{const info=snapshot();info.rawModels=[...info.rawModels,
+    {id:'custom-api',label:'自定义 API（OpenAI 兼容）',tier:'cloud',engine:'api',cloud:true,custom:true,dimensions:1024},
+    {id:'fictional-preset',label:'厂商预设',engine:'api',cloud:true,hidden:true,dimensions:1024}];return info;});t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  const choices=()=>nodes(select(picker.tree,'检索模型'),n=>n.type==='option').map(n=>n.props.value);
+  assert.ok(choices().includes('custom-api'));assert.ok(!choices().includes('fictional-preset'));
+  assert.equal(nodes(picker.tree,n=>n.type==='label'&&text(n).startsWith('API 地址')).length,0);
+  select(picker.tree,'检索模型').props.onChange({target:{value:'custom-api'}});await picker.flush();
+  assert.equal(field(picker.tree,'API 地址').props.value,'');
+  field(picker.tree,'我知道检索内容会发送到云端').props.onChange({target:{checked:true}});await picker.flush();
+  assert.equal(button(picker.tree,'保存').props.disabled,true);
+  field(picker.tree,'API 地址').props.onChange({target:{value:'https://fictional-b.example/v1'}});await picker.flush();
+  assert.equal(button(picker.tree,'保存').props.disabled,true);
+  field(picker.tree,'模型名称').props.onChange({target:{value:'fictional-embed'}});await picker.flush();
+  field(picker.tree,'向量维数').props.onChange({target:{value:'768'}});await picker.flush();
+  field(picker.tree,'API Key').props.onChange({target:{value:'fictional-key'}});await picker.flush();
+  assert.equal(button(picker.tree,'保存').props.disabled,false);
+  await button(picker.tree,'保存').props.onClick();await picker.flush();
+  const call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');assert.equal(call.body.apiKey,'fictional-key');
+  assert.deepEqual([call.body.settings.rawRecallModel,call.body.settings.rawRecallApiBase,call.body.settings.rawRecallApiModel,call.body.settings.rawRecallDimensions,call.body.settings.rawRecallAllowCloud],
+    ['custom-api','https://fictional-b.example/v1','fictional-embed',768,true]);
 });
 
 test('the model tab saves scheduled residency and resets the idle timeout for always-loaded mode',async t=>{
