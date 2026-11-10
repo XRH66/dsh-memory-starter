@@ -235,7 +235,7 @@ test('structured writers use original message proofs while later authorized chat
   assert.equal(notesIn(f.memory,'chats/entries').length,1);assertTopicPage(f.memory,'测试');
 });
 
-test('native pre-step does not presearch; an explicit memory tool can read before the user source is committed',async t=>{
+test('pre-step prefetch never spends the model query budget; an explicit memory tool can read before the user source is committed',async t=>{
   const f=await fixture(t,{autoRecall:true}),agent=f.actor();await f.access.set(agent.session.id,true);
   let searches=0;
   const tools={...f.memory.tools,get vaultBackend(){return toolVaultBackend(this);},get(name,owner){const tool=f.memory.tools.get(name,owner);if(name!=='mcp__basic_memory__search_notes')return tool;return {...tool,async execute(args,exec){searches++;return tool.execute(args,exec);}};}};
@@ -353,4 +353,41 @@ test('every memory-enabled turn carries the answering rules; a turn without memo
   assert.ok(rules);assert.match(rules.content[0].text,/计划、打算、约定在没有后续确认前，不能说成已经发生/);
   const disabled=await prepare(off,1,f.begin(off,1,bridge));
   assert.ok(!(disabled.messages??[]).some(message=>message.source?.kind==='memory-answer-rules'));
+});
+
+test('turn-start prefetch attaches bounded earlier originals through the read grant; switch and revocation turn it off',async t=>{
+  const f=await fixture(t,{autoRecall:true,autoCapture:false}),agent=f.actor(),bridge=f.bridge();
+  await f.access.set(agent.session.id,true);
+  const prepare=(turn,text)=>{f.emit(agent,'turn/start',{turn},bridge);const user=directUser(text,'q-'+turn);
+    return bridge.onPreStep({agent,turn,step:1,messages:[user],signal:new AbortController().signal},async()=>({kind:'enter',messages:[user]}));};
+  f.begin(agent,1,bridge);f.finish(agent,1,bridge);await bridge.waitForIdle();
+  const decision=await prepare(2,'我现在用什么杯子喝茶？');
+  const prefetched=decision.messages.find(message=>message.source?.kind==='memory-prefetch');
+  assert.ok(prefetched,'earlier original is attached');
+  assert.match(prefetched.content[0].text,/青瓷杯/);assert.match(prefetched.content[0].text,/原话 · 用户说/);
+  assert.equal(bridge.getQueryState(agent.session.id),null,'prefetch does not open the model query session');
+  // The model sees who said it and when, with the relative day computed by the program.
+  const searched=await bridge.queryTools.find(tool=>tool.name==='memory_search').execute({query:'青瓷杯'},{agent,signal:new AbortController().signal});
+  const hit=searched.records.find(record=>/青瓷杯/.test(record.text));
+  assert.match(hit.label,/^原话 · 用户说 · [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \+08:00（今天）$/);assert.ok(hit.localTime);
+  f.emit(agent,'turn/end',{turn:2,reason:{kind:'completed'}},bridge);
+
+  const small=f.bridge(undefined,{config:{...f.config,prefetchMaxChars:30}});
+  f.emit(agent,'turn/start',{turn:3},small);const user=directUser('我现在用什么杯子喝茶？','q-3');
+  const bounded=await small.onPreStep({agent,turn:3,step:1,messages:[user],signal:new AbortController().signal},async()=>({kind:'enter',messages:[user]}));
+  const line=bounded.messages.find(message=>message.source?.kind==='memory-prefetch')?.content[0].text.split('\n').filter(row=>row.startsWith('- '));
+  assert.ok(line.length>=1);assert.ok(line.join('').length<=30);
+  f.emit(agent,'turn/end',{turn:3,reason:{kind:'completed'}},small);
+
+  const off=f.bridge(undefined,{config:{...f.config,autoRecall:false}});
+  f.emit(agent,'turn/start',{turn:4},off);const again=directUser('我现在用什么杯子喝茶？','q-4');
+  const disabled=await off.onPreStep({agent,turn:4,step:1,messages:[again],signal:new AbortController().signal},async()=>({kind:'enter',messages:[again]}));
+  assert.ok(!disabled.messages.some(message=>message.source?.kind==='memory-prefetch'));
+  assert.ok(disabled.messages.some(message=>message.source?.kind==='memory-answer-rules'));
+  f.emit(agent,'turn/end',{turn:4,reason:{kind:'completed'}},off);
+
+  await f.access.set(agent.session.id,false);
+  f.emit(agent,'turn/start',{turn:5},bridge);const closed=directUser('我现在用什么杯子喝茶？','q-5');
+  const revoked=await bridge.onPreStep({agent,turn:5,step:1,messages:[closed],signal:new AbortController().signal},async()=>({kind:'enter',messages:[closed]}));
+  assert.ok(!(revoked.messages??[]).some(message=>message.source?.kind==='memory-prefetch'));
 });
