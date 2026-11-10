@@ -7,7 +7,7 @@ import { buildTurn, RawMemoryStore, splitClauses } from '../lib/raw-rag/store.js
 import { buildCoverage, coverageOf, selectEvidence } from '../lib/raw-rag/select.js';
 import { createRawRecall } from '../lib/raw-rag/index.js';
 import { resolveConfig } from '../lib/config.js';
-import { createRecentConversationStore, createRecentConversationTool } from '../lib/recent-context.js';
+import { createRecentConversationStore } from '../lib/recent-context.js';
 import { createBridge } from '../lib/index.js';
 import { fakeAgent, fakeTools, mcpResult, runPreStep } from './helpers.js';
 import { embeddingContract, seedTurnVectors } from './embedding-fixture.js';
@@ -97,22 +97,6 @@ test('recent page exports real message coverage and only suppresses displayed cl
   assert.equal(selected.skippedCovered, 1);
   assert.ok(!selected.text.includes('围巾款式定了'));
   assert.ok(selected.text.includes('换一条吧'));
-});
-
-test('manual recent tool returns the visible page without internal coverage', async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'recent-tool-'));
-  const config = resolveConfig({ vaultPath: path.join(dir, 'vault'), project: 'main', recentContext: true });
-  const store = createRecentConversationStore({ config, logger: { warn() {} } });
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
-  const time = new Date(T0).toISOString();
-  await store.record({ sessionId: 's-tool', turn: 1, channel: 'dsh', status: 'completed',
-    user: { id: 'u-tool', text: '围巾款式定了。', time },
-    assistant: { id: 'a-tool', text: '好，记下了。', time } });
-  const tool = createRecentConversationTool({ store, available: () => true, config });
-  const page = await tool.execute({}, { agent: fakeAgent('s-tool') });
-  assert.equal(page.coverage, undefined);
-  assert.match(page.text, /围巾款式定了/);
-  assert.ok(Array.isArray(page.items));
 });
 
 test('store is idempotent, model-isolated and scope/asOf filtered', async (t) => {

@@ -10,13 +10,9 @@ test('config defaults apply the product limits without a session allowlist', () 
   assert.equal(config.timeZone, 'Asia/Shanghai');
   assert.equal(config.autoRecall, true);
   assert.equal(config.autoCapture, true);
-  assert.equal(config.maxRecallNotes, 3);
-  assert.equal(config.maxRecallChars, 1200);
-  assert.equal(config.recallTimeoutMs, 1500);
   assert.equal(config.rawRecallMinScore, null);
   assert.equal(config.rawRecallQueryWaitMs, 0);
   assert.equal(config.captureFolder, 'chats');
-  assert.equal(config.minRecallScore, 0);
   assert.equal(config.organizerReasoningEffort, 'low');
   assert.equal(Config({}).organizerReasoningEffort, 'low');
 });
@@ -36,23 +32,13 @@ test('invalid personal time zones fall back to Beijing time without stopping con
   assert.match(config.timeZoneError, /无效时区 Not\/A_Real_Zone/);
 });
 
-test('config clamps values above the hard limits', () => {
-  const config = resolveConfig({
-    maxRecallChars: 99999,
-    recallTimeoutMs: 99999,
-    maxRecallNotes: 99,
-    minRecallScore: 9,
-  });
-  assert.equal(config.maxRecallChars, DEFAULT_CONFIG.maxRecallChars);
-  assert.equal(config.recallTimeoutMs, DEFAULT_CONFIG.recallTimeoutMs);
-  assert.equal(config.maxRecallNotes, 10);
-  assert.equal(config.minRecallScore, 1);
-});
-
 test('schemastery schema accepts an empty config and applies defaults', () => {
   const value = Config({});
-  assert.equal(value.maxRecallChars, 1200);
-  assert.equal(value.minRecallScore, 0);
+  assert.equal(value.captureFolder, 'chats');
+  // Options removed with the old injection path are still accepted and ignored.
+  const old = { maxRecallNotes: 3, personalRecall: false, maxIndexNotes: 0, maxTimelineEntries: 0, recallTimeoutMs: 1500 };
+  assert.doesNotThrow(() => Config(old));
+  assert.equal(resolveConfig(old).maxRecallNotes, undefined);
 });
 
 
