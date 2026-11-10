@@ -6,99 +6,24 @@ import path from 'node:path';
 import { resolveConfig } from '../lib/config.js';
 import { createRecordsTool, recallPersonalForTurn } from '../lib/records.js';
 import { setPersonalTimeZone } from '../lib/personal-namespace.js';
-import { fakeTools, mcpResult } from './helpers.js';
+import { vaultMemoryStore } from './vault-memory.js';
+import {formatBytes} from '../lib/review.js';
 
 setPersonalTimeZone('Asia/Shanghai');
 
 const NOW = () => new Date('2026-10-24T04:00:00.000Z');
-
-function slug(value) {
-  return String(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-}
-
-function memoryStore() {
-  const notes = new Map();
-  let seq = 0;
-  const tools = fakeTools((input) => {
-    const args = input.arguments ?? {};
-    if (input.name === 'mcp__basic_memory__list_directory') {
-      const dir = String(args.dir_name).replace(/\/+$/, '');
-      const nodes = [];
-      for (const note of notes.values()) {
-        const rest = note.permalink.slice(dir.length + 1);
-        if (!note.permalink.startsWith(dir + '/') || rest.includes('/')) continue;
-        nodes.push({
-          type: 'file',
-          name: note.title,
-          title: note.title,
-          directory_path: note.directory,
-          permalink: note.permalink,
-          updated_at: note.updated,
-        });
-      }
-      return mcpResult({ nodes });
-    }
-    if (input.name === 'mcp__basic_memory__read_note') {
-      const raw = String(args.identifier);
-      const note = notes.get(raw) || notes.get(raw.replace(/^personal\//, '')) || [...notes.values()].find((item) => item.title === raw);
-      if (!note) return mcpResult({ title: null, permalink: null, error: 'NOTE_NOT_FOUND' });
-      return mcpResult({
-        title: note.title,
-        permalink: note.permalink,
-        checksum: note.checksum,
-        content: note.content,
-        file_path: note.directory + '/' + note.title + '.md',
-        frontmatter: { ...note.frontmatter },
-      });
-    }
-    if (input.name === 'mcp__basic_memory__write_note') {
-      const permalink = String(args.directory) + '/' + slug(args.title);
-      const existing = notes.get(permalink);
-      if (existing && !args.overwrite) throw new Error('note already exists');
-      if (existing && args.expected_checksum && String(args.expected_checksum) !== existing.checksum) {
-        return mcpResult({ action: 'conflict', error: 'checksum mismatch' });
-      }
-      const note = {
-        title: String(args.title),
-        permalink,
-        directory: String(args.directory),
-        content: String(args.content),
-        frontmatter: { ...(args.metadata ?? {}) },
-        tags: args.tags ?? [],
-        checksum: 'c' + (++seq),
-        updated: '2026-10-24T04:00:00.000Z',
-      };
-      notes.set(permalink, note);
-      return mcpResult({ title: note.title, permalink, checksum: note.checksum, action: existing ? 'updated' : 'created' });
-    }
-    if (input.name === 'mcp__basic_memory__delete_note') {
-      const raw = String(args.identifier);
-      const exists = notes.delete(raw) || notes.delete(raw.replace(/^personal\//, ''));
-      return mcpResult({ deleted: exists });
-    }
-    if (input.name === 'mcp__basic_memory__search_notes') {
-      const query = String(args.query).toLowerCase();
-      const results = [...notes.values()]
-        .filter((note) => (args.tags ?? []).every((tag) => note.tags.includes(tag)))
-        .map((note) => ({ title: note.title, permalink: note.permalink, score: 1, matched_chunk: note.content }))
-        .filter(() => query.length > 0);
-      return mcpResult({ results });
-    }
-    throw new Error('unexpected tool ' + input.name);
-  });
-  return { tools, notes };
-}
-
-async function makeVault() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dafeiyu-records-'));
-  const vault = path.join(root, 'vault');
+const memoryStore = vault => vaultMemoryStore({vault});
+async function makeVault(){
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'dafeiyu-records-'));
+  const vault=path.join(root,'vault');
   await fs.mkdir(vault);
   return vault;
 }
 
 function makeTool(store, vault, now = NOW) {
   return createRecordsTool({
-    tools: store.tools,
+    tools: {},
+    vaultBackend: store.backend,
     config: { project: 'personal', vaultPath: vault },
     logger: { warn() {} },
     now,
@@ -110,19 +35,19 @@ async function call(tool, args) {
   return result.ok ? { ok: true, ...JSON.parse(result.data) } : result;
 }
 
-test('thoughts, people and diary persist through the Basic Memory tool path', async () => {
-  const store = memoryStore();
+test('thoughts, people and diary persist through the Vault file layer', async () => {
   const vault = await makeVault();
+  const store = await memoryStore(vault);
   const tool = makeTool(store, vault);
   try {
     const thought = await call(tool, { action: 'save', kind: 'thoughts', text: '今天有点想早点收工。' });
     assert.equal(thought.ok, true);
-    assert.match(thought.permalink, /^dafeiyu\/thoughts\//);
+    assert.match(thought.permalink, /^personal\/dafeiyu\/thoughts\//);
     assert.equal(store.notes.size, 1);
 
     const person = await call(tool, { action: 'save', kind: 'people', name: '老大', text: '说话直接，喜欢先看结果。' });
     assert.equal(person.ok, true);
-    assert.match(person.permalink, /^dafeiyu\/people\//);
+    assert.match(person.permalink, /^personal\/dafeiyu\/people\//);
 
     for (const text of ['第一句。', '第二句。', '第三句。']) {
       assert.equal((await call(tool, { action: 'save', kind: 'diary', text })).ok, true);
@@ -140,8 +65,8 @@ test('thoughts, people and diary persist through the Basic Memory tool path', as
 });
 
 test('entries show occurrence and first record dates separately and revisions keep them', async () => {
-  const store = memoryStore();
   const vault = await makeVault();
+  const store = await memoryStore(vault);
   const tool = makeTool(store, vault);
   try {
     const saved = await call(tool, {
@@ -180,8 +105,8 @@ test('entries show occurrence and first record dates separately and revisions ke
 });
 
 test('diary limit holds under concurrent saves and a new Shanghai day resets it', async () => {
-  const store = memoryStore();
   const vault = await makeVault();
+  const store = await memoryStore(vault);
   const tool = makeTool(store, vault);
   try {
     const results = await Promise.all([
@@ -202,8 +127,8 @@ test('diary limit holds under concurrent saves and a new Shanghai day resets it'
 });
 
 test('new diary entries cannot be appended to an older day, but old entries stay revisable', async () => {
-  const store = memoryStore();
   const vault = await makeVault();
+  const store = await memoryStore(vault);
   const day1 = makeTool(store, vault, () => new Date('2026-10-24T04:00:00.000Z'));
   try {
     const old = await call(day1, { action: 'save', kind: 'diary', text: '昨天的一句。' });
@@ -228,8 +153,8 @@ test('new diary entries cannot be appended to an older day, but old entries stay
 });
 
 test('entry-like heading lines in body text stay text and do not bypass the daily cap', async () => {
-  const store = memoryStore();
   const vault = await makeVault();
+  const store = await memoryStore(vault);
   const tool = makeTool(store, vault);
   try {
     const text = '想记一下排版：\n  ## 12:00\n这句只是正文。';
@@ -249,8 +174,8 @@ test('entry-like heading lines in body text stay text and do not bypass the dail
 });
 
 test('revisions require a matching checksum and stale writes are rejected', async () => {
-  const store = memoryStore();
   const vault = await makeVault();
+  const store = await memoryStore(vault);
   const tool = makeTool(store, vault);
   try {
     const saved = await call(tool, { action: 'save', kind: 'thoughts', text: '旧想法。' });
@@ -288,8 +213,8 @@ test('revisions require a matching checksum and stale writes are rejected', asyn
 });
 
 test('archive selects a parsed entry, keeps whole-note and entry submissions distinct, and records real file size', async () => {
-  const store = memoryStore();
   const vault = await makeVault();
+  const store = await memoryStore(vault);
   const tool = makeTool(store, vault);
   try {
     const first = await call(tool, { action: 'save', kind: 'thoughts', text: '第一条。' });
@@ -299,8 +224,7 @@ test('archive selects a parsed entry, keeps whole-note and entry submissions dis
 
     const note = store.notes.get(first.permalink);
     const notePath = path.join(vault, note.directory, note.title + '.md');
-    await fs.mkdir(path.dirname(notePath), { recursive: true });
-    await fs.writeFile(notePath, Buffer.alloc(123, 'x'));
+    const noteSize = (await fs.stat(notePath)).size;
 
     const whole = await call(tool, { action: 'archive', kind: 'thoughts', title: first.permalink, expectedChecksum: read.checksum });
     assert.equal(whole.ok, true);
@@ -313,12 +237,12 @@ test('archive selects a parsed entry, keeps whole-note and entry submissions dis
 
     const reviewPath = path.join(path.dirname(vault), 'management', '待审清单.md');
     const review = await fs.readFile(reviewPath, 'utf8');
-    assert.equal([...store.notes.values()].some((item) => item.title === '待审清单'), false, 'the review list must not be a Basic Memory note');
+    assert.equal([...store.notes.values()].some((item) => item.title === '待审清单'), false, 'the review list must not be a Vault note');
     let lines = review.split(/\r?\n/).filter((line) => line.startsWith('- '));
     assert.equal(lines.length, 2, 'whole-note and entry submissions are distinct');
     assert.match(lines[0], /整篇：/);
     assert.match(lines[1], /第 1 条：/);
-    assert.match(lines[1], /123 B/);
+    assert.match(lines[1], new RegExp(formatBytes(noteSize).replace('.', '\\.')));
     assert.match(review, /提交待审本身不删除、不停用、不降权/);
     assert.match(review, /soften_memory 是单独的显式降权操作/);
     assert.match(review, /采样时间：2026-10-24 12:00 Asia\/Shanghai/);
@@ -349,8 +273,8 @@ test('archive selects a parsed entry, keeps whole-note and entry submissions dis
 });
 
 test('personal namespace rejects fact notes, foreign kinds and traversal', async () => {
-  const store = memoryStore();
   const vault = await makeVault();
+  const store = await memoryStore(vault);
   const tool = makeTool(store, vault);
   try {
     for (const target of ['personal/people/teac', 'dafeiyu/people/someone', 'dafeiyu/thoughts/../../chats/x', 'dafeiyu/thoughts/']) {
@@ -367,8 +291,8 @@ test('personal namespace rejects fact notes, foreign kinds and traversal', async
 });
 
 test('gallery copies a real local image, revises text and keeps originals for human review', async () => {
-  const store = memoryStore();
   const vault = await makeVault();
+  const store = await memoryStore(vault);
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
   const image = path.join(vault, 'source.png');
   let tick = 0;
@@ -427,17 +351,15 @@ test('gallery copies a real local image, revises text and keeps originals for hu
 });
 
 test('personal recall only uses subjective dafeiyu notes and skips unrelated turns', async () => {
-  const store = memoryStore();
   const vault = await makeVault();
+  const store = await memoryStore(vault);
   const tool = makeTool(store, vault);
   try {
     await call(tool, { action: 'save', kind: 'thoughts', text: '老大更喜欢先看结论。' });
-    const fact = store.notes.get([...store.notes.keys()][0]);
-    store.notes.set('personal/people/boss', {
-      title: 'Boss', permalink: 'personal/people/boss', directory: 'personal/people',
-      content: '老大更喜欢先看结论。', frontmatter: {}, tags: ['subjective'], checksum: 'fact1', updated: fact.updated,
+    await store.backend.write({
+      title: 'Boss', directory: 'people', content: '老大更喜欢先看结论。', tags: ['subjective'], metadata: {},
     });
-    const tools = store.tools;
+    const tools = {};
     const config = { project: 'personal', vaultPath: vault, recallTimeoutMs: 1500, personalRecallMaxNotes: 2, personalRecallMaxChars: 1600 };
     const related = await recallPersonalForTurn({
       messages: [{ role: 'user', content: [{ type: 'text', text: '老大喜欢先看结论还是过程？' }], source: { kind: 'user' } }],
@@ -457,10 +379,9 @@ test('personal recall only uses subjective dafeiyu notes and skips unrelated tur
 });
 
 test('a migrated old record keeps its note-level first-record date after a save', async () => {
-  const store = memoryStore();
   const vault = await makeVault();
+  const store = await memoryStore(vault);
   const tool = makeTool(store, vault);
-  const permalink = 'dafeiyu/thoughts/old-archive';
   const content = [
     '<!-- dafeiyu-record kind=thoughts -->',
     '# Old Archive',
@@ -474,17 +395,14 @@ test('a migrated old record keeps its note-level first-record date after a save'
     'source_date_confirmation: 2026-10-24',
     '',
   ].join('\n');
-  store.notes.set(permalink, {
+  const old = await store.backend.write({
     title: 'Old Archive',
-    permalink,
     directory: 'dafeiyu/thoughts',
     content,
-    frontmatter: { recorded_at: '2026-10-24T13:42:51.264Z', dafeiyu_kind: 'thoughts' },
+    metadata: { recorded_at: '2026-10-24T13:42:51.264Z', dafeiyu_kind: 'thoughts' },
     tags: ['dafeiyu', 'dafeiyu-thoughts', 'subjective'],
-    checksum: 'old1',
-    updated: '2026-10-24T13:42:51.264Z',
-    filePath: 'dafeiyu/thoughts/old-archive.md',
   });
+  const permalink = old.permalink;
   try {
     const read = await call(tool, { action: 'read', kind: 'thoughts', title: permalink });
     assert.equal(read.entries[0].occurredAt, '日期未明');
@@ -492,7 +410,7 @@ test('a migrated old record keeps its note-level first-record date after a save'
 
     const saved = await call(tool, {
       action: 'save', kind: 'thoughts', title: permalink, text: '改过的想法。',
-      entryIndex: 1, expectedChecksum: 'old1',
+      entryIndex: 1, expectedChecksum: old.checksum,
     });
     assert.equal(saved.ok, true);
     const after = store.notes.get(permalink).content;
@@ -513,10 +431,13 @@ test('a migrated old record keeps its note-level first-record date after a save'
   }
 });
 
-test('archive cannot write a management list when Basic Memory tools are unavailable', async () => {
+test('archive cannot write a management list when the Vault backend is unavailable', async () => {
   const vault = await makeVault();
+  const store = await memoryStore(vault);
+  const failing={...store.backend,read:async()=>{throw Object.assign(Error('vault unavailable'),{code:'MEMORY_BACKEND_ERROR'});}};
   const tool = createRecordsTool({
-    tools: { get() { throw new Error('basic memory is disabled'); } },
+    tools: {},
+    vaultBackend: failing,
     config: { project: 'personal', vaultPath: vault },
     logger: { warn() {} },
     now: NOW,
@@ -527,54 +448,18 @@ test('archive cannot write a management list when Basic Memory tools are unavail
       { agent: { session: { id: 'session-test' } } },
     );
     assert.equal(result.ok, false);
-    assert.match(result.errorMessage, /basic memory|disabled|unavailable/i);
+    assert.match(result.errorMessage, /vault|unavailable/i);
     const reviewPath = path.join(path.dirname(vault), 'management', '待审清单.md');
-    assert.equal(await fs.stat(reviewPath).catch(() => null), null, 'a disabled Basic Memory session must not create a management list');
+    assert.equal(await fs.stat(reviewPath).catch(() => null), null, 'a failed Vault read must not create a management list');
   } finally {
     await fs.rm(path.dirname(vault), { recursive: true, force: true });
   }
 });
 
 test('canonical project-prefixed permalinks round-trip through read, revision and review submission', async () => {
-  const notes = new Map();
-  const tools = fakeTools((input) => {
-    const args = input.arguments ?? {};
-    const canonical = (value) => {
-      const raw = String(value ?? '');
-      return raw.startsWith('personal/') ? raw : 'personal/' + raw;
-    };
-    if (input.name === 'mcp__basic_memory__list_directory') {
-      const dir = String(args.dir_name);
-      const nodes = [...notes.values()]
-        .filter((note) => note.directory === dir)
-        .map((note) => ({ type: 'file', name: note.title, title: note.title, directory_path: note.directory, permalink: note.permalink, updated_at: '2026-10-24T04:00:00.000Z' }));
-      return mcpResult({ nodes });
-    }
-    if (input.name === 'mcp__basic_memory__read_note') {
-      const note = notes.get(canonical(args.identifier));
-      if (!note) return mcpResult({ title: null, permalink: null, error: 'NOTE_NOT_FOUND' });
-      return mcpResult({ title: note.title, permalink: note.permalink, checksum: note.checksum, content: note.content, file_path: note.directory + '/' + note.title + '.md', frontmatter: { ...note.frontmatter } });
-    }
-    if (input.name === 'mcp__basic_memory__write_note') {
-      const directory = String(args.directory);
-      const permalink = 'personal/' + directory + '/' + slug(args.title);
-      const existing = notes.get(permalink);
-      if (existing && !args.overwrite) throw new Error('note already exists');
-      if (existing && args.expected_checksum && String(args.expected_checksum) !== existing.checksum) {
-        return mcpResult({ action: 'conflict', error: 'checksum mismatch' });
-      }
-      const note = { title: String(args.title), permalink, directory, content: String(args.content), frontmatter: { ...(args.metadata ?? {}) }, checksum: 'c' + (notes.size + 1), updated: '2026-10-24T04:00:00.000Z' };
-      notes.set(permalink, note);
-      return mcpResult({ title: note.title, permalink, checksum: note.checksum, action: existing ? 'updated' : 'created' });
-    }
-    if (input.name === 'mcp__basic_memory__delete_note') {
-      return mcpResult({ deleted: notes.delete(canonical(args.identifier)) });
-    }
-    if (input.name === 'mcp__basic_memory__search_notes') return mcpResult({ results: [...notes.values()].map(n => ({ title:n.title, permalink:n.permalink, score:1 })) });
-    throw new Error('unexpected tool ' + input.name);
-  });
   const vault = await makeVault();
-  const tool = makeTool({ tools }, vault);
+  const store = await memoryStore(vault);
+  const tool = makeTool(store, vault);
   try {
     const created = await call(tool, { action: 'save', kind: 'thoughts', text: 'canonical 回归。' });
     assert.equal(created.ok, true);
@@ -600,17 +485,16 @@ test('canonical project-prefixed permalinks round-trip through read, revision an
     assert.equal(otherProject.ok, false);
     assert.equal(otherProject.errorCode, 'NOT_PERSONAL');
 
-    const sourcePath = path.join(vault, 'dafeiyu', 'thoughts', notes.get(created.permalink).title + '.md');
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, 'note');
+    const sourcePath = path.join(vault, store.notes.get(created.permalink).filePath);
+    assert.ok(await fs.stat(sourcePath));
     const removed = await call(tool, { action: 'delete', kind: 'thoughts', title: created.permalink, expectedChecksum: revised.checksum });
     assert.equal(removed.ok, true);
-    assert.ok(notes.has(created.permalink), 'the original note must be retained');
+    assert.ok(store.notes.has(created.permalink), 'the original note must be retained');
     const reviewPath = path.join(path.dirname(vault), 'management', '待审清单.md');
     const reviewContent = await fs.readFile(reviewPath, 'utf8');
     assert.match(reviewContent, /Dafeiyu Thoughts/);
     assert.match(reviewContent, /obsidian:\/\/open\?path=/);
-    assert.equal([...notes.values()].some((note) => /待审清单/.test(note.title)), false);
+    assert.equal([...store.notes.values()].some((note) => /待审清单/.test(note.title)), false);
   } finally {
     await fs.rm(path.dirname(vault), { recursive: true, force: true });
   }

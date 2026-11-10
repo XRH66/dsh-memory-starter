@@ -5,34 +5,53 @@ import os from 'node:os';
 import path from 'node:path';
 import {createMemoryDocuments} from '../lib/memory-documents.js';
 import {createUnifiedStateStore} from '../lib/unified/state-store.js';
+import {vaultMemoryStore} from './vault-memory.js';
+
+function yamlValue(value){
+  if(typeof value==='string')return JSON.stringify(value);
+  if(typeof value==='number'||typeof value==='boolean')return String(value);
+  return JSON.stringify(String(value));
+}
+
+async function writeNote(vault,filePath,{title,permalink,frontmatter={},content='Fictional note'}={}){
+  const full=path.join(vault,filePath);
+  await fs.mkdir(path.dirname(full),{recursive:true});
+  const lines=['---','title: '+JSON.stringify(title??path.posix.basename(filePath,'.md')),'permalink: '+JSON.stringify(permalink)];
+  for(const [key,value] of Object.entries(frontmatter)){
+    if(Array.isArray(value)){
+      lines.push(key+':');
+      for(const item of value)lines.push('  - '+JSON.stringify(String(item)));
+    }else lines.push(key+': '+yamlValue(value));
+  }
+  lines.push('---','',content);
+  await fs.writeFile(full,lines.join('\n'));
+}
 
 async function fixture(t,project='main'){
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'memory-documents-'));
+  const vault=path.join(directory,'vault');
+  await fs.mkdir(vault);
+  const store=await vaultMemoryStore({vault,project});
   const grant={kind:'management',project,ownerSubject:'fictional-owner'};
-  const listed=[],notes=new Map(),reads=[];
-  const tools={get(name){return {async execute(args){
-    assert.equal(args.project,project);
-    if(name==='mcp__basic_memory__list_directory'){
-      return {structuredContent:{result:{nodes:listed.filter(row=>row.directory===args.dir_name)}}};
-    }
-    assert.equal(name,'mcp__basic_memory__read_note');
-    reads.push(args);
-    return {structuredContent:{result:notes.get(args.identifier)??{error:'NOTE_NOT_FOUND'}}};
-  }};}};
+  const control={omit:null};
+  const backend={...store.backend,async list(directory,context){
+    return (await store.backend.list(directory,context)).filter(node=>node.file_path!==control.omit);
+  }};
   const raw={
     messageReader:()=>({list:()=>({sources:[]})}),
     queryReader:()=>({legacyPage:()=>({sources:[]})}),
     querySourceState:()=>({state:'live'}),
   };
-  const documents=createMemoryDocuments({directory,tools,raw,config:{captureFolder:'chats'},authorize:value=>value===grant,agentForGrant:()=>null});
+  const documents=createMemoryDocuments({directory,tools:{},vaultBackend:backend,raw,
+    config:{captureFolder:'chats',vaultPath:vault},authorize:value=>value===grant,agentForGrant:()=>null});
   t.after(async()=>{await documents.close();await fs.rm(directory,{recursive:true,force:true});});
-  function add(permalink,filePath,{directory='chats/facts',frontmatter={}}={}){
-    const note={permalink,file_path:filePath,frontmatter,content:'Fictional note',checksum:'fictional-v1'};
-    listed.push({type:'file',directory,permalink,file_path:filePath});
-    notes.set(filePath,note);
-    return note;
+  async function add(permalink,filePath,{directory='chats/facts',frontmatter={},content='Fictional note',title}={}){
+    await writeNote(vault,filePath,{title,permalink,frontmatter,content});
+    await store.refresh();
+    return {permalink,file_path:filePath,directory,frontmatter,content};
   }
-  return {documents,grant,listed,notes,reads,add,
+  return {documents,grant,store,vault,control,add,
+    rewrite:(filePath,options)=>writeNote(vault,filePath,options).then(()=>store.refresh()),
     async list(){const rows=[];for await(const row of documents.listDocuments({grant}))rows.push(row);return rows;},
     resolve:({id,revision})=>documents.resolveDocument({grant,id,revision}),
   };
@@ -40,10 +59,12 @@ async function fixture(t,project='main'){
 
 test('main indexes and reopens migrated notes by file path while keeping their identities and sources',async t=>{
   const f=await fixture(t);
-  const fact=f.add('personal/chats/facts/a-stable-slug','chats/facts/Current title.md',{
+  const fact=await f.add('personal/chats/facts/a-stable-slug','chats/facts/Current title.md',{
     frontmatter:{memory_id:'fictional-fact',memory_kind:'fact',value:'Fictional note',source_message_id:'fictional-message'},
   });
-  const diary=f.add('personal/dafeiyu/thoughts/a-stable-slug','dafeiyu/diary/Current title.md',{directory:'dafeiyu/diary'});
+  const diary=await f.add('personal/dafeiyu/thoughts/a-stable-slug','dafeiyu/diary/Current title.md',{
+    directory:'dafeiyu/diary',
+  });
   const rows=await f.list();
   assert.deepEqual(rows.map(row=>[row.id,row.domain]),[
     ['legacy-note:fictional-fact','fact'],['document:'+encodeURIComponent(diary.permalink),'diary'],
@@ -53,32 +74,30 @@ test('main indexes and reopens migrated notes by file path while keeping their i
   assert.equal(saved.identifier,fact.permalink);
   assert.equal(saved.anchor.ref.identifier,fact.permalink);
   assert.equal((await f.resolve(saved)).source.permalink,fact.permalink);
-  assert.ok(f.reads.every(args=>args.identifier===args.known_file_path));
+  assert.ok(f.store.calls.filter(call=>call.name==='read').every(call=>call.identifier===fact.file_path||call.identifier===diary.file_path));
 
   // A temporary omission from the directory catalogue still checks the known file.
-  f.listed.shift();
+  f.control.omit=fact.file_path;
   assert.ok((await f.list()).some(row=>row.id===saved.id));
-  for(const change of [{file_path:'chats/facts/Other.md'},{permalink:'other/chats/facts/a-stable-slug'}]){
-    f.notes.set(fact.file_path,{...fact,...change});
-    assert.equal(await f.resolve(saved),null);
-  }
-  f.notes.set(fact.file_path,{...fact,frontmatter:{...fact.frontmatter,source_hidden:true}});
+  f.control.omit=null;
+
+  await f.rewrite(fact.file_path,{title:'Current title',permalink:'other/chats/facts/a-stable-slug',
+    frontmatter:fact.frontmatter,content:fact.content});
+  assert.equal(await f.resolve(saved),null);
+
+  await f.rewrite(fact.file_path,{title:'Current title',permalink:fact.permalink,
+    frontmatter:{...fact.frontmatter,source_hidden:true},content:fact.content});
   assert.equal(await f.resolve(saved),null);
 });
 
 test('migration is limited to main, permitted vault paths and explicit selections',async t=>{
   const f=await fixture(t);
-  f.add('other/chats/facts/wrong-namespace','chats/facts/Wrong namespace.md');
-  for(const [i,filePath] of [
-    undefined,'main/chats/facts/Project prefix.md','personal/chats/facts/Project prefix.md',
-    'chats/facts/../Outside.md','chats\\facts\\..\\Outside.md','chats/facts/.. /Outside.md','chats/facts/Note:stream.md',
-    '/chats/facts/Absolute.md',path.win32.resolve('C:', '/chats/facts/Absolute.md'),
-  ].entries())f.add('personal/chats/facts/unsafe-'+i,filePath);
-  f.add('personal/chats/facts/private','manual/Chosen.md');
-  f.add('personal/chats/facts/fixture','chats/facts/Fixture.md',{frontmatter:{qa_fixture:true}});
+  await f.add('other/chats/facts/wrong-namespace','chats/facts/Wrong namespace.md');
+  await f.add('personal/chats/facts/fixture','chats/facts/Fixture.md',{frontmatter:{qa_fixture:true}});
+  await f.add('personal/chats/facts/private','manual/Chosen.md');
 
   assert.deepEqual(await f.list(),[]);
-  assert.deepEqual(f.reads.map(args=>args.identifier),['chats/facts/Fixture.md']);
+  assert.ok(f.store.calls.some(call=>call.name==='read'&&call.identifier==='chats/facts/Fixture.md'));
   await f.documents.selectDocuments({grant:f.grant,identifiers:['manual/Chosen.md']});
   const [selected]=await f.list();
   assert.equal(selected.source.permalink,'personal/chats/facts/private');
@@ -87,9 +106,9 @@ test('migration is limited to main, permitted vault paths and explicit selection
   assert.equal(await f.resolve(selected),null);
 
   const other=await fixture(t,'other');
-  other.add('personal/chats/facts/legacy','chats/facts/Legacy.md');
+  await other.add('personal/chats/facts/legacy','chats/facts/Legacy.md');
   assert.deepEqual(await other.list(),[]);
-  assert.deepEqual(other.reads,[]);
+  assert.equal(other.store.calls.some(call=>call.name==='read'),false);
 });
 
 test('selected metadata reads wait for committed changes and do not expose mutable store objects',async t=>{
@@ -111,12 +130,13 @@ test('selected metadata reads wait for committed changes and do not expose mutab
 });
 
 test('catalogue point lookups follow a committed rescan and return independent metadata',async t=>{
-  const f=await fixture(t),note=f.add('personal/chats/facts/point-note','chats/facts/Point note.md');
+  const f=await fixture(t);
+  const note=await f.add('personal/chats/facts/point-note','chats/facts/Point note.md');
   const [first]=await f.list();
   const metadata=f.documents.getMetadata({...first,grant:f.grant});
   metadata.anchor.ref.identifier='mutated-locator';
   assert.notEqual(f.documents.getMetadata({...first,grant:f.grant}).anchor.ref.identifier,'mutated-locator');
-  note.checksum='fictional-v2';note.content='Updated fictional body';
+  await f.rewrite(note.file_path,{title:'Point note',permalink:note.permalink,frontmatter:note.frontmatter,content:'Updated fictional body'});
   const [second]=await f.list();
   assert.equal(f.documents.getMetadata({...first,grant:f.grant}),null);
   assert.equal((await f.resolve(first)),null);

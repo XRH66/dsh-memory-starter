@@ -209,7 +209,9 @@ test('lost post-write acknowledgement recovers the exact operation without anoth
 test('revoked access and stale sources cannot create a note or reach the backend',async t=>{
   const f=await fixture(t),service=f.make();f.originals.set(original.id,{...original,revision:2});
   await assert.rejects(service.commit(f.input('bad-source'),f.context),{code:'MEMORY_SOURCE_CHANGED'});assert.equal(f.memory.tools.calls.length,0);
-  f.revoke();await assert.rejects(service.list({},f.context),{code:'MEMORY_NOT_AUTHORIZED'});assert.equal(f.memory.tools.calls.length,0);
+  f.revoke();await assert.rejects(service.list({},f.context),{code:'MEMORY_NOT_AUTHORIZED'});
+  await assert.rejects(service.commit(f.input('revoked-write'),f.context),{code:'MEMORY_NOT_AUTHORIZED'});
+  assert.equal(f.memory.tools.calls.length,0);assert.equal(f.memory.notes.size,0);
 });
 
 test('query marks obsolete evidence while a genuinely edited managed body remains authoritative',async t=>{

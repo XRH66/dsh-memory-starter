@@ -69,7 +69,7 @@ test('reclassification verifies destination before removing old link; original f
   const dest=await memoryCall(ctx,'write_note',{title:'摄影',directory:'index',tags:['index'],content:'# 摄影\n'});
   const originals=facts.map(f=>structuredClone(memory.notes.get(f.permalink)));
   const removed=[];
-  const tools={get(name,agent){const def=ctx.tools.get(name,agent);return {...def,async execute(args,exec){
+  const tools={...ctx.tools,get(name,agent){const def=ctx.tools.get(name,agent);return {...def,async execute(args,exec){
     if(name.endsWith('__edit_note')&&args.identifier===source.permalink&&!args.content.includes('摄影练习')){
       assert.match(memory.notes.get(dest.permalink).content,/摄影练习/);removed.push(args.identifier);
     }
@@ -91,7 +91,7 @@ test('persisted topic plan survives restart after overview failure without anoth
   const store=createRecoveryStore(config);
   await store.update(s=>{mergePending(s,{...change(facts[0]),sessionId:TARGET_SESSION,turn:1});});
   let fail=true;
-  const tools={get(name,agent){const def=ctx.tools.get(name,agent);return {...def,async execute(args,exec){
+  const tools={...ctx.tools,get(name,agent){const def=ctx.tools.get(name,agent);return {...def,async execute(args,exec){
     if(fail&&name.endsWith('__edit_note')&&args.identifier===overview.permalink)throw new Error('overview temporarily unavailable');
     return def.execute(args,exec);
   }};}};
@@ -115,7 +115,7 @@ test('persisted topic plan survives restart after overview failure without anoth
 test('a suspended platform plan resumes its saved partial edit after unrelated DSH work and restart',async(t)=>{
   const {ctx,memory,facts,overview}=await setup(),root=await fs.mkdtemp(path.join(os.tmpdir(),'dafeiyu-index-growth-'));
   const vault=path.join(root,'vault');await fs.mkdir(vault);const config=resolveConfig({vaultPath:vault}),externalSession='session-platform-maintenance';let platformAllowed=true,fail=true;
-  const tools={get(name,agent){const def=ctx.tools.get(name,agent);return {...def,async execute(args,exec){if(fail&&name.endsWith('__edit_note')&&args.identifier===overview.permalink)throw new Error('overview temporarily unavailable');return def.execute(args,exec);}};}};
+  const tools={...ctx.tools,get(name,agent){const def=ctx.tools.get(name,agent);return {...def,async execute(args,exec){if(fail&&name.endsWith('__edit_note')&&args.identifier===overview.permalink)throw new Error('overview temporarily unavailable');return def.execute(args,exec);}};}};
   const llm=fakeLlm(topicPlan(facts)),findAgent=id=>fakeAgent(id),maintenanceOwnerAllowed=id=>id===TARGET_SESSION||(id===externalSession&&platformAllowed);
   let store=createRecoveryStore(config),bridge=createBridge({config,tools,llm,findAgent,maintenanceOwnerAllowed,recoveryStore:store});
   t.after(async()=>{await bridge.dispose();assert.ok(root.startsWith(path.join(os.tmpdir(),'dafeiyu-index-growth-')));await fs.rm(root,{recursive:true,force:true});});
@@ -129,7 +129,7 @@ test('a suspended platform plan resumes its saved partial edit after unrelated D
 
 test('lost create response reuses page; changed source invalidates saved plan',async()=>{
   const {ctx,memory,facts,overview}=await setup();let saved,fail=true;
-  const tools={get(name,agent){const def=ctx.tools.get(name,agent);return {...def,async execute(args,exec){
+  const tools={...ctx.tools,get(name,agent){const def=ctx.tools.get(name,agent);return {...def,async execute(args,exec){
     const result=await def.execute(args,exec);
     if(fail&&name.endsWith('__write_note')&&args.title==='摄影'){fail=false;throw new Error('lost response');}
     return result;

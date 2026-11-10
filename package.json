@@ -112,6 +112,7 @@
     "lib/unified/vector-index.js",
     "lib/unified/vector-queue.js",
     "lib/usage.js",
+    "lib/vault-files.js",
     "lib/worker.js",
     "scripts/verify-raw-recall.mjs",
     "scripts/raw-memory.mjs",

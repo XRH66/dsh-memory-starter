@@ -29,9 +29,17 @@ export function mcpError(message) {
 export function fakeTools(handler) {
   const calls = [];
   const getCalls = [];
-  return {
+  const tools = {
     calls,
     getCalls,
+    legacyVaultToolNames:Object.freeze({
+      read:'mcp__basic_memory__read_note',
+      write:'mcp__basic_memory__write_note',
+      edit:'mcp__basic_memory__edit_note',
+      list:'mcp__basic_memory__list_directory',
+      search:'mcp__basic_memory__search_notes',
+      move:'mcp__basic_memory__move_note',
+    }),
     get(name, agent) {
       getCalls.push({ name, agent });
       return {
@@ -62,6 +70,41 @@ export function fakeTools(handler) {
       return handler(input);
     },
   };
+  const call=async(name,args)=>{
+    const result=await handler({name:'mcp__basic_memory__'+name,arguments:args});
+    return result?.value?.structuredContent?.result??result?.structuredContent?.result;
+  };
+  tools.vaultBackend={
+    async read(identifier){
+      const value=await call('read_note',{identifier});
+      if(!value||value.error==='NOTE_NOT_FOUND')return null;
+      return {...value,metadata:value.frontmatter??value.metadata??{}};
+    },
+    async write(input){
+      const value=await call('write_note',input);
+      if(value?.action==='conflict'||value?.error)throw Object.assign(Error(String(value.error??'write conflict')),{code:'MEMORY_WRITE_CONFLICT'});
+      return value;
+    },
+    async edit(input){
+      const value=await call('edit_note',input);
+      if(value?.action==='conflict'||value?.error)throw Object.assign(Error(String(value.error??'edit conflict')),{code:'MEMORY_WRITE_CONFLICT'});
+      return value;
+    },
+    async list(directory){
+      const value=await call('list_directory',{dir_name:directory});
+      return Array.isArray(value)?value:value?.nodes??[];
+    },
+    async search(input){
+      const value=await call('search_notes',input);
+      return Array.isArray(value)?value:value?.results??[];
+    },
+    async move(input){
+      const value=await call('move_note',input);
+      if(value?.error)throw Object.assign(Error(String(value.error)),{code:'MEMORY_WRITE_CONFLICT'});
+      return value;
+    },
+  };
+  return tools;
 }
 
 export function ptcTools(handler) {

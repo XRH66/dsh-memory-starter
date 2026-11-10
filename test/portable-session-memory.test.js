@@ -240,7 +240,7 @@ test('structured writers use original message proofs while later authorized chat
 test('native pre-step does not presearch; an explicit memory tool can read before the user source is committed',async t=>{
   const f=await fixture(t,{autoRecall:true}),agent=f.actor();await f.access.set(agent.session.id,true);
   let searches=0;
-  const tools={get(name,owner){const tool=f.memory.tools.get(name,owner);if(name!=='mcp__basic_memory__search_notes')return tool;return {...tool,async execute(args,exec){searches++;return tool.execute(args,exec);}};}};
+  const tools={...f.memory.tools,get(name,owner){const tool=f.memory.tools.get(name,owner);if(name!=='mcp__basic_memory__search_notes')return tool;return {...tool,async execute(args,exec){searches++;return tool.execute(args,exec);}};}};
   const bridge=f.bridge(undefined,{tools});f.emit(agent,'turn/start',{turn:1},bridge);
   assert.equal(agent.events.some(event=>event.type==='user/message'),false);
   await runPreStep(bridge,{turn:1,agent,messages:[directUser('我喜欢什么杯子？','pending-user')]});
@@ -253,7 +253,7 @@ test('native pre-step does not presearch; an explicit memory tool can read befor
 test('a delayed recall result is discarded after close and reopen rather than using the new epoch',async t=>{
   const f=await fixture(t,{autoRecall:true}),agent=f.actor();await f.access.set(agent.session.id,true);
   const entered=deferred(),release=deferred();
-  const tools={get(name,owner){const tool=f.memory.tools.get(name,owner);if(name!=='mcp__basic_memory__search_notes')return tool;return {...tool,async execute(args,exec){entered.resolve();await release.promise;return tool.execute(args,exec);}};}};
+  const tools={...f.memory.tools,get(name,owner){const tool=f.memory.tools.get(name,owner);if(name!=='mcp__basic_memory__search_notes')return tool;return {...tool,async execute(args,exec){entered.resolve();await release.promise;return tool.execute(args,exec);}};}};
   const bridge=f.bridge(undefined,{tools});const user=f.begin(agent,1,bridge);
   await runPreStep(bridge,{turn:1,agent,messages:[user.data]});
   const pending=bridge.queryTools.find(tool=>tool.name==='memory_search').execute({query:'青瓷杯'},{agent,signal:new AbortController().signal});await entered.promise;

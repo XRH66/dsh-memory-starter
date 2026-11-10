@@ -138,7 +138,7 @@ for (const suspended of [false, true]) {
     });
     const [prepared, unprepared] = (await store.read()).pending;
     let writes = 0;
-    const tools = { get(name, agent) {
+    const tools = { ...f.tools, get(name, agent) {
       const tool = f.tools.get(name, agent);
       return { ...tool, async execute(args, exec) {
         const response = await tool.execute(args, exec);
