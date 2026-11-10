@@ -138,22 +138,24 @@ test('maintenance time zone shows the active and host zones and saves the config
   assert.deepEqual(JSON.parse(JSON.stringify(write.body)),{timeZone:'Asia/Shanghai',revision:'r1'});
 });
 
-test('cloud credential reuse is explicit, resets on address edits, and stays out of the password field',async t=>{
-  const info=snapshot();info.rawModel={hasSavedApiKey:true,fields:{rawRecallModel:CLOUD,rawRecallApiBase:'https://fictional-a.example/v1',rawRecallApiKeyEnv:'FICTIONAL_A_KEY',rawRecallAllowCloud:true}};
+test('cloud expert settings keep only environment and timing fields and preserve the saved endpoint',async t=>{
+  const info=snapshot();info.rawModel={fields:{rawRecallModel:CLOUD,rawRecallApiBase:'https://fictional-a.example/v1',rawRecallApiKeyEnv:'FICTIONAL_A_KEY',rawRecallAllowCloud:true}};
   const env=environment(()=>info);t.after(()=>env.close());const {model}=await modelPage(env);
-  const reuse='我确认当前填写的服务地址可以使用现有密钥或环境变量凭据';
-  assert.equal(field(model.tree,reuse).props.checked,false);assert.equal(field(model.tree,'API Key（').props.value,'');
-  field(model.tree,'API 地址').props.onChange({target:{value:'https://fictional-b.example/v1'}});await model.flush();
-  field(model.tree,reuse).props.onChange({target:{checked:true}});await model.flush();
-  const save=()=>button(model.tree,'应用运行设置');
-  assert.ok(save());await save().props.onClick();await model.flush();
-  assert.equal(writes(env).at(-1).body.reuseApiKey,true);
-  field(model.tree,'API 地址').props.onChange({target:{value:'https://fictional-c.example/v1'}});await model.flush();
-  assert.equal(field(model.tree,reuse).props.checked,false);
-  field(model.tree,'API Key（').props.onChange({target:{value:'fixture-new-key'}});await model.flush();
-  assert.equal(field(model.tree,reuse).props.disabled,true);await save().props.onClick();await model.flush();
-  assert.equal(writes(env).at(-1).body.apiKey,'fixture-new-key');assert.equal(writes(env).at(-1).body.reuseApiKey,undefined);
-  button(model.tree,'专家模式').props.onClick();await model.flush();assert.equal(field(model.tree,'API Key 环境变量').props.value,'FICTIONAL_A_KEY');
+  assert.match(text(model.tree),/当前模型：云端 v4。更换模型请到「记忆」页的「检索模型」/);
+  assert.equal(nodes(model.tree,n=>n.type==='label'&&text(n).startsWith('API 地址')).length,0);
+  assert.equal(nodes(model.tree,n=>n.type==='input'&&n.props.type==='password').length,0);
+  assert.doesNotMatch(text(model.tree),/复用.*密钥|允许云端|向量维度/);
+  button(model.tree,'专家模式').props.onClick();await model.flush();
+  assert.equal(field(model.tree,'API Key 环境变量').props.value,'FICTIONAL_A_KEY');
+  field(model.tree,'API Key 环境变量').props.onChange({target:{value:'FICTIONAL_B_KEY'}});await model.flush();
+  field(model.tree,'单次编码超时（毫秒）').props.onChange({target:{value:'5000'}});await model.flush();
+  field(model.tree,'检索总等待（毫秒，0 为自动）').props.onChange({target:{value:'2500'}});await model.flush();
+  await button(model.tree,'应用运行设置').props.onClick();await model.flush();
+  const call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');
+  assert.equal(call.body.settings.rawRecallApiBase,'https://fictional-a.example/v1');
+  assert.equal(call.body.settings.rawRecallApiKeyEnv,'FICTIONAL_B_KEY');
+  assert.equal(call.body.settings.rawRecallTimeoutMs,5000);assert.equal(call.body.settings.rawRecallQueryWaitMs,2500);
+  assert.equal(call.body.apiKey,undefined);assert.equal(call.body.reuseApiKey,undefined);
 });
 
 test('review screen sends the displayed revision and allows comparison again after conflict',async t=>{
@@ -217,13 +219,15 @@ test('core status requires enabled active identity and retains legacy aliases an
   }
 });
 
-test('standard mode shows one selected model, collapses resource paths and preserves device drafts across modes',async t=>{
+test('expert panel fixes the current model, collapses resource paths and preserves device drafts across modes',async t=>{
   const env=environment(()=>snapshot());t.after(()=>env.close());const {model}=await modelPage(env);
   assert.equal(button(model.tree,'标准模式').props['aria-pressed'],true);
   assert.equal(nodes(model.tree,n=>n.type==='details')[0].props.open,false);
-  assert.equal(select(model.tree,'查看向量模型').props.value,MODEL);
+  assert.match(text(model.tree),/当前模型：Qwen 4B。更换模型请到「记忆」页的「检索模型」/);
+  assert.equal(nodes(model.tree,n=>n.type==='select'&&n.props['aria-label']==='查看向量模型').length,0);
+  assert.equal(nodes(model.tree,n=>n.type==='button'&&['切换到此模型','恢复上次向量设置','下载'].includes(text(n))).length,0);
   assert.equal(select(model.tree,'运行设备').props.value,'auto');
-  assert.equal(nodes(model.tree,n=>n.type==='option'&&n.props.value==='cuda')[0].props.disabled,false);
+  assert.equal(nodes(model.tree,n=>n.type==='option'&&n.props.value==='cuda')[0].props.disabled,undefined);
   assert.equal(field(model.tree,'4B CPU 备用线程数').props.value,6);
   assert.equal(field(model.tree,'GPU 辅助 CPU 线程数').props.value,4);
   assert.equal(field(model.tree,'空闲后多少分钟').props.value,0);
@@ -249,6 +253,7 @@ test('saving runtime settings posts new fields and retains legacy threads withou
   field(model.tree,'检索总等待（毫秒，0 为自动）').props.onChange({target:{value:'3500'}});await model.flush();
   await button(model.tree,'应用运行设置').props.onClick();await model.flush();
   assert.equal(writes(env).length,1);const call=writes(env)[0];assert.equal(call.path,BASE+'/model');
+  assert.equal(call.body.settings.rawRecallModel,MODEL);
   assert.equal(call.body.settings.rawRecallDevice,'cuda');
   assert.equal(call.body.settings.rawRecallCpuThreads,6);assert.equal(call.body.settings.rawRecallGpuThreads,4);
   assert.equal(call.body.settings.rawRecallIdleMs,180000);assert.equal(call.body.settings.rawRecallThreads,3);
@@ -259,11 +264,36 @@ test('saving runtime settings posts new fields and retains legacy threads withou
   assert.match(text(model.tree),/保存不会启动模型/);
 });
 
-test('changing the dropdown is local only and cloud models never show local device or lifecycle controls',async t=>{
-  const env=environment(()=>snapshot());t.after(()=>env.close());const {model}=await modelPage(env);
-  select(model.tree,'查看向量模型').props.onChange({target:{value:'Qwen/Qwen3-Embedding-0.6B'}});await model.flush();
-  assert.equal(nodes(model.tree,n=>n.type==='option'&&n.props.value==='cuda')[0].props.disabled,true);
-  select(model.tree,'查看向量模型').props.onChange({target:{value:CLOUD}});await model.flush();
+test('the model picker shows device choices only for llamacpp and saves onnx models as CPU',async t=>{
+  const env=environment(()=>snapshot());t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  const device=select(picker.tree,'运行设备');
+  assert.equal(device.props.value,'auto');
+  assert.equal(nodes(device,n=>n.type==='option'&&n.props.value==='cuda')[0].props.disabled,undefined);
+  device.props.onChange({target:{value:'cuda'}});await picker.flush();
+  assert.equal(select(picker.tree,'运行设备').props.value,'cuda');
+  select(picker.tree,'检索模型').props.onChange({target:{value:OTHER_LOCAL}});await picker.flush();
+  assert.equal(nodes(picker.tree,n=>n.type==='select'&&n.props['aria-label']==='运行设备').length,0);
+  assert.match(text(picker.tree),/此模型只用 CPU。/);
+  await button(picker.tree,'保存').props.onClick();await picker.flush();
+  const call=writes(env).filter(item=>item.path===BASE+'/model').at(-1);
+  assert.equal(call.body.settings.rawRecallModel,OTHER_LOCAL);
+  assert.equal(call.body.settings.rawRecallDevice,'cpu');
+});
+
+test('the expert panel hides device choices for an onnx model without mentioning GPU',async t=>{
+  const info=snapshot();info.rawModel={fields:{rawRecallModel:OTHER_LOCAL,rawRecallDevice:'cpu',rawRecallThreads:4,rawRecallDimensions:0,
+    rawRecallOnnxModel:'/fixture/model.onnx',rawRecallOnnxTokenizer:'/fixture/tokenizer.json'}};
+  const env=environment(()=>info);t.after(()=>env.close());const {model}=await modelPage(env);
+  assert.equal(nodes(model.tree,n=>n.type==='select'&&n.props['aria-label']==='运行设备').length,0);
+  assert.match(text(model.tree),/此模型只用 CPU。/);
+  assert.doesNotMatch(text(model.tree),/GPU/);
+});
+
+test('cloud models never show local device, path or lifecycle controls in the expert panel',async t=>{
+  const info=snapshot();info.rawModel={fields:{rawRecallModel:CLOUD,rawRecallApiBase:'https://fictional-a.example/v1',rawRecallAllowCloud:true}};
+  const env=environment(()=>info);t.after(()=>env.close());const {model}=await modelPage(env);
   assert.equal(nodes(model.tree,n=>n.type==='select'&&n.props['aria-label']==='运行设备').length,0);
   assert.equal(nodes(model.tree,n=>n.type==='input'&&n.props.value==='/fixture/llama.exe').length,0);
   const view=env.component(component(model.tree,'MemoryRuntimeSettings'));await view.flush();
@@ -332,25 +362,6 @@ test('missing runtime callbacks remain visibly unconnected, with unknown counts 
   assert.doesNotMatch(text(view.tree),/统一向量服务已接入/);
   assert.equal(button(view.tree,'加载／预热').props.disabled,true);assert.equal(button(view.tree,'尝试整理待办').props.disabled,true);
   assert.equal(writes(env).length,0);
-});
-
-test('existing installer plan, download, cancel and configuration recovery remain available',async t=>{
-  const info=snapshot();info.rawModelHistory=[{id:'old',model:MODEL}];let job=null;
-  const env=environment((url,body)=>{
-    if(url===BASE+'/model-install'){
-      if(!body)return {ok:true,job};
-      if(body.action==='plan')return {ok:true,plan:{downloadBytes:1024,resources:{freeRamGiB:16,suggestedThreads:6,recommendedModel:MODEL,gpuState:'unavailable'},source:'https://example.com/model'}};
-      job={id:'download',model:MODEL,state:body.action==='start'?'running':'cancelled',step:'fixture'};return {ok:true,job};
-    }return info;
-  });t.after(()=>env.close());const {model}=await modelPage(env);
-  assert.ok(button(model.tree,'恢复上次向量设置'));
-  const installer=env.component(component(model.tree,'ModelPreparation'));await installer.flush();
-  await button(installer.tree,'查看安装与资源建议').props.onClick();await installer.flush();
-  await button(installer.tree,'下载准备并保存选择').props.onClick();await installer.flush();
-  await button(installer.tree,'取消准备（保留已下载部分）').props.onClick();await installer.flush();
-  assert.deepEqual(writes(env).map(call=>call.body.action),['plan','start','cancel']);
-  assert.equal(writes(env)[1].body.acceleration,'cuda');
-  assert.equal(writes(env)[1].body.settings.rawRecallGgufModel,'/fixture/model.gguf');
 });
 
 function httpFixture(t,controls={},ctx={}){
@@ -427,9 +438,8 @@ test('clicking cancel after viewing B still targets the running load or prepare 
     const {model}=await modelPage(env),view=env.component(component(model.tree,'MemoryRuntimeSettings'));await view.flush();
     await button(view.tree,label).props.onClick();await view.flush();
     assert.deepEqual(writes(env)[0].body,{action,profileId:MODEL,profileRevision:2});
-    select(model.tree,'查看向量模型').props.onChange({target:{value:other}});await model.flush();
     value.vectors.selectedProfileId=other;
-    await view.update(component(model.tree,'MemoryRuntimeSettings').props);
+    await view.update({...view.props,modelId:other});
     assert.match(text(view.tree),new RegExp('正在查看：'+other.replaceAll('.','\\.')));
     const cancel=button(view.tree,'取消向量操作');assert.equal(cancel.props.disabled,false);
     await cancel.props.onClick();await view.flush();
@@ -666,54 +676,31 @@ test('runtime HTTP forwards switch actions with an explicit boolean cloud confir
   assert.equal(operations.length,5);
 });
 
-test('model switch panel shows honest status, confirms with the estimate and drops only an unused index',async t=>{
+test('model status panel reports the index estimate and drops only an unused index',async t=>{
   const OLD='Qwen/Qwen3-Embedding-0.6B';
   const state=runtime();state.vectors.profiles.push({id:OLD,model:OLD,revision:7,modelState:'unloaded',progress:{state:'ready',completed:3,total:3},index:{hasSnapshot:true}});
   state.vectors.profiles[0].index={hasSnapshot:true};state.vectors.active={id:MODEL,revision:2};
   const plans={[MODEL]:{total:5,reusable:5,pending:0,pendingChars:0,estimatedTokens:0},[OLD]:{total:5,reusable:3,pending:2,pendingChars:12000,estimatedTokens:9000}};
-  const info=snapshot();
   const env=environment((url,body)=>{
     if(url===BASE+'/runtime'){
       if(!body)return state;
       if(body.action==='plan')return {ok:true,plan:plans[body.profileId]};
       return {ok:true};
     }
-    if(url===BASE+'/model')return {...info,ok:true,pendingRawModelSwitch:{cloudConfirmed:false}};
-    return info;
-  });t.after(()=>env.close());
-  const {model}=await modelPage(env);
-  let panel=env.component(component(model.tree,'ModelSwitch'));await panel.flush();
-  assert.match(text(panel.tree),/此模型：使用中。/);
-  assert.equal(nodes(panel.tree,n=>n.type==='button'&&text(n)==='清理此模型的索引').length,0,'active index cannot be dropped');
-  // View the old profile: switching back needs a reload (config differs) and shows the delta.
-  select(model.tree,'查看向量模型').props.onChange({target:{value:OLD}});await model.flush();
-  panel=env.component(component(model.tree,'ModelSwitch'));await panel.flush();
-  assert.match(text(panel.tree),/可切回，需补 2 篇/);
-  button(panel.tree,'切换到此模型').props.onClick();await panel.flush();
-  assert.match(text(panel.tree),/共 5 篇，其中 3 篇可直接复用，需编码 2 篇（约 1\.2 万字）/);
-  assert.match(text(panel.tree),/文字与条目检索不受影响/);
-  await button(panel.tree,'确认切换').props.onClick();await panel.flush();
-  const staged=writes(env).find(call=>call.path===BASE+'/model');
-  assert.equal(staged.body.confirmSwitch,true);assert.equal(staged.body.cloudConfirmed,false);assert.equal(staged.body.settings.rawRecallModel,OLD);
-  button(panel.tree,'清理此模型的索引').props.onClick();await panel.flush();
-  assert.match(text(panel.tree),/下次切回需全量重建/);
-  await button(panel.tree,'确认清理').props.onClick();await panel.flush();
-  assert.deepEqual(writes(env).filter(call=>call.path===BASE+'/runtime'&&call.body.action!=='plan').map(call=>call.body),[{action:'drop-index',profileId:OLD}]);
-});
-
-test('switching within the same configuration starts preparation without a reload',async t=>{
-  const state=runtime();state.vectors.profiles[0].index={hasSnapshot:false};state.vectors.activeProfileId=null;state.vectors.active=null;
-  const env=environment((url,body)=>{
-    if(url===BASE+'/runtime'){if(!body)return state;if(body.action==='plan')return {ok:true,plan:{total:4,reusable:0,pending:4,pendingChars:400,estimatedTokens:100}};return {ok:true,started:true};}
     return snapshot();
   });t.after(()=>env.close());
   const {model}=await modelPage(env);
   const panel=env.component(component(model.tree,'ModelSwitch'));await panel.flush();
-  assert.match(text(panel.tree),/未建索引，需编码 4 篇/);
-  button(panel.tree,'切换到此模型').props.onClick();await panel.flush();
-  await button(panel.tree,'确认切换').props.onClick();await panel.flush();
-  assert.deepEqual(writes(env).filter(call=>call.body.action==='switch').map(call=>call.body),[{action:'switch',profileId:MODEL,cloudConfirmed:false}]);
-  assert.equal(writes(env).some(call=>call.path===BASE+'/model'),false,'same configuration needs no reload');
+  assert.match(text(panel.tree),/此模型：使用中。/);
+  assert.equal(nodes(panel.tree,n=>n.type==='button'&&text(n)==='切换到此模型').length,0);
+  assert.equal(nodes(panel.tree,n=>n.type==='button'&&text(n)==='清理此模型的索引').length,0,'active index cannot be dropped');
+  await panel.update({...panel.props,modelId:OLD});
+  assert.match(text(panel.tree),/可切回，需补 2 篇/);
+  assert.equal(nodes(panel.tree,n=>n.type==='button'&&text(n)==='切换到此模型').length,0);
+  button(panel.tree,'清理此模型的索引').props.onClick();await panel.flush();
+  assert.match(text(panel.tree),/下次切回需全量重建/);
+  await button(panel.tree,'确认清理').props.onClick();await panel.flush();
+  assert.deepEqual(writes(env).filter(call=>call.path===BASE+'/runtime'&&call.body.action!=='plan').map(call=>call.body),[{action:'drop-index',profileId:OLD}]);
 });
 
 test('a preparation refused by an in-flight chat query asks to retry after the conversation',async t=>{

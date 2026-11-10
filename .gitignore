@@ -22,3 +22,4 @@ Thumbs.db
 
 # Local-only working material (not part of the release allowlist)
 AGENTS.md
+.archify/

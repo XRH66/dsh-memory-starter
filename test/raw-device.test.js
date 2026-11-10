@@ -315,9 +315,21 @@ test('local source boundary waits for async authorization before embedding and t
 
 test('resident hours keep the model loaded inside the window, including across midnight', async () => {
   const { residentFor } = await import('../lib/raw-rag/backend.js');
-  const at = (h, m) => new Date(2026, 0, 1, h, m);
+  // Wall times in the default personal zone (Asia/Shanghai, UTC+8), whatever the host zone is.
+  const at = (h, m) => new Date(Date.UTC(2026, 0, 1, h - 8, m));
   assert.equal(residentFor('08:00-01:00', at(9, 0)).inside, true);
   assert.equal(residentFor('08:00-01:00', at(0, 30)).untilEndMs, 30 * 60000);
   assert.equal(residentFor('08:00-01:00', at(3, 0)).inside, false);
   assert.equal(residentFor('', at(12, 0)).inside, false);
+});
+
+test('resident hours follow the personal time zone, not the host zone', async t => {
+  const { residentFor } = await import('../lib/raw-rag/backend.js');
+  const { setPersonalTimeZone } = await import('../lib/personal-namespace.js');
+  t.after(() => setPersonalTimeZone(''));
+  const noonUtc = new Date(Date.UTC(2026, 0, 1, 12, 0));
+  setPersonalTimeZone('Asia/Shanghai'); // 20:00 local
+  assert.equal(residentFor('08:00-22:00', noonUtc).inside, true);
+  setPersonalTimeZone('America/Los_Angeles'); // 04:00 local
+  assert.equal(residentFor('08:00-22:00', noonUtc).inside, false);
 });
