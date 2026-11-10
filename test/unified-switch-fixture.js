@@ -2,6 +2,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createUnifiedProfiles } from '../lib/unified/profiles.js';
 import { scratchDirectory } from './helpers.js';
+import { CJK } from '../lib/unified/switch-estimate.js';
 
 // Synthetic profiles/documents and a fake backend only: no real model, no
 // network, no user database. Shared by the vector model switching tests.
@@ -23,7 +24,7 @@ export async function switchFixture(t, { singleBackend = true, extra = {} } = {}
   }
   const g = grant('management');
   const options = { file, indexFile, singleBackend, authorize: value => valid.has(value) && !value.signal.aborted,
-    async *listDocumentMetadata() { for (const { text, ...row } of rows) yield { ...structuredClone(row), length: text.length }; },
+    async *listDocumentMetadata() { for (const { text, ...row } of rows) yield { ...structuredClone(row), length: text.length, cjk: (text.match(CJK) ?? []).length }; },
     async *listDocuments() { for (const row of [...rows]) yield structuredClone(row); },
     async resolveDocument({ id, revision }) {
       await hooks.resolve?.(id);

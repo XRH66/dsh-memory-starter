@@ -105,6 +105,7 @@
     "lib/unified/profiles-usage.js",
     "lib/unified/profiles.js",
     "lib/unified/state-store.js",
+    "lib/unified/switch-estimate.js",
     "lib/unified/vector-index.js",
     "lib/unified/vector-queue.js",
     "lib/usage.js",

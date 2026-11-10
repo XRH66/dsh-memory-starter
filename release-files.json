@@ -155,6 +155,7 @@
   "lib/memory-policy/index.js",
   "lib/unified/vector-index.js",
   "lib/unified/profiles-usage.js",
+  "lib/unified/switch-estimate.js",
   "lib/memory-note-path.js",
   "test/memory-documents.test.js",
   "test/raw-scope-view.test.js",
@@ -173,5 +174,6 @@
   "test/recent-memory-authorization.test.js",
   "test/session-memory.test.js",
   "test/unified-switch-fixture.js",
-  "test/unified-vector-prune.test.js"
+  "test/unified-vector-prune.test.js",
+  "test/unified-switch-plan.test.js"
 ]
