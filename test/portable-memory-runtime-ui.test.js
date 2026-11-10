@@ -95,6 +95,8 @@ function environment(handler, plugins = [{ moduleName: '@local/dsh-basic-memory-
 }
 const BASE='/api/basic-memory-settings';
 const MODEL='Qwen/Qwen3-Embedding-4B';
+const OTHER_LOCAL='Qwen/Qwen3-Embedding-0.6B';
+const LARGE_LOCAL='Qwen/Qwen3-Embedding-8B';
 const CLOUD='text-embedding-v4';
 const snapshot=()=>({ok:true,revision:'r1',runtime:'loaded',directory:'/fictional-memory',sessions:[],
   timeZone:'America/Los_Angeles',timeZoneConfigured:'',timeZoneHost:'America/Los_Angeles',timeZoneError:'',activeTimeZone:'America/Los_Angeles',
@@ -113,6 +115,7 @@ const component=(tree,name)=>{const node=nodes(tree,n=>typeof n.type==='function
 const select=(tree,label)=>{const node=nodes(tree,n=>n.type==='select'&&n.props['aria-label']===label)[0];assert.ok(node,'Missing select: '+label);return node;};
 const field=(tree,label)=>{const parent=nodes(tree,n=>n.type==='label'&&text(n).startsWith(label))[0];assert.ok(parent,'Missing field: '+label);return nodes(parent,n=>n.type==='input')[0];};
 const writes=env=>env.calls.filter(call=>call.body);
+const inventoryResponse=models=>({ok:true,inventory:{revision:'r1',models}});
 async function modelPage(env){const page=env.page();await page.flush();button(page.tree,'维护').props.onClick();await page.flush();const model=env.component(component(page.tree,'RawModelSettings'));await model.flush();return {page,model};}
 
 test('maintenance time zone shows the active and host zones and saves the configured IANA name',async t=>{
@@ -522,18 +525,112 @@ test('the model tab saves scheduled residency and resets the idle timeout for al
   assert.equal(call.body.settings.rawRecallResidentHours,'');assert.equal(call.body.settings.rawRecallIdleMs,0);
 });
 
-test('the model tab requests installation when the local model has no install receipt',async t=>{
-  const info=snapshot();delete info.rawModel.fields.rawRecallInstallReceipt;
+test('local model inventory marks installed and missing choices without repeating the current model',async t=>{
+  const info=snapshot();info.rawModels=[...info.rawModels,
+    {id:LARGE_LOCAL,label:'Qwen 8B',engine:'llamacpp',dimensions:4096}];
   const env=environment((url,body)=>{
-    if(url===BASE+'/model-install')return body?{ok:true,job:{id:'download',model:MODEL,state:'running',step:'fixture'}}:{ok:true,job:null};
+    if(url===BASE+'/model-install'&&body?.action==='inventory')return inventoryResponse([
+      {id:MODEL,installed:true,source:'current',issues:[],downloadBytes:0,settings:{}},
+      {id:OTHER_LOCAL,installed:false,source:null,issues:['missing'],downloadBytes:613527631,settings:null},
+      {id:LARGE_LOCAL,installed:true,source:'history',issues:[],downloadBytes:0,settings:{rawRecallGgufModel:'/fixture/8b.gguf'}}]);
     return info;
   });t.after(()=>env.close());
   const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
   const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  const options=nodes(select(picker.tree,'检索模型'),node=>node.type==='option');
+  const option=id=>text(options.find(node=>node.props.value===id));
+  assert.match(option(MODEL),/当前使用/);assert.doesNotMatch(option(MODEL),/已安装/);
+  assert.match(option(OTHER_LOCAL),/未安装/);assert.match(option(LARGE_LOCAL),/已安装/);
+});
+
+test('a missing local model can download files but cannot save or write model settings',async t=>{
+  const info=snapshot();
+  const env=environment((url,body)=>{
+    if(url===BASE+'/model-install'){
+      if(body?.action==='inventory')return inventoryResponse([
+        {id:MODEL,installed:true,source:'current',issues:[],downloadBytes:0,settings:{}},
+        {id:OTHER_LOCAL,installed:false,source:null,issues:['missing'],downloadBytes:613527631,settings:null}]);
+      if(body?.action==='start')return {ok:true,job:{id:'download',model:OTHER_LOCAL,state:'running',step:'fixture'}};
+      return {ok:true,job:null};
+    }return info;
+  });t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  select(picker.tree,'检索模型').props.onChange({target:{value:OTHER_LOCAL}});await picker.flush();
+  assert.equal(button(picker.tree,'保存').props.disabled,true);
   const preparation=env.component(component(picker.tree,'ModelPreparation'));await preparation.flush();
-  await button(preparation.tree,'下载并启用').props.onClick();await preparation.flush();
-  assert.equal(writes(env).length,1);const call=writes(env)[0];
-  assert.equal(call.path,BASE+'/model-install');assert.equal(call.body.action,'start');assert.equal(call.body.allowDownload,true);
+  assert.match(text(preparation.tree),/该模型尚未下载（约 585\.1 MB）。下载只保存文件，不会切换模型。/);
+  await button(preparation.tree,'下载').props.onClick();await preparation.flush();
+  const start=writes(env).find(call=>call.path===BASE+'/model-install'&&call.body.action==='start');
+  assert.equal(start.body.downloadOnly,true);assert.equal(start.body.allowDownload,true);
+  assert.equal(writes(env).filter(call=>call.path===BASE+'/model').length,0);
+});
+
+test('a completed download refreshes inventory and saves the installed paths',async t=>{
+  const info=snapshot();let completed=false,downloaded=false,job=null;
+  const installedSettings={rawRecallPython:'/fixture/python.exe',rawRecallOnnxModel:'/fixture/downloaded.onnx',
+    rawRecallOnnxTokenizer:'/fixture/downloaded.tokenizer.json',rawRecallInstallReceipt:'/fixture/receipt.json'};
+  const env=environment((url,body)=>{
+    if(url===BASE+'/model-install'){
+      if(body?.action==='inventory')return inventoryResponse([
+        {id:MODEL,installed:true,source:'current',issues:[],downloadBytes:0,settings:{}},
+        {id:OTHER_LOCAL,installed:downloaded,source:downloaded?'current':null,issues:downloaded?[]:['missing'],
+          downloadBytes:downloaded?0:613527631,settings:downloaded?installedSettings:null}]);
+      if(body?.action==='start'){job={id:'download',model:OTHER_LOCAL,state:'running',step:'fixture'};return {ok:true,job};}
+      if(!body){
+        if(completed&&job?.state==='running'){downloaded=true;job={...job,state:'downloaded',step:'已下载；选中后点「保存」启用'};}
+        return {ok:true,job};
+      }
+    }
+    return info;
+  });t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  select(picker.tree,'检索模型').props.onChange({target:{value:OTHER_LOCAL}});await picker.flush();
+  const preparation=env.component(component(picker.tree,'ModelPreparation'));await preparation.flush();
+  await button(preparation.tree,'下载').props.onClick();await preparation.flush();
+  completed=true;
+  for(const tick of [...env.timers.values()])await tick();
+  await preparation.flush();await picker.flush();
+  assert.equal(button(picker.tree,'保存').props.disabled,false);
+  await button(picker.tree,'保存').props.onClick();await picker.flush();
+  const call=writes(env).filter(item=>item.path===BASE+'/model').at(-1);
+  assert.equal(call.body.settings.rawRecallOnnxModel,installedSettings.rawRecallOnnxModel);
+  assert.equal(call.body.settings.rawRecallInstallReceipt,installedSettings.rawRecallInstallReceipt);
+});
+
+test('an installed local model offers save without a download button',async t=>{
+  const info=snapshot();info.rawModels=[...info.rawModels,
+    {id:LARGE_LOCAL,label:'Qwen 8B',engine:'llamacpp',dimensions:4096}];
+  const env=environment((url,body)=>{
+    if(url===BASE+'/model-install'&&body?.action==='inventory')return inventoryResponse([
+      {id:MODEL,installed:true,source:'current',issues:[],downloadBytes:0,settings:{}},
+      {id:OTHER_LOCAL,installed:false,source:null,issues:['missing'],downloadBytes:613527631,settings:null},
+      {id:LARGE_LOCAL,installed:true,source:'history',issues:[],downloadBytes:0,
+        settings:{rawRecallGgufModel:'/fixture/8b.gguf',rawRecallLlamaServer:'/fixture/8b-server.exe'}}]);
+    return info;
+  });t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  select(picker.tree,'检索模型').props.onChange({target:{value:LARGE_LOCAL}});await picker.flush();
+  assert.equal(nodes(picker.tree,node=>node.type==='button'&&text(node)==='下载').length,0);
+  assert.match(text(picker.tree),/已安装。点「保存」后启用。/);
+  assert.equal(button(picker.tree,'保存').props.disabled,false);
+});
+
+test('inventory failure leaves the page usable and does not block save',async t=>{
+  const info=snapshot();
+  const env=environment((url,body)=>{
+    if(url===BASE+'/model-install'&&body?.action==='inventory')
+      return {status:500,body:{ok:false,error:'fixture inventory failure'}};
+    return info;
+  });t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  select(picker.tree,'检索模型').props.onChange({target:{value:OTHER_LOCAL}});await picker.flush();
+  assert.equal(button(picker.tree,'保存').props.disabled,false);
+  await button(picker.tree,'保存').props.onClick();await picker.flush();
+  assert.equal(writes(env).filter(call=>call.path===BASE+'/model').length,1);
 });
 
 test('runtime HTTP forwards switch actions with an explicit boolean cloud confirmation only',async t=>{
