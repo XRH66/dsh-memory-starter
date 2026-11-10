@@ -103,10 +103,7 @@ test('portable handoff samples only its existing first page and leaves the legac
   await request();
   await f.bridge.waitForIdle();
   assert.deepEqual(f.listCalls.map(({limit,beforePosition})=>[limit,beforePosition===undefined]),[[24,true],[24,false]]);
-  assert.equal(f.appended.length,1);
-  const handoff=f.appended[0].data.content[0].text;
-  assert.match(handoff,/revision=2[^\n]*interrupted\]\nREVISED_FIXTURE_BODY/);
-  assert.match(handoff,/FIXTURE_BODY 0\n/,'the second page is still used by handoff');
+  assert.equal(f.appended.length,0,'originals from the current conversation are not handed off to itself');
   const stats=await f.readStats();
   assert.equal(stats.sampledMessages,24);
   assert.equal(stats.turns,1);

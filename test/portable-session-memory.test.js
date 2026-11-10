@@ -9,6 +9,7 @@ import {createPersonalMemoryRuntime} from '../lib/personal-runtime.js';
 import {authorizedTools} from '../lib/worker.js';
 import {resolveConfig} from '../lib/config.js';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
+import {MEMORY_HANDOFF_SOURCE} from '../lib/memory-contract.js';
 import {memoryStore} from './fake-memory.js';
 import {fakeAgent,fakeLlm,runPreStep,directUser,toolVaultBackend} from './helpers.js';
 
@@ -24,12 +25,13 @@ function assertTopicPage(memory,label){
   assert.equal(note.content,'# '+label+'\n\n本页由记忆框架自动维护，可在下方自由补充\n');
 }
 async function fixture(t,overrides={}) {
+  const {isOwnedBy=()=>false,...configOverrides}=overrides;
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'portable-session-memory-'));
   const actors=new Map(),sessions=new Map();
-  const agents={get:id=>actors.get(id),list:()=>[...actors.values()],isOwnedBy:()=>false};
+  const agents={get:id=>actors.get(id),list:()=>[...actors.values()],isOwnedBy};
   const options={directory,ownerSubject:'用户',agents,sessions:{get:id=>sessions.get(id)},logger};
   let access=await createSessionMemory(options);
-  const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecallDbPath:path.join(directory,'raw.sqlite'),autoRecall:false,personalRecall:false,recentContext:false,maxTimelineEntries:0,maxIndexNotes:0,rawRecall:false,...overrides});
+  const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecallDbPath:path.join(directory,'raw.sqlite'),autoRecall:false,personalRecall:false,recentContext:false,maxTimelineEntries:0,maxIndexNotes:0,rawRecall:false,...configOverrides});
   await fs.mkdir(config.vaultPath,{recursive:true});
   const memory=memoryStore({project:'main'});
   const disposals=[];
@@ -37,16 +39,18 @@ async function fixture(t,overrides={}) {
   function actor(id='session-primary') {
     const events=[],agent=fakeAgent(id);
     Object.defineProperty(agent.session,'seq',{get:()=>events.length});
+    agent.session.log=events;
     agent.session.snapshotEvents=(from=0,to=events.length)=>events.slice(from,to);
     agent.session.deriveMessages=()=>[directUser('CLOSED_USER_ECHO','old-user'),{role:'assistant',content:[{type:'text',text:'CLOSED_ASSISTANT_ECHO'}]}];
     agent.events=events;actors.set(id,agent);sessions.set(id,agent.session);return agent;
   }
-  function emit(agent,type,data,bridge) {
-    const event={seq:agent.events.length,time:Date.now(),type,data,...['user/message','assistant/message'].includes(type)?{surfaceOp:'append'}:{}};
+  function emit(agent,type,data,bridge,options={}) {
+    const surfaceOp=Object.hasOwn(options,'surfaceOp')?options.surfaceOp:['user/message','assistant/message'].includes(type)?'append':undefined;
+    const event={seq:agent.events.length,time:Date.now(),type,data,...surfaceOp===undefined?{}:{surfaceOp}};
     agent.events.push(event);assert.equal(access.observe(agent.session,event),true);bridge?.onSessionEvent(agent.session,event);return event;
   }
-  function begin(agent,turn,bridge){emit(agent,'turn/start',{turn},bridge);return emit(agent,'user/message',directUser(USER,'u-'+turn),bridge);}
-  function finish(agent,turn,bridge){emit(agent,'assistant/message',{turn,message:{id:'a-'+turn,role:'assistant',source:{kind:'model',provider:'fixture',model:'fixture'},content:[{type:'text',text:'CLOSED_ASSISTANT_ECHO 好，我记住了。'}]}},bridge);emit(agent,'turn/end',{turn,reason:{kind:'completed'}},bridge);}
+  function begin(agent,turn,bridge,text=USER,id='u-'+turn){emit(agent,'turn/start',{turn},bridge);return emit(agent,'user/message',directUser(text,id),bridge);}
+  function finish(agent,turn,bridge,text='CLOSED_ASSISTANT_ECHO 好，我记住了。'){emit(agent,'assistant/message',{turn,message:{id:'a-'+turn,role:'assistant',source:{kind:'model',provider:'fixture',model:'fixture'},content:[{type:'text',text}]}},bridge);emit(agent,'turn/end',{turn,reason:{kind:'completed'}},bridge);}
   function bridge(llm=fakeLlm('{"actions":[]}'),extra={}) {
     // These cases retain the legacy per-turn writer as a compatibility seam.
     // The default mounted batch organizer is covered by the pipeline integration.
@@ -54,6 +58,25 @@ async function fixture(t,overrides={}) {
     disposals.push(()=>result.dispose());return result;
   }
   return {directory,config,memory,actor,emit,begin,finish,bridge,disposals,get access(){return access;},async reload(){access.close();access=await createSessionMemory(options);},source(agent,event,turn){return {sessionId:agent.session.id,sourceMessageId:event.data.id,sourceEventSeq:event.seq,turn};}};
+}
+
+function attachSurface(f,bridge,agent) {
+  const surface=()=>{
+    let active=[];
+    for(const event of agent.events){
+      if(event.surfaceOp==='append')active.push(event.seq);
+      else if(event.surfaceOp?.op==='replace'){
+        active=active.filter(seq=>seq<event.surfaceOp.startSeq||seq>event.surfaceOp.endSeq);
+        active.push(event.seq);
+      }
+    }
+    return active;
+  };
+  Object.defineProperty(agent.session,'surface',{configurable:true,get:()=>({nodes:surface()})});
+  agent.session.deriveEventMessage=event=>event.type==='user/message'?event.data:event.type==='assistant/message'?event.data.message:event.data?.message;
+  agent.session.deriveMessages=()=>surface().map(seq=>agent.events.find(event=>event.seq===seq))
+    .filter(Boolean).map(event=>event.type==='user/message'?event.data:event.data?.message).filter(Boolean);
+  agent.session.append=(type,data,options={})=>f.emit(agent,type,data,bridge,{surfaceOp:options.surfaceOp??'append'});
 }
 
 test('explicit access is lazy: default-off initialization and a closed session never create stores or touch the Vault',async t=>{
@@ -202,6 +225,109 @@ test('request hook injects one handoff only after a change, reuses HTTP retries 
   user=f.begin(b,4,bridge);await runPreStep(bridge,{agent:b,turn:4,messages:[user.data]});await request(b,4);assert.equal(injected.length,3);
   assert.notEqual(injected.at(-1).data.id,id);
   assert.ok(!bridge.messageSources.forAgent(b).list({}).sources.some(source=>source.content.some(block=>block.text?.includes('<memory_handoff>'))));
+});
+
+test('handoff excludes the current conversation, replaces old context and reuses an unchanged live delivery',async t=>{
+  const f=await fixture(t,{recentContext:true,autoCapture:false}),a=f.actor(),b=f.actor('session-next'),bridge=f.bridge();
+  attachSurface(f,bridge,a);attachSurface(f,bridge,b);
+  const handoffs=agent=>agent.session.deriveMessages().filter(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE);
+  const request=(agent,turn,model='fixture')=>bridge.onRequest({agent,turn,step:1,signal:new AbortController().signal},async()=>({provider:'fixture',model}));
+  const openStep=(agent,turn)=>f.emit(agent,'step/start',{turn,step:1},bridge);
+  const runRequest=async(agent,turn,model)=>{
+    const user=f.begin(agent,turn,bridge,agent===a?'A_SELF_ORIGINAL_'+turn:'B_ONLY_ORIGINAL_'+turn,'u-'+turn);
+    await runPreStep(bridge,{agent,turn,messages:[user.data]});openStep(agent,turn);await request(agent,turn,model);
+    return user;
+  };
+  await f.access.set(a.session.id,true);await f.access.set(b.session.id,true);
+
+  f.begin(b,1,bridge,'B_ONLY_OLD','b-old-user');
+  f.finish(b,1,bridge,'B_ANSWER_OLD');
+  await bridge.waitForIdle();
+
+  await runRequest(a,1);
+  assert.equal(handoffs(a).length,1);
+  const firstId=handoffs(a)[0].id;
+  f.finish(a,1,bridge);await bridge.waitForIdle();
+
+  let user=f.begin(b,2,bridge,'B_ONLY_NEW','b-new-user');
+  await runPreStep(bridge,{agent:b,turn:2,messages:[user.data]});openStep(b,2);await request(b,2);
+  f.finish(b,2,bridge,'B_ANSWER_NEW');
+  await bridge.waitForIdle();
+
+  await runRequest(a,2);
+  let messages=handoffs(a);
+  assert.equal(messages.length,1);
+  assert.notEqual(messages[0].id,firstId);
+  assert.match(messages[0].content[0].text,/B_ONLY_NEW/);
+  assert.match(messages[0].content[0].text,/B_ANSWER_NEW/);
+  assert.doesNotMatch(messages[0].content[0].text,/A_SELF_ORIGINAL/);
+  f.finish(a,2,bridge);await bridge.waitForIdle();
+
+  f.emit(b,'turn/start',{turn:3},bridge);await runPreStep(bridge,{agent:b,turn:3,messages:[]});
+  openStep(b,3);await request(b,3);f.emit(b,'turn/end',{turn:3,reason:{kind:'completed'}},bridge);await bridge.waitForIdle();
+
+  await runRequest(a,3);
+  assert.equal(handoffs(a).length,1);
+  assert.equal(handoffs(a)[0].id,messages[0].id);
+  await bridge.waitForIdle();
+  let status=(await bridge.getMemoryStatus(a.session.id)).jobs.find(job=>job.turn===3)?.handoff;
+  assert.equal(status?.state,'unchanged');
+  f.finish(a,3,bridge);await bridge.waitForIdle();
+
+  await runRequest(a,4,'fixture-next');
+  assert.equal(handoffs(a).length,1);
+  assert.equal(handoffs(a)[0].id,messages[0].id);
+  await bridge.waitForIdle();
+  status=(await bridge.getMemoryStatus(a.session.id)).jobs.find(job=>job.turn===4)?.handoff;
+  assert.equal(status?.state,'unchanged');
+});
+
+test('handoff replacement failure is logged and still appends the new delivery',async t=>{
+  const f=await fixture(t,{recentContext:true,autoCapture:false}),a=f.actor(),b=f.actor('session-next'),warnings=[];
+  const bridge=f.bridge(undefined,{logger:{warn:message=>warnings.push(message)}});
+  attachSurface(f,bridge,a);attachSurface(f,bridge,b);
+  const handoffs=agent=>agent.session.deriveMessages().filter(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE);
+  const request=(agent,turn)=>bridge.onRequest({agent,turn,step:1,signal:new AbortController().signal},async()=>({provider:'fixture',model:'fixture'}));
+  await f.access.set(a.session.id,true);await f.access.set(b.session.id,true);
+
+  f.begin(b,1,bridge,'B_REPLACE_OLD','b-old');f.finish(b,1,bridge,'B_REPLACE_OLD_ANSWER');await bridge.waitForIdle();
+  let user=f.begin(a,1,bridge,'A_FIRST','a-first');await runPreStep(bridge,{agent:a,turn:1,messages:[user.data]});
+  f.emit(a,'step/start',{turn:1,step:1},bridge);await request(a,1);assert.equal(handoffs(a).length,1);f.finish(a,1,bridge);await bridge.waitForIdle();
+
+  user=f.begin(b,2,bridge,'B_REPLACE_NEW','b-new');await runPreStep(bridge,{agent:b,turn:2,messages:[user.data]});
+  f.emit(b,'step/start',{turn:2,step:1},bridge);await request(b,2);f.finish(b,2,bridge,'B_REPLACE_NEW_ANSWER');await bridge.waitForIdle();
+  user=f.begin(a,2,bridge,'A_SECOND','a-second');await runPreStep(bridge,{agent:a,turn:2,messages:[user.data]});
+  await request(a,2);
+  assert.equal(handoffs(a).length,2);
+  assert.match(handoffs(a).at(-1).content[0].text,/B_REPLACE_NEW/);
+  assert.ok(warnings.some(message=>message.startsWith('[memory-handoff] replace:')));
+});
+
+test('child-agent requests neither inject handoffs nor change the root conversation baseline',async t=>{
+  const rootId='session-primary',childId='session-child';
+  const f=await fixture(t,{recentContext:true,autoCapture:false,isOwnedBy:(id,other)=>id===childId&&other.session.id===rootId});
+  const root=f.actor(rootId),other=f.actor('session-other'),child=f.actor(childId),bridge=f.bridge();
+  for(const agent of [root,other,child])attachSurface(f,bridge,agent);
+  const request=(agent,turn)=>bridge.onRequest({agent,turn,step:1,signal:new AbortController().signal},async()=>({provider:'fixture',model:'fixture'}));
+  const handoffs=agent=>agent.session.deriveMessages().filter(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE);
+  await f.access.set(root.session.id,true);await f.access.set(other.session.id,true);
+
+  f.begin(other,1,bridge,'OTHER_ORIGINAL','other-u1');f.finish(other,1,bridge,'OTHER_ANSWER');await bridge.waitForIdle();
+  let user=f.begin(root,1,bridge,'ROOT_ORIGINAL','root-u1');await runPreStep(bridge,{agent:root,turn:1,messages:[user.data]});
+  f.emit(root,'step/start',{turn:1,step:1},bridge);await request(root,1);assert.equal(handoffs(root).length,1);
+  f.finish(root,1,bridge);await bridge.waitForIdle();
+  const generation=(await bridge.handoff.status()).sessions[root.session.id].generation;
+
+  user=f.begin(child,1,bridge,'CHILD_ORIGINAL','child-u1');await runPreStep(bridge,{agent:child,turn:1,messages:[user.data]});
+  f.emit(child,'step/start',{turn:1,step:1},bridge);await request(child,1);
+  assert.equal(handoffs(child).length,0);
+  assert.equal((await bridge.handoff.status()).sessions[child.session.id],undefined);
+  f.emit(child,'turn/end',{turn:1,reason:{kind:'completed'}},bridge);
+
+  user=f.begin(root,2,bridge,'ROOT_SECOND','root-u2');await runPreStep(bridge,{agent:root,turn:2,messages:[user.data]});
+  f.emit(root,'step/start',{turn:2,step:1},bridge);await request(root,2);
+  assert.equal(handoffs(root).length,1);
+  assert.equal((await bridge.handoff.status()).sessions[root.session.id].generation,generation);
 });
 
 test('closing during handoff preparation removes pending memory additions and still admits the actual user message',async t=>{

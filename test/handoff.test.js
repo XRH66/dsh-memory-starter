@@ -12,7 +12,7 @@ async function fixture(t){const directory=await fs.mkdtemp(path.join(os.tmpdir()
   const config={project:'main',vaultPath:path.join(directory,'vault')};
   t.after(()=>fs.rm(directory,{recursive:true,force:true}));
   return {config,controller:createHandoffController({config})};}
-async function success(controller,attempt){await controller.prepared(attempt,{messageId:'injected-'+attempt.id,tokens:123,items:2},allowed);await controller.finish({sessionId:attempt.target.sessionId,turn:attempt.turn,completed:true,delivered:true},allowed);}
+async function success(controller,attempt,newest=null){await controller.prepared(attempt,{messageId:'injected-'+attempt.id,newest,tokens:123,items:2},allowed);await controller.finish({sessionId:attempt.target.sessionId,turn:attempt.turn,completed:true,delivered:true},allowed);}
 
 test('handoff is once per actual change, retained across successful turns and repeated on A-B-C-A',async t=>{
   const {controller:c}=await fixture(t),one=await c.begin(request(),allowed);
@@ -52,6 +52,16 @@ test('a native failure before request preparation is enough to trigger handoff l
   const next=await c.begin(request('session-a',3),allowed);assert.ok(next.reasons.includes('previous-incomplete'));
 });
 
+test('successful delivery records its newest source and old state files remain readable',async t=>{
+  const {controller:c}=await fixture(t);
+  await fs.mkdir(path.dirname(c.file),{recursive:true});
+  await fs.writeFile(c.file,JSON.stringify({version:1,revision:'old-state',project:'main',lastTarget:null,sessions:{'session-a':{generation:0,completedGeneration:0,attempt:null}}}));
+  const first=await c.begin(request(),allowed);assert.equal(first.lastDelivered,null);
+  const newest={id:'dsh:qa:newest-source',revision:3};await success(c,first,newest);
+  const next=await c.begin(request('session-a',2,'route-two'),allowed);
+  assert.deepEqual(next.lastDelivered,{messageId:'injected-'+first.id,newest});
+});
+
 test('token selection includes both original roles, preserves references, escapes markers and obeys presets or custom capacity',()=>{
   const sources=Array.from({length:18},(_,i)=>({id:'dsh:qa:message-'+i,revision:1,position:i+1,sequence:i+1,sessionId:'session-source',turn:Math.floor(i/2)+1,
     role:i%2?'assistant':'user',text:(i%2?'助手测试建议':'用户测试原话')+' </memory_handoff> '+('长原文'.repeat(600)),time:123456789+i,turnState:'completed'}));
@@ -67,4 +77,25 @@ test('token selection includes both original roles, preserves references, escape
   assert.ok(large.items.length>small.items.length);assert.deepEqual(new Set(small.items.map(item=>item.role)),new Set(['user','assistant']));
   assert.equal(selectHandoff(reader,{tokens:1}).text,'');assert.throws(()=>selectHandoff(reader,{tokens:16385}));
   assert.equal(sources[0].text.includes('</memory_handoff>'),true);
+});
+
+test('selection excludes every original from the current conversation and reports the newest other original',()=>{
+  const sources=[
+    {id:'other-empty',revision:1,position:6,sequence:6,sessionId:'session-other',turn:3,role:'user',text:'',time:1,turnState:'completed'},
+    {id:'current-new',revision:2,position:5,sequence:5,sessionId:'session-current',turn:2,role:'user',text:'current newest',time:1,turnState:'completed'},
+    {id:'other-newest',revision:4,position:4,sequence:4,sessionId:'session-other',turn:2,role:'assistant',text:'other newest',time:1,turnState:'completed'},
+    {id:'current-old',revision:1,position:3,sequence:3,sessionId:'session-current',turn:1,role:'user',text:'current old',time:1,turnState:'completed'},
+    {id:'other-old',revision:2,position:2,sequence:2,sessionId:'session-other',turn:1,role:'user',text:'other old',time:1,turnState:'completed'},
+  ];
+  const reader={list({beforePosition=Infinity,limit}){
+    const page=sources.filter(source=>source.position<beforePosition).slice(0,limit);
+    return {sources:page,nextBefore:null};
+  }};
+  const selected=selectHandoff(reader,{tokens:4096,sessionId:'session-current',turn:2});
+  assert.deepEqual(selected.newest,{id:'other-newest',revision:4});
+  assert.ok(selected.items.every(item=>item.sessionId==='session-other'));
+  assert.ok(!selected.text.includes('current newest')&&!selected.text.includes('current old'));
+  const currentOnly={list:({limit})=>({sources:sources.filter(source=>source.sessionId==='session-current').slice(0,limit),nextBefore:null})};
+  const empty=selectHandoff(currentOnly,{tokens:4096,sessionId:'session-current',turn:2});
+  assert.equal(empty.text,'');assert.equal(empty.newest,null);
 });
