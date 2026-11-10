@@ -89,7 +89,6 @@
     "lib/raw-rag/select.js",
     "lib/raw-rag/settings.js",
     "lib/raw-rag/store.js",
-    "lib/recall.js",
     "lib/recent-context.js",
     "lib/records.js",
     "lib/recovery.js",

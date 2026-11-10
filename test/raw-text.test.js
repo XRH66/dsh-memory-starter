@@ -10,7 +10,6 @@ import { resolveConfig } from '../lib/config.js';
 import { createBridge } from '../lib/index.js';
 import { directUser, fakeAgent, runPreStep, turnStart, turnEnd } from './helpers.js';
 import { embeddingContract, seedTurnVectors } from './embedding-fixture.js';
-import { composeMemoryContext } from '../lib/context.js';
 import { derivationMetadata } from '../lib/source-lineage.js';
 
 const T0 = Date.UTC(2026, 10, 5, 10);
@@ -272,14 +271,6 @@ test('an oversized comma-only sentence keeps its relevant proposition and follow
   assert.match(result.text, /超过时间别去/);
 });
 
-function derivedFact(value, ref, evidence = value) {
-  const content = '<!-- dsh-fact-memory -->\n# 围巾领取\n- [fact] ' + value;
-  return { title: '围巾领取', permalink: 'test/facts/scarf', memoryId: 'scarf-fact',
-    kind: 'fact', status: 'active', value, content, score: 0.9, baseScore: 0.9,
-    priorityMetadata: { memory_id: 'scarf-fact', memory_kind: 'fact', status: 'active', value,
-      ...derivationMetadata({ content, sources: [{ raw_ref: { ...ref, evidence } }] }) } };
-}
-
 test('source A to B to A invalidates old retrieval, fact support and pending vectors', async t => {
   const f = await fixture(t), text = '周日去取围巾，柜台只开到三点。';
   const saved = f.archive(text), model = { ...embeddingContract('revision:2', 2),
@@ -290,17 +281,12 @@ test('source A to B to A invalidates old retrieval, fact support and pending vec
   assert.equal(first.turns.length, 1);
   const source = r.sourceState({ messageId: 'u1' });
   assert.equal(source.state, 'live');
-  const fact = derivedFact('周日去取围巾', source.ref);
-  const compose = () => composeMemoryContext({ facts: [fact], messages: [directUser('围巾怎么取')],
-    config: { maxContextChars: 1200 }, sourcePolicy: { scope: 'owner:a', sourceState: r.sourceState } });
-  assert.equal(compose().selected, 1);
   f.archive('周四去取围巾，柜台只开到两点。');
   f.archive(text);
   const current = r.sourceState({ messageId: 'u1' });
   assert.equal(current.state, 'live');
   assert.notEqual(current.ref.sourceVersion, source.ref.sourceVersion);
   assert.equal(r.sourceState(source.ref).state, 'stale');
-  assert.equal(compose().selected, 0, 'the old derivation cannot revive merely because its text returned');
   assert.equal(r.select({ turns: first.turns, query: '围巾', budget: 600 }).text, '');
   assert.equal(f.store.putVectors(model.modelKey, chunks.map(chunk => ({ turnId: saved.turnId,
     windowId: chunk.id, textHash: chunk.textHash, sourceVersion: source.ref.sourceVersion,
@@ -341,39 +327,6 @@ test('a source excluded after retrieval is removed again at the final quote boun
   assert.match(r.select({ turns: found.turns, query: '围巾', budget: 600 }).text, /只有周日/);
   r.control({ targetType: 'message', targetId: 'u1', excluded: true });
   assert.equal(r.select({ turns: found.turns, query: '围巾', budget: 600 }).text, '');
-});
-
-test('fact coverage removes only the displayed verbatim clause from the same live raw source', async t => {
-  const f = await fixture(t);
-  f.archive('周日去取围巾，柜台只开到三点。');
-  const r = f.reader({ embedder: unavailable() });
-  const found = await r.retrieve({ query: '围巾', mode: 'text' });
-  const source = r.sourceState({ messageId: 'u1' });
-  assert.equal(source.state, 'live');
-  const compose = fact => composeMemoryContext({ facts: [fact], messages: [directUser('围巾怎么取')],
-    config: { maxContextChars: 1200 }, sourcePolicy: { scope: 'owner:a', sourceState: r.sourceState } });
-  const exact = compose(derivedFact('周日去取围巾', source.ref));
-  assert.equal(exact.selected, 1);
-  assert.equal(exact.coverage.length, 1);
-  const remaining = r.select({ turns: found.turns, query: '围巾', budget: 600, existingMessages: exact.coverage });
-  assert.doesNotMatch(remaining.text, /周日去取围巾/);
-  assert.match(remaining.text, /柜台只开到三点/);
-  assert.equal(remaining.skippedCovered, 1);
-  assert.ok(remaining.chars <= 600);
-
-  const summary = compose(derivedFact('围巾安排在周日领取', source.ref, '周日去取围巾'));
-  assert.equal(summary.selected, 1);
-  assert.deepEqual(summary.coverage, [], 'a rewritten fact does not prove the original words were displayed');
-  assert.match(r.select({ turns: found.turns, query: '围巾', budget: 600, existingMessages: summary.coverage }).text, /周日去取围巾/);
-
-  f.archive('周日去取围巾。', { turn: 2, id: 'independent-source' });
-  const other = r.sourceState({ messageId: 'independent-source' });
-  const independent = compose(derivedFact('周日去取围巾', other.ref));
-  assert.equal(independent.selected, 1);
-  assert.equal(independent.coverage[0].id, 'independent-source');
-  const distinct = r.select({ turns: found.turns, query: '围巾', budget: 600, existingMessages: independent.coverage });
-  assert.match(distinct.text, /周日去取围巾/);
-  assert.equal(distinct.skippedCovered, 0);
 });
 
 test('decimal numbers and dotted identifiers stay intact in evidence', () => {

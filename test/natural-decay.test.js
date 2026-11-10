@@ -7,7 +7,6 @@ import { priorityFromMetadata, reinforcePriorityPatch, softenPriorityPatch, adju
 import { createBridge } from '../lib/index.js';
 import { applyMemoryActions, softenMemory } from '../lib/memory.js';
 import { resolveConfig } from '../lib/config.js';
-import { recallForTurn } from '../lib/recall.js';
 import { updateIndexBody, AUTO_START, AUTO_END } from '../lib/index-pages.js';
 import { memoryStore } from './fake-memory.js';
 import { fakeAgent, fakeLlm, fakeTools, mcpResult, directUser, runPreStep, turnStart, userMessage, assistantMessage, turnEnd, TARGET_SESSION } from './helpers.js';
@@ -54,21 +53,6 @@ test('index refresh preserves manual groups before and after the auto region',()
   const after=updateIndexBody(withAuto,{refresh:[note]});
   assert.match(after,/## 手工尾部\n- \[\[沟通偏好\]\].*少用套话/);
   assert.equal((after.match(/少用套话/g)||[]).length,1);
-});
-
-test('fact recall reads current weights when search metadata omits them, ranks all bounded candidates, excludes QA',async()=>{
-  const notes=Array.from({length:4},(_,i)=>({title:'用户 - 习惯'+i,permalink:'personal/chats/facts/n'+i,score:1-i*.1,matched_chunk:'- [preference] '+value,metadata:{note_type:'note'}}));
-  const fresh={recorded_at:START,base_priority:.625,decay_anchor_at:day(30).toISOString(),half_life_days:37.5,reinforcement_count:1};
-  let qa=false;
-  const tools=fakeTools(input=>input.name.endsWith('__search_notes')?mcpResult({results:notes}):mcpResult({title:notes[3].title,permalink:input.arguments.identifier,checksum:'c',content:'- [preference] '+value,
-    frontmatter:{status:'active',memory_id:input.arguments.identifier,recorded_at:START,...(input.arguments.identifier.endsWith('3')?{...fresh,qa_fixture:qa}:{})}}));
-  const ctx={config:{...resolveConfig({maxRecallNotes:4}),...opts(120)},tools,agent:fakeAgent(TARGET_SESSION),messages:[directUser('我有什么习惯')]};
-  const recalled=await recallForTurn(ctx);
-  assert.match(recalled,/personal\/chats\/facts\/n3/);
-  // The 37.5-day half-life read from the note, not the default 30, sets this score.
-  assert.match(recalled,/\(score 0\.39\) \| personal\/chats\/facts\/n3/);
-  qa=true;assert.doesNotMatch(await recallForTurn(ctx),/personal\/chats\/facts\/n3/);
-  assert.equal((await recallForTurn({...ctx,messages:[directUser('荞麦茶')],config:{...ctx.config,...opts(240)}})).includes('n3'),false);
 });
 
 test('duplicate ADD and factual correction reuse reinforcement; history keeps the old decay anchor',async()=>{
