@@ -4,7 +4,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {zstdCompressSync} from 'node:zlib';
-import {DatabaseSync} from 'node:sqlite';
 import {Context} from '@deepseek-ai/cordis';
 import {SessionStore} from '@deepseek-ai/dsh-session';
 import {sessionFormatCatalog} from '@deepseek-ai/dsh-session-format-catalog';
@@ -58,11 +57,10 @@ test('exclusion survives restart, reimport and model switch without embedding ex
 });
 
 test('fact softening follows verified message IDs across restart and model identities',async t=>{
-  const dir=await temp(t),vault=path.join(dir,'vault'),state=path.join(dir,'basic-memory-state');await fs.mkdir(vault);await fs.mkdir(state);
-  const facts=new DatabaseSync(path.join(state,'memory.db'));
-  facts.exec('CREATE TABLE project(id INTEGER,name TEXT,path TEXT); CREATE TABLE entity(project_id INTEGER,entity_metadata TEXT);');
-  facts.prepare('INSERT INTO project VALUES(?,?,?)').run(1,'main',vault);
-  facts.prepare('INSERT INTO entity VALUES(?,?)').run(1,JSON.stringify({memory_id:'memory-fixture',memory_kind:'fact',soften_count:2,soften_factor:0.5,sources:JSON.stringify([{message_id:'linked-message'}])}));facts.close();
+  const dir=await temp(t),vault=path.join(dir,'vault'),facts=path.join(vault,'chats','facts');await fs.mkdir(facts,{recursive:true});
+  const note=metadata=>'---\n'+Object.entries(metadata).map(([key,value])=>key+': '+(typeof value==='string'?JSON.stringify(value):value)).join('\n')+'\n---\n\n老物件。\n';
+  await fs.writeFile(path.join(facts,'softened.md'),note({title:'老物件',memory_id:'memory-fixture',memory_kind:'fact',soften_count:2,soften_factor:0.5,sources:JSON.stringify([{message_id:'linked-message'}])}));
+  await fs.writeFile(path.join(facts,'untouched.md'),note({title:'新物件',memory_id:'memory-plain',memory_kind:'fact',sources:JSON.stringify([{message_id:'linked-reply'}])}));
   const file=path.join(dir,'raw.sqlite');let store=new RawMemoryStore(file);
   const input={scope:'owner:a',sessionId:'session-fixture-linked',turn:1,completedAt:1,messages:[{id:'linked-message',role:'user',text:'老物件。'},{id:'linked-reply',role:'assistant',text:'老物件。'}]};
   await archive(store,embedding(),input);assert.equal(syncFactualPriorities(store,{vaultPath:vault,scope:'owner:a'}).sources,1);store.close();

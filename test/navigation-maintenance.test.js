@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { memoryStore } from './fake-memory.js';
-import { fakeAgent, fakeLlm, directUser, runPreStep, TARGET_SESSION } from './helpers.js';
+import { fakeAgent, fakeLlm, directUser, runPreStep, TARGET_SESSION, toolVaultBackend } from './helpers.js';
 import { resolveConfig } from '../lib/config.js';
 import { recallNavigation, noteMatchesProjectPath } from '../lib/navigation.js';
 import { maintainIndexes } from '../lib/maintenance.js';
@@ -150,7 +150,7 @@ test('profile read failure and invalid ownership stay failures instead of report
   const store=memoryStore();seed(store);
   const base=store.tools;
   let offline=true;
-  const tools={get(name,agent){const d=base.get(name,agent);return {...d,execute:async(args,exec)=>{
+  const tools={get vaultBackend(){return toolVaultBackend(this);},get(name,agent){const d=base.get(name,agent);return {...d,execute:async(args,exec)=>{
     if(name.endsWith('__read_note') && args.identifier===profileId && offline) throw new Error('connection unavailable');
     return d.execute(args,exec);
   }};}};

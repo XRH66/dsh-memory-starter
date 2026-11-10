@@ -100,7 +100,7 @@ try{
         }
         store=new RawMemoryStore(dbFile);
         recall=createRawRecall({config,ownerSubject:scope,store,logger:{warn:m=>process.stderr.write(m+'\n')}});
-        const priorities=syncFactualPriorities(store,{scope,vaultPath:config.vaultPath});
+        const priorities=syncFactualPriorities(store,{scope,vaultPath:config.vaultPath,captureFolder:config.captureFolder});
         if(command==='apply'){
           const controller=new AbortController();process.once('SIGINT',()=>controller.abort());
           const statistics=await applyHistory(plan,{store,recall,maxTurns:number('max-turns',Infinity),batchSize:number('batch-size',16),signal:controller.signal,onProgress:async progress=>{

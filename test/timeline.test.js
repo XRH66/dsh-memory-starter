@@ -9,7 +9,7 @@ import { createTimelineReader, invalidateTimeline, renderTimeline, timelineCandi
 import { applyMemoryActions, softenMemory } from '../lib/memory.js';
 import { setPersonalTimeZone } from '../lib/personal-namespace.js';
 import { memoryStore } from './fake-memory.js';
-import { directUser, fakeAgent, fakeLlm, fakeTools, mcpResult, runPreStep } from './helpers.js';
+import { directUser, fakeAgent, fakeLlm, fakeTools, mcpResult, runPreStep, toolVaultBackend } from './helpers.js';
 
 const NOW = Date.parse('2026-10-27T02:00:00.000Z');
 setPersonalTimeZone('Asia/Shanghai');
@@ -185,7 +185,7 @@ test('a failed event move rolls back material-change provenance, including for a
   const added = await applyMemoryActions(ctx, [action], { sessionId: 'a', turn: 1, sourceEventTime: NOW, now: () => new Date(NOW) });
   const id = added.results[0].memoryId, old = [...store.notes.values()].find(n => n.frontmatter.memory_id === id);
   for (const key of Object.keys(old.frontmatter)) if (key.startsWith('content_change') || key.startsWith('content_changed')) delete old.frontmatter[key];
-  const tools = { ...store.tools, get(name, agent) {
+  const tools = { ...store.tools, get vaultBackend() { return toolVaultBackend(this); }, get(name, agent) {
     const definition = store.tools.get(name, agent);
     return name === 'mcp__basic_memory__move_note' ? { ...definition, execute: async () => { throw Error('move unavailable'); } } : definition;
   } };

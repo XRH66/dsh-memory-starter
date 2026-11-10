@@ -1,27 +1,29 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs/promises';import path from 'node:path';
-import {apply} from '../lib/platform-host.js';import {memoryStore} from './fake-memory.js';
+import {apply} from '../lib/platform-host.js';
 import {apply as applyBundle,Config as BundleConfig} from '../lib/bundle-entry.js';
 import {createPersonaRenderer} from '../lib/persona-source.js';
 import {deploymentStaticFingerprint} from '../lib/deployment-config.js';
+import {scratchDirectory} from './helpers.js';
 
 test('explicit persona reads the selected vault and refuses outside profiles',async()=>{
- const root=await fs.mkdtemp(path.resolve('.local/persona-source-')),vault=path.join(root,'vault'),base=path.join(root,'persona.md'),self=path.join(vault,'self.md'),outside=path.join(root,'outside.md');await fs.mkdir(vault);await fs.writeFile(base,'基础人设');await fs.writeFile(self,'---\ntitle: test\n---\n<!-- dafeiyu-record kind=thoughts -->\n成长经历');await fs.writeFile(outside,'<!-- dafeiyu-record kind=thoughts -->\n外部档案');
+ const root=await scratchDirectory('persona-source-'),vault=path.join(root,'vault'),base=path.join(root,'persona.md'),self=path.join(vault,'self.md'),outside=path.join(root,'outside.md');await fs.mkdir(vault);await fs.writeFile(base,'基础人设');await fs.writeFile(self,'---\ntitle: test\n---\n<!-- dafeiyu-record kind=thoughts -->\n成长经历');await fs.writeFile(outside,'<!-- dafeiyu-record kind=thoughts -->\n外部档案');
  const render=createPersonaRenderer({directory:root,basePersona:base,selfProfile:self});assert.match(render(),/基础人设[\s\S]*成长经历/);assert.throws(()=>createPersonaRenderer({directory:root,selfProfile:outside})(),/inside the selected personal vault/);
  await fs.writeFile(self,'无标记档案');assert.throws(()=>render(),/owned thoughts record/);
 });
 
-test('bundle defaults to the existing bridge and rejects unknown modes',async()=>{
+test('bundle rejects removed and unknown modes and only serves setup until configured',async()=>{
  const registered=new Map(),ctx={tools:{register(tool){registered.set(tool.name,tool);return()=>registered.delete(tool.name);}},agents:{},llm:{},logger:{},on(){}};
  assert.throws(()=>applyBundle(ctx,{mode:'typo'}),/Unknown memory runtime mode/);
  const parsed=BundleConfig({mode:'portable',personal:{directory:'fixture'}});assert.equal(parsed.mode,'portable');assert.equal(parsed.personal.directory,'fixture');
- const bridge=applyBundle(ctx,{});assert.equal(typeof bridge.onRequest,'function');assert.equal(registered.size,3);await bridge.dispose();
+ for(const mode of ['legacy','unified'])assert.throws(()=>applyBundle(ctx,{mode}),new RegExp('已不支持 '+mode+' 模式'));
+ assert.equal(applyBundle(ctx,{}),undefined);assert.equal(registered.size,0);
 });
 
 test('personal host exposes one core service with explicitly selected DSH sessions',async()=>{
- const directory=await fs.mkdtemp(path.resolve('.local/personal-host-')),handlers=new Map(),effects=[],services=new Map(),registered=new Map(),memory=memoryStore();let opens=0;
- const ctx={llm:{},logger:{},agents:{get:()=>undefined},tools:{register(tool){registered.set(tool.name,tool);return()=>registered.delete(tool.name);}},memoryConnections:{acquire:async()=>{opens++;return memory;}},on(name,fn){handlers.set(name,fn);return()=>handlers.delete(name);},effect(fn){const dispose=fn();effects.push(dispose);},provide(name,value){services.set(name,value);}};
+ const directory=await scratchDirectory('personal-host-'),handlers=new Map(),effects=[],services=new Map(),registered=new Map();
+ const ctx={llm:{},logger:{},agents:{get:()=>undefined},tools:{register(tool){registered.set(tool.name,tool);return()=>registered.delete(tool.name);}},on(name,fn){handlers.set(name,fn);return()=>handlers.delete(name);},effect(fn){const dispose=fn();effects.push(dispose);},provide(name,value){services.set(name,value);}};
  await apply(ctx,{directory,sessionIds:['session-personal'],ownerSubject:'owner:test',memory:{captureProvider:'fixture',captureModel:'fixture'}});
- const service=services.get('memoryPersonal');assert.ok(service);assert.equal(service.ownerSubject,'owner:test');assert.equal(opens,1);assert.equal(service.acceptsDshSession('session-personal'),true);assert.equal(service.acceptsDshSession('session-foreign'),false);
+ const service=services.get('memoryPersonal');assert.ok(service);assert.equal(service.ownerSubject,'owner:test');assert.equal(service.acceptsDshSession('session-personal'),true);assert.equal(service.acceptsDshSession('session-foreign'),false);
  assert.equal(await handlers.get('agent/request')({agent:{id:'session-other'}},async()=>42),42);
  assert.deepEqual([...registered.keys()].sort(),['dafeiyu_records','recent_conversation','soften_memory'].sort());
  for(const tool of registered.values())await assert.rejects(tool.execute({}, {agent:{session:{id:'session-other'}}}),/limited to selected/);
@@ -32,13 +34,13 @@ test('personal host exposes one core service with explicitly selected DSH sessio
  for(const dispose of effects.reverse())await dispose?.();assert.equal(registered.size,0);
 });
 test('personal host refuses implicit directories and transport session IDs',async()=>{
- const ctx={memoryConnections:{acquire:async()=>{throw Error('must not connect');}}};
+ const ctx={};
  await assert.rejects(apply(ctx,{directory:'relative',sessionIds:[]}),/explicit/);
  await assert.rejects(apply(ctx,{directory:path.resolve('.local'),sessionIds:['not-a-session']}),/explicit/);
 });
 test('live selection changes wait for each already-running turn to finish',async()=>{
- const directory=await fs.mkdtemp(path.resolve('.local/personal-live-')),handlers=new Map(),effects=[],services=new Map(),memory=memoryStore(),agents=new Map([['session-one',{status:'running'}],['session-two',{status:'running'}]]),cfg={ownerDirectory:directory,dshSessionIds:['session-one'],extra:'stable'};let applied='';
- const ctx={llm:{},logger:{},agents:{get:id=>agents.get(id)},tools:{register(){return()=>{};}},memoryConnections:{acquire:async()=>memory},on(name,fn){handlers.set(name,fn);},effect(fn){effects.push(fn());},provide(name,value){services.set(name,value);}};
+ const directory=await scratchDirectory('personal-live-'),handlers=new Map(),effects=[],services=new Map(),agents=new Map([['session-one',{status:'running'}],['session-two',{status:'running'}]]),cfg={ownerDirectory:directory,dshSessionIds:['session-one'],extra:'stable'};let applied='';
+ const ctx={llm:{},logger:{},agents:{get:id=>agents.get(id)},tools:{register(){return()=>{};}},on(name,fn){handlers.set(name,fn);},effect(fn){effects.push(fn());},provide(name,value){services.set(name,value);}};
  await apply(ctx,{directory,sessionIds:cfg.dshSessionIds,ownerSubject:'owner:test',memory:{captureProvider:'fixture',captureModel:'fixture'},configurationStaticFingerprint:deploymentStaticFingerprint(cfg),deployment:{async markApplied(value){applied=value;}}});
  const service=services.get('memoryPersonal');assert.equal(service.acceptsDshSession('session-one'),true);assert.equal(service.acceptsDshSession('session-two'),false);
  await service.applySessionSelection({...cfg,dshSessionIds:['session-two']},'rev-new');assert.equal(applied,'rev-new');

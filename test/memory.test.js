@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { applyMemoryActions, createSoftenTool, loadCaptureCandidates, MEMORY_MARKER, MemoryError, softenMemory } from '../lib/memory.js';
 import { setPersonalTimeZone } from '../lib/personal-namespace.js';
-import { fakeAgent } from './helpers.js';
+import { fakeAgent, toolVaultBackend } from './helpers.js';
 import { memoryStore, makeVault } from './fake-memory.js';
 
 setPersonalTimeZone('Asia/Shanghai');
@@ -54,7 +54,7 @@ function factAction(overrides = {}) {
 test('a later failed write reports the earlier committed memory instead of losing it', async () => {
   const store=memoryStore();
   let writes=0;
-  const tools={...store.tools,get(name,agent){
+  const tools={...store.tools,get vaultBackend(){return toolVaultBackend(this);},get(name,agent){
     const def=store.tools.get(name,agent);
     if(name!=='mcp__basic_memory__write_note') return def;
     return {...def,async execute(args,exec){
@@ -96,6 +96,7 @@ function withYamlFrontmatter(store, { changeBodyOnEdit = false } = {}) {
   };
   return {
     ...base,
+    get vaultBackend() { return toolVaultBackend(this); },
     get(name, agent) {
       const definition = base.get(name, agent);
       if (!definition) return definition;
@@ -426,7 +427,7 @@ test('structured soften leaves a concurrent Markdown revision untouched', async 
   const { store, note, ctx, id } = structuredSoftenFixture();
   const frontmatter = structuredClone(note.frontmatter);
   const editedBody = note.content + '并发人工修改。\n';
-  ctx.tools = { get(name, agent) {
+  ctx.tools = { get vaultBackend() { return toolVaultBackend(this); }, get(name, agent) {
     const definition = store.tools.get(name, agent);
     if (!name.endsWith('__edit_note')) return definition;
     return { ...definition, execute(args, exec) {

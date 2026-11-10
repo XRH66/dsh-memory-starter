@@ -1,4 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { after } from 'node:test';
+import { toolFailureText, unwrapToolValue } from '../lib/mcp.js';
 
 export const TARGET_SESSION = 'session-fixture-primary';
 export const OTHER_SESSION = 'session-00000000-0000-0000-0000-000000000000';
@@ -26,20 +30,104 @@ export function mcpError(message) {
   return { isError: true, error: { message }, content: [{ type: 'text', text: message }] };
 }
 
+const VAULT_TOOL_NAMES = Object.freeze({
+  read: 'mcp__basic_memory__read_note',
+  write: 'mcp__basic_memory__write_note',
+  edit: 'mcp__basic_memory__edit_note',
+  list: 'mcp__basic_memory__list_directory',
+  search: 'mcp__basic_memory__search_notes',
+  move: 'mcp__basic_memory__move_note',
+});
+const CONFLICT_RE = /checksum|conflict|modified|already exists|no match|multiple|not found/i;
+const vaultFail = (code, message, details = {}) => Object.assign(Error(message), { code, ...details });
+
+/**
+ * Test-only Vault backend that routes every operation through a scoped tool
+ * double (`tools.get(name).execute`). It keeps per-call recording, lazy tool
+ * lookup and fault injection available to tests; production code only knows the
+ * backend contract of lib/vault-files.js.
+ */
+export function toolVaultBackend(tools, names = VAULT_TOOL_NAMES) {
+  async function call(context, key, args) {
+    context?.check?.();
+    const name = names[key], execArgs = { project: context?.project, output_format: 'json', ...args };
+    let definition;
+    try { definition = tools?.get?.(name, context?.agent); }
+    catch (error) { throw vaultFail('MEMORY_BACKEND_ERROR', error instanceof Error ? error.message : String(error)); }
+    if (!definition || typeof definition.execute !== 'function') throw vaultFail('MEMORY_BACKEND_ERROR', 'scoped tool is unavailable: ' + name);
+    const callId = 'vault-' + randomUUID();
+    let raw;
+    try {
+      raw = await definition.execute(execArgs, {
+        callId, rootCallId: callId, name, arguments: execArgs, agent: context?.agent,
+        signal: context?.signal ?? new AbortController().signal, token: Symbol(name), deferContext() {}, concludeTurn() {},
+        memoryAuthorization: () => { try { context?.check?.(); return true; } catch { return false; } },
+      });
+    } catch (error) { throw vaultFail('MEMORY_BACKEND_ERROR', error instanceof Error ? error.message : String(error)); }
+    const result = raw && typeof raw === 'object' && Object.hasOwn(raw, 'isError') ? raw : { isError: false, value: raw, content: [] };
+    context?.check?.();
+    if (result?.isError) {
+      const text = toolFailureText(result);
+      throw vaultFail(key === 'read' || !CONFLICT_RE.test(text) ? 'MEMORY_BACKEND_ERROR' : 'MEMORY_WRITE_CONFLICT', text);
+    }
+    const value = unwrapToolValue(result);
+    if (value?.error === 'NOTE_NOT_FOUND') return null;
+    if (value?.error === 'NOTE_SYNC_PENDING') {
+      throw vaultFail('MEMORY_NOTE_SYNC_PENDING', 'Local Markdown is awaiting synchronization', { retryable: true });
+    }
+    if (value?.error || value?.action === 'conflict') {
+      const text = String(value.message ?? value.error ?? 'conflict');
+      const conflict = key !== 'read' && (value.action === 'conflict' || CONFLICT_RE.test(text));
+      throw vaultFail(conflict ? 'MEMORY_WRITE_CONFLICT' : 'MEMORY_BACKEND_ERROR', text);
+    }
+    return value;
+  }
+  return {
+    async read(identifier, context) {
+      const value = await call(context, 'read', { identifier, include_content: true, include_frontmatter: true,
+        ...(context?.knownFilePath ? { known_file_path: context.knownFilePath } : {}) });
+      return value ? { ...value, metadata: value.frontmatter ?? value.metadata ?? {} } : null;
+    },
+    write: (input, context) => call(context, 'write', input),
+    edit: (input, context) => call(context, 'edit', input),
+    async list(directory, context) {
+      const nodes = [];
+      for (let page = 1; page <= 10000; page++) {
+        const value = await call(context, 'list', { dir_name: directory, depth: 1, page, page_size: 100, sort: 'updated_desc' });
+        const pageNodes = Array.isArray(value) ? value : value?.nodes ?? value?.files ?? value?.results ?? [];
+        nodes.push(...pageNodes);
+        const more = typeof value?.has_more === 'boolean' ? value.has_more : typeof value?.total === 'number' ? page * 100 < value.total : pageNodes.length >= 100;
+        if (!more || !pageNodes.length) break;
+      }
+      return nodes;
+    },
+    async search(input, context) {
+      const value = await call(context, 'search', input);
+      return Array.isArray(value) ? value : value?.results ?? [];
+    },
+    move: (input, context) => call(context, 'move', input),
+  };
+}
+
+/**
+ * A scratch directory under the repository's ignored .local folder. It is removed when the
+ * calling test finishes, so repeated runs do not pile up fixture trees. Removal is best effort:
+ * a handle still open on Windows leaves the directory behind instead of failing the test.
+ */
+export async function scratchDirectory(prefix) {
+  const parent = path.resolve('.local');
+  await fs.mkdir(parent, { recursive: true });
+  const directory = await fs.mkdtemp(path.join(parent, prefix));
+  after(() => fs.rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => {}));
+  return directory;
+}
+
 export function fakeTools(handler) {
   const calls = [];
   const getCalls = [];
   const tools = {
     calls,
     getCalls,
-    legacyVaultToolNames:Object.freeze({
-      read:'mcp__basic_memory__read_note',
-      write:'mcp__basic_memory__write_note',
-      edit:'mcp__basic_memory__edit_note',
-      list:'mcp__basic_memory__list_directory',
-      search:'mcp__basic_memory__search_notes',
-      move:'mcp__basic_memory__move_note',
-    }),
     get(name, agent) {
       getCalls.push({ name, agent });
       return {
@@ -70,40 +158,7 @@ export function fakeTools(handler) {
       return handler(input);
     },
   };
-  const call=async(name,args)=>{
-    const result=await handler({name:'mcp__basic_memory__'+name,arguments:args});
-    return result?.value?.structuredContent?.result??result?.structuredContent?.result;
-  };
-  tools.vaultBackend={
-    async read(identifier){
-      const value=await call('read_note',{identifier});
-      if(!value||value.error==='NOTE_NOT_FOUND')return null;
-      return {...value,metadata:value.frontmatter??value.metadata??{}};
-    },
-    async write(input){
-      const value=await call('write_note',input);
-      if(value?.action==='conflict'||value?.error)throw Object.assign(Error(String(value.error??'write conflict')),{code:'MEMORY_WRITE_CONFLICT'});
-      return value;
-    },
-    async edit(input){
-      const value=await call('edit_note',input);
-      if(value?.action==='conflict'||value?.error)throw Object.assign(Error(String(value.error??'edit conflict')),{code:'MEMORY_WRITE_CONFLICT'});
-      return value;
-    },
-    async list(directory){
-      const value=await call('list_directory',{dir_name:directory});
-      return Array.isArray(value)?value:value?.nodes??[];
-    },
-    async search(input){
-      const value=await call('search_notes',input);
-      return Array.isArray(value)?value:value?.results??[];
-    },
-    async move(input){
-      const value=await call('move_note',input);
-      if(value?.error)throw Object.assign(Error(String(value.error)),{code:'MEMORY_WRITE_CONFLICT'});
-      return value;
-    },
-  };
+  tools.vaultBackend=toolVaultBackend(tools);
   return tools;
 }
 

@@ -7,9 +7,10 @@ import {createPersonaRenderer,addSelectedPersona} from '../lib/persona-source.js
 import {createPureGate} from '../lib/pure-gate.js';
 import {apply} from '../lib/platform-host.js';
 import {memoryStore} from './fake-memory.js';
+import {scratchDirectory} from './helpers.js';
 
 async function personaFixture(){
-  const root=await fsp.mkdtemp(path.resolve('.local/pure-gate-')),vault=path.join(root,'vault'),base=path.join(root,'persona.md'),self=path.join(vault,'self.md');
+  const root=await scratchDirectory('pure-gate-'),vault=path.join(root,'vault'),base=path.join(root,'persona.md'),self=path.join(vault,'self.md');
   await fsp.mkdir(vault);
   await fsp.writeFile(base,'BASE_PERSONA_TEXT');
   await fsp.writeFile(self,'---\ntitle: test\n---\n<!-- dafeiyu-record kind=thoughts -->\nSELF_PROFILE_TEXT');
@@ -76,38 +77,37 @@ test('selected persona keeps one persona source and strips both sections when su
   assert.deepEqual(blocked.sections,[]);assert.equal(calls,1,'no renderer call while suppressed');
 });
 
-test('the personal host gates every renderer, including an external connections.renderPersona',async t=>{
-  const directory=await fsp.mkdtemp(path.resolve('.local/pure-host-')),handlers=new Map(),effects=[],memory=memoryStore();
-  let calls=0,installed=true,state=STARTING;
+test('the personal host gates the configured persona renderer',async t=>{
+  const directory=await scratchDirectory('pure-host-'),handlers=new Map(),effects=[],persona=path.join(directory,'persona.md');
+  await fsp.writeFile(persona,'EXTERNAL_PERSONA');
+  let installed=true,state=STARTING;
   const ctx={llm:{},logger:{},agents:{get:()=>undefined},tools:{register(){return()=>{};}},
-    memoryConnections:{acquire:async()=>memory,renderPersona(){calls++;return 'EXTERNAL_PERSONA';}},
     on(name,fn){handlers.set(name,fn);return()=>handlers.delete(name);},effect(fn){effects.push(fn());},
     provide(){},get(name){return name==='pureMode'&&installed?{check:()=>state}:undefined;}};
-  await apply(ctx,{directory,sessionIds:['session-personal'],ownerSubject:'owner:test',memory:{captureProvider:'fixture',captureModel:'fixture'}});
+  await apply(ctx,{directory,sessionIds:['session-personal'],ownerSubject:'owner:test',persona:{basePersona:persona},memory:{captureProvider:'fixture',captureModel:'fixture'}});
   const assemble=handlers.get('system-prompt/assemble');
   const withPersona={sections:[{name:'deployment:dafeiyu-persona',text:'GLOBAL_PERSONA'},{name:'engineering:AGENTS',text:'KEEP'}]};
   const plain={sections:[{name:'engineering:AGENTS',text:'KEEP'}]};
   try{
     state=ACTIVE;
     assert.deepEqual((await assemble(withPersona,{agent:{id:'session-personal'}},async()=>withPersona)).sections.map(s=>s.name),['engineering:AGENTS']);
-    assert.equal(calls,0,'suppressed before the external renderer callback');
+    assert.equal(withPersona.sections.length,2,'source assembly is left untouched by this hook');
     state=STARTING;
     assert.deepEqual((await assemble(withPersona,{agent:{id:'session-personal'}},async()=>withPersona)).sections.map(s=>s.name),['engineering:AGENTS']);
-    assert.equal(calls,0);
     state=INACTIVE;
     const added=await assemble(plain,{agent:{id:'session-personal'}},async()=>plain);
     assert.deepEqual(added.sections.map(s=>s.name),['memory:selected-persona','engineering:AGENTS']);
-    assert.equal(added.sections[0].text,'EXTERNAL_PERSONA');assert.equal(calls,1);
+    assert.equal(added.sections[0].text,'EXTERNAL_PERSONA');
     const untouched=await assemble(withPersona,{agent:{id:'session-other'}},async()=>withPersona);
-    assert.equal(untouched,withPersona);assert.equal(calls,1,'unselected sessions are not injected');
+    assert.equal(untouched,withPersona,'unselected sessions are not injected');
     installed=false;
     const noPlugin=await assemble(plain,{agent:{id:'session-personal'}},async()=>plain);
-    assert.equal(noPlugin.sections[0].name,'memory:selected-persona');assert.equal(calls,2,'missing plugin keeps normal behaviour');
+    assert.equal(noPlugin.sections[0].name,'memory:selected-persona','missing plugin keeps normal behaviour');
   }finally{for(const dispose of effects.reverse())await dispose?.();}
 });
 
 test('a scope-only prompt context resolves the real host agent before deciding',async t=>{
-  const directory=await fsp.mkdtemp(path.resolve('.local/pure-scope-')),handlers=new Map(),effects=[],memory=memoryStore();
+  const directory=await scratchDirectory('pure-scope-'),handlers=new Map(),effects=[],memory=memoryStore();
   const seen=[],hostAgent={session:{id:'session-personal'}};
   const ctx={llm:{},logger:{},agents:{get:id=>id==='session-personal'?hostAgent:undefined},tools:{register(){return()=>{};}},
     memoryConnections:{acquire:async()=>memory},on(name,fn){handlers.set(name,fn);return()=>handlers.delete(name);},effect(fn){effects.push(fn());},provide(){},
@@ -122,7 +122,7 @@ test('a scope-only prompt context resolves the real host agent before deciding',
 });
 
 test('an installed service with no resolvable host agent suppresses instead of reading',async t=>{
-  const directory=await fsp.mkdtemp(path.resolve('.local/pure-unresolved-')),handlers=new Map(),effects=[],memory=memoryStore(),warnings=[];
+  const directory=await scratchDirectory('pure-unresolved-'),handlers=new Map(),effects=[],memory=memoryStore(),warnings=[];
   let calls=0;
   const ctx={llm:{},logger:{warn:message=>warnings.push(message)},agents:{get:()=>undefined},tools:{register(){return()=>{};}},
     memoryConnections:{acquire:async()=>memory,renderPersona(){calls++;return 'EXTERNAL_PERSONA';}},

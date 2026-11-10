@@ -1,76 +1,18 @@
 # dsh-basic-memory-bridge
 
-**交付状态（0.3.0）。** 本版源码对应本机日常使用的 portable 主链。复现该链路的通用安装包尚未生成，对应配置的干净安装仍待验收。QQBridge 接入和 unified 模式已移除；源码保留 portable 与 legacy 入口。starter 的公开固定组合仍属旧版兼容部署。
+**交付状态（0.3.0）。** 本版源码对应本机日常使用的 portable 主链。复现该链路的通用安装包尚未生成，对应配置的干净安装仍待验收。QQBridge 接入、unified 模式、legacy 模式和 Basic Memory 连接均已移除。
 
-本页说明模式、旧版安装和现行 portable 的设置入口。源码工作副本的 `docs/项目导航.md` 索引本机运行流程、项目状态和开发记录；这些资料只在源码工作副本查阅。源码中的 `release-files.json` 是发行白名单，普通 npm 包选取其中的运行文件与随包说明。
+本页说明运行方式和 portable 的设置入口。源码工作副本的 `docs/项目导航.md` 索引本机运行流程、项目状态和开发记录；这些资料只在源码工作副本查阅。源码中的 `release-files.json` 是发行白名单，普通 npm 包选取其中的运行文件与随包说明。
 
-把官方 Basic Memory 接入 DeepSeek Harness 的个人长期记忆流程。非官方插件；MIT。
+DeepSeek Harness 的个人长期记忆插件：逐会话正向授权、程序存原文、按需查询、后台合批整理和结构化条目。正文以 Markdown 保存在本地 Vault，可用 Obsidian 直接打开；想法与日记同样以 Markdown 保存。非官方插件；MIT。
 
-本仓库同时保留旧版自动召回，以及 portable 中的正向授权、程序存原文、按需查询、后台合批和结构化条目。想法与日记以 Markdown 保存。启用的入口决定实际行为。
+## 运行方式
 
-旧版配套组合（DSH 记忆与人设，可选第三方 Agent 共享维护）见 [codex-deepseek-starter](https://github.com/XRH66/codex-deepseek-starter)。单独部署旧记忆桥见下方兼容接入。
+只有 portable 一种运行方式。`mode: 'legacy'` 和 `mode: 'unified'` 启动时会直接报错；旧自动召回入口、旧 unified／Suzu 宿主入口和旧逐轮提炼均已移除。尚未完成首次配置时，插件只提供「记忆框架」设置页，不读也不记任何对话。
 
-## 运行模式
+默认不读不记。在「记忆框架」选中会话并打开对话记忆，从后续新回合开始保存双方正文；需要时由对话模型调用工具搜索、展开。固定人设独立保留，自我档案按会话授权读取。向量选择、全域索引准备和切换见[随包模型说明](MODEL-SETUP.zh-CN.md)。
 
-| 模式 | 用途 |
-| --- | --- |
-| `portable` | 日常个人记忆入口。使用私有 Basic Memory 连接和原文库。启用正向授权时，用户逐会话开启记忆，当前模型按需调用搜索和展开。 |
-| `legacy` | 旧宿主与公开兼容用法。按配置启用原始 Basic Memory MCP 和旧自动召回。下方 legacy 接入章节说明这条路径。 |
-
-`mode: 'unified'` 启动时会直接报错；旧 unified／Suzu 宿主入口和旧逐轮提炼均已移除。
-
-现行 portable 默认不读不记。在「记忆框架」选中会话并打开对话记忆，从后续新回合开始保存双方正文；需要时由对话模型调用工具搜索、展开。固定人设独立保留，自我档案按会话授权读取。向量选择、全域索引准备和切换见[随包模型说明](MODEL-SETUP.zh-CN.md)。
-
-日常 portable 的加载身份可在「记忆框架」和 `/api/basic-memory-settings/sessions` 的 `runtime: "loaded"` 核对。私有 Basic Memory 连接由记忆框架管理。
-
-## 旧版兼容安装前置
-
-下方公开固定的 legacy 组合已验证 DSH 0.2.1-rc.2，使用 Basic Memory 0.24.1、Node.js 22.19+ 或 24+。本机现行 portable 使用 DSH 0.2.1-rc.5、Node.js 24.9+；DSH 0.2.2-alpha.2 的兼容另行验收。
-
-[Basic Memory 官方仓库](https://github.com/basicmachines-co/basic-memory)、[官方安装说明](https://docs.basicmemory.com/local/local-install)：
-
-```powershell
-uv tool install basic-memory==0.24.1
-```
-
-[Obsidian 官方发布仓库](https://github.com/obsidianmd/obsidian-releases)：
-
-```powershell
-winget install --exact --id Obsidian.Obsidian --source winget
-```
-
-不打包这两个软件、虚拟环境、个人 Vault 或数据库。Obsidian客户端不适用本仓库 MIT 许可。
-
-## Legacy 兼容接入（可选）
-
-以下命令在选定的独立 Harness profile 安装旧版 `legacy` 组件。桥使用 starter 0.3.0 的固定提交，第三方会话设置使用 2026-10-25 的固定 dist。现行 portable 使用私有连接和自己的会话开关。
-
-```powershell
-dsh plugin --profile web add github:XRH66/dsh-basic-memory-bridge#8180905355e5d59d81c3e867681cf68165509435
-dsh plugin --profile web add github:u9521/dsh-session-settings#237537bb11663fd02bb14e5b415c92ff1a4320cd
-```
-
-1. 在仓库外选择数据目录，创建其 `vault` 子目录。设置 `BASIC_MEMORY_CONFIG_DIR` 为同一数据目录下的 `basic-memory-state`，使项目登记与MCP使用相同配置。
-2. 用官方CLI登记：`basic-memory project add personal <vault绝对路径> --local`。
-3. 在 dsh-session-settings 导入 MCP JSON，server名称必须是 `basic_memory`：
-
-```json
-{
-  "mcpServers": {
-    "basic_memory": {
-      "transport": "stdio",
-      "command": "basic-memory",
-      "args": ["mcp", "--project", "personal"],
-      "env": { "BASIC_MEMORY_CONFIG_DIR": "<与登记时相同的绝对路径>" }
-    }
-  }
-}
-```
-
-4. 按实际环境替换尖括号内容；若服务进程找不到命令，使用 `Get-Command basic-memory` 返回的实际程序路径。探测工具后，只在需要 legacy 个人记忆的聊天会话勾选此 MCP，确认模型可见 `mcp__basic_memory__search_notes`、`read_note`、`write_note` 等。工程派工工作区保持关闭；不要全局启用后再依赖各会话逐一关闭。
-5. 给 `id: basic-memory-bridge` 的 Cordis配置设置 `project: personal`、`vaultPath: <同一个vault绝对路径>`。该插件不会替你挂载MCP，也不会自动修改会话开关。
-
-Legacy 模式的所有启用会话共享 `personal` 库；portable 模式使用独立连接访问同一记忆根下的 `main` 项目。两种模式的管理状态及人工待审清单都位于 Vault 同级 `management/`，不进入记忆索引。
+加载身份可在「记忆框架」和 `/api/basic-memory-settings/sessions` 的 `runtime: "loaded"` 核对。记忆正文由插件直接读写 Vault 中的 Markdown，不需要安装 Basic Memory；宿主另外挂载的 `basic_memory` MCP 服务不会被本插件使用。管理状态及人工待审清单位于 Vault 同级 `management/`，不进入记忆索引。
 
 ## 可选人设和状态面板
 
@@ -78,7 +20,7 @@ Legacy 模式的所有启用会话共享 `personal` 库；portable 模式使用�
 
 ## 参数与边界
 
-本节为旧自动召回与现行后台整理的兼容参数。现行 portable 的会话入口见[运行模式](#运行模式)，向量设置见[随包模型说明](MODEL-SETUP.zh-CN.md)。
+本节为后台整理等通用参数。会话入口见[运行方式](#运行方式)，向量设置见[随包模型说明](MODEL-SETUP.zh-CN.md)。
 
 默认事实召回3条/1200字符，个人记录2条/1600字符，索引1页/600字符；统一记忆上下文上限2400字符，前台召回各有1.5秒预算。近期动态默认最近48小时、最多8条/500字符；近期对话独立按估算16384 tokens容量保留，容量估算不等于模型账单。后台整理默认最多32768输出 tokens、10分钟超时，连续自动失败默认3次后暂停。遗忘按类型设置半衰期：事实／关系／偏好／习惯365天，目标／约定／看法／感想90天，事件／计划／待办／近况30天；重要度高则翻倍。衰减只降低排序且最多降一半，不隐藏记忆；只有用户淡化过的条目可能被排除。再次确认后优先级恢复到0.9、半衰期翻倍，上限730天；普通召回门槛0.1、权重底值0.01。强化沿用既有模型整理调用、24小时冷却和持久操作标识；语义判断仍可能漏记或误记。
 
@@ -114,13 +56,7 @@ Legacy 模式的所有启用会话共享 `personal` 库；portable 模式使用�
   "socialRoot": "<群目录绝对路径>",
   "dshHome": "<DSH目录绝对路径>",
   "dshSessionIds": ["session-<your-session-id>"],
-  "backend": {
-    "command": "<basic-memory 可执行文件>",
-    "embeddingCache": "<FastEmbed 缓存根目录>",
-    "offline": true
-  },
   "memory": {
-    "autoRecall": true,
     "autoCapture": true,
     "recentContext": true,
     "rawRecall": true,
@@ -132,7 +68,7 @@ Legacy 模式的所有启用会话共享 `personal` 库；portable 模式使用�
 }
 ```
 
-直接构造 portable 宿主时，同一份内容放在 `personal.memory`，不是构造参数的根节点：`personal: { directory, sessionIds, ownerSubject, memory: { ... } }`。`dshSessionIds` 与 `ownerSubject` 必须来自这个部署实例，也不是任意 legacy 配置。只绑定实际要授权原话检索的会话，未列出的会话不会拿到原话。
+直接构造 portable 宿主时，同一份内容放在 `personal.memory`，不是构造参数的根节点：`personal: { directory, sessionIds, ownerSubject, memory: { ... } }`。`dshSessionIds` 与 `ownerSubject` 必须来自这个部署实例。只绑定实际要授权原话检索的会话，未列出的会话不会拿到原话。
 
 轻量档只替换 `memory` 中的模型字段：`rawRecallModel: "BAAI/bge-small-zh-v1.5"`，并填写 `rawRecallPython` 与 `rawRecallCacheDir`，不要保留 Qwen 的 ONNX 路径。均衡档使用上面的 Qwen 0.6B 字段。切换 `rawRecallModel` 后，向量按模型身份隔离，不会把旧模型向量当作新模型结果。模型文件、解释器、缓存目录和 SQLite 都不进发行包；是否把原话保存在本机，由启用者自己决定。
 

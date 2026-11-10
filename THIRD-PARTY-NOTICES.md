@@ -30,8 +30,6 @@ DSH 会话开关及按需检索的方案比较也参考了 [eryucheng/dsh-suzu-m
 | --- | --- | --- |
 | DeepSeek Harness CLI、会话格式 catalog、session | 0.2.1-rc.5 / MIT | [DeepSeek 官方仓库](https://github.com/deepseek-ai/deepseek-harness)，包名 `@deepseek-ai/dsh`、`@deepseek-ai/dsh-session-format-catalog`、`@deepseek-ai/dsh-session` |
 | Schemastery fork | 3.18.5 / MIT | 同一官方仓库 `vendor/schemastery`，包名 `@deepseek-ai/schemastery` |
-| MCP TypeScript client | 2.4.0 / Apache-2.0 | [modelcontextprotocol/typescript-sdk](https://github.com/modelcontextprotocol/typescript-sdk)，包名 `@modelcontextprotocol/client`；原包署名 Anthropic, PBC |
-| Zod | 4.6.6 / MIT | [colinhacks/zod](https://github.com/colinhacks/zod)，原包署名 Colin McDonnell |
 | Node.js | 宿主环境提供 | [Node.js LICENSE](https://github.com/nodejs/node/blob/main/LICENSE)，包含运行时及第三方组件条款 |
 
 Suzu 固定核心的闭包只使用内部包及 Node 内置模块；内部导入已转换，因此没有要求新装额外 Suzu workspace 包。浏览器 React 与界面模块由 DSH 宿主提供，实际源码导入集合见候选 `candidate-files.json`。
@@ -48,7 +46,7 @@ Suzu 固定核心的闭包只使用内部包及 Node 内置模块；内部导入
 
 [Basic Machines / Basic Memory](https://github.com/basicmachines-co/basic-memory) 是此前方案使用的独立 Python/MCP 后端，既有部署基线为 0.24.1。该版本 [pyproject.toml](https://github.com/basicmachines-co/basic-memory/blob/v0.24.1/pyproject.toml) 明确声明 **AGPL-3.0-or-later**，[LICENSE 原文](https://github.com/basicmachines-co/basic-memory/blob/v0.24.1/LICENSE)为 GNU AGPL v3。
 
-本候选保留旧连接代码以满足 bundle 的模块依赖闭包；`mode: unified` 不 apply 旧分支，核心使用 Suzu，不启动旧 Basic Memory 捕获/整理器。Basic Memory 本身没有被复制、改许可或捆绑进本候选。既有 Markdown 与项目登记由迁移预览保留；若另外分发或部署 Basic Memory，应按其自身版本和许可处理。
+本项目已不再包含连接或启动 Basic Memory 的代码，也不再依赖 MCP 客户端；记忆正文由本项目直接读写 Markdown Vault。Basic Memory 本身没有被复制、改许可或捆绑进本候选。既有 Markdown 与项目登记由迁移预览保留；若另外分发或部署 Basic Memory，应按其自身版本和许可处理。
 
 ## 外部向量模型与运行后端
 

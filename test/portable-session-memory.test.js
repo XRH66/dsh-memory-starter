@@ -10,7 +10,7 @@ import {authorizedTools} from '../lib/worker.js';
 import {resolveConfig} from '../lib/config.js';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {memoryStore} from './fake-memory.js';
-import {fakeAgent,fakeLlm,runPreStep,directUser} from './helpers.js';
+import {fakeAgent,fakeLlm,runPreStep,directUser,toolVaultBackend} from './helpers.js';
 
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 const USER='我今后改用青瓷杯喝茶，这是新的独立约定。';
@@ -56,27 +56,25 @@ async function fixture(t,overrides={}) {
   return {directory,config,memory,actor,emit,begin,finish,bridge,disposals,get access(){return access;},async reload(){access.close();access=await createSessionMemory(options);},source(agent,event,turn){return {sessionId:agent.session.id,sourceMessageId:event.data.id,sourceEventSeq:event.seq,turn};}};
 }
 
-test('explicit access is lazy: default-off initialization and tools never acquire or warm the old backend',async t=>{
-  const f=await fixture(t,{recentContext:true}),agent=f.actor();let acquisitions=0;
-  const personal=await createPersonalMemoryRuntime({directory:f.directory,config:f.config,access:f.access,acquireMemory:async()=>{acquisitions++;return {tools:f.memory.tools};},llm:fakeLlm('{"actions":[]}'),findAgent:id=>id===agent.session.id?agent:null,logger});
-  f.disposals.push(()=>personal.close());assert.ok(personal.dsh);assert.equal(acquisitions,0);
-  const tool=personal.memory.tools.get('mcp__basic_memory__read_note',agent);assert.ok(tool);
-  await assert.rejects(tool.execute({project:'main'},{agent}));
+test('explicit access is lazy: default-off initialization and a closed session never create stores or touch the Vault',async t=>{
+  const f=await fixture(t,{recentContext:true}),agent=f.actor();
+  const personal=await createPersonalMemoryRuntime({directory:f.directory,config:f.config,access:f.access,llm:fakeLlm('{"actions":[]}'),findAgent:id=>id===agent.session.id?agent:null,logger});
+  f.disposals.push(()=>personal.close());assert.ok(personal.dsh);
+  // No note tools are exposed any more: the core reads and writes the Vault directly.
+  assert.equal(personal.memory.tools.get('mcp__basic_memory__read_note',agent),undefined);
   const event=f.begin(agent,1,personal.dsh);await runPreStep(personal.dsh,{turn:1,agent,messages:[event.data]});f.finish(agent,1,personal.dsh);await personal.dsh.waitForIdle();
-  assert.equal(acquisitions,0);assert.equal(f.memory.tools.calls.length,0);
+  assert.deepEqual(await fs.readdir(f.config.vaultPath),[]);
   await assert.rejects(fs.access(personal.recentStore.file),{code:'ENOENT'});
   await assert.rejects(fs.access(f.config.rawRecallDbPath),{code:'ENOENT'});
 });
 
-test('management and retained helpers cannot silently query the legacy hybrid model after unified vectors take ownership',async t=>{
-  const f=await fixture(t,{rawRecall:true}),agent=f.actor();let args,opens=0;
-  const tools={get(name){return {name,async execute(input){args=input;return {content:[{type:'text',text:'{}'}]};}};}};
+test('unified vectors own retrieval without opening any session grant',async t=>{
+  const f=await fixture(t,{rawRecall:true}),agent=f.actor();
   const runtime=await createPersonalMemoryRuntime({directory:f.directory,config:f.config,access:f.access,llm:fakeLlm('{"items":[],"changes":[]}'),
-    acquireMemory:async()=>{opens++;return {tools};},findAgent:id=>id===agent.session.id?agent:null,listAgents:()=>[agent],logger});
+    findAgent:id=>id===agent.session.id?agent:null,listAgents:()=>[agent],logger});
   f.disposals.push(()=>runtime.close());
-  assert.equal(f.access.check(agent).allowed,false);await runtime.dsh.getMemoryRuntime();assert.equal(opens,0);
-  await runtime.memory.tools.forManagement(()=>{}).get('mcp__basic_memory__search_notes',agent).execute({project:'main',query:'虚构',search_type:'hybrid'},{agent});
-  assert.equal(args.search_type,'text');assert.equal(f.access.check(agent).allowed,false);
+  assert.equal(f.access.check(agent).allowed,false);await runtime.dsh.getMemoryRuntime();
+  assert.equal(f.access.check(agent).allowed,false);
   assert.equal(runtime.dsh.getRawRecallStatus().vectorOwner,'unified');
 });
 
@@ -240,7 +238,7 @@ test('structured writers use original message proofs while later authorized chat
 test('native pre-step does not presearch; an explicit memory tool can read before the user source is committed',async t=>{
   const f=await fixture(t,{autoRecall:true}),agent=f.actor();await f.access.set(agent.session.id,true);
   let searches=0;
-  const tools={...f.memory.tools,get(name,owner){const tool=f.memory.tools.get(name,owner);if(name!=='mcp__basic_memory__search_notes')return tool;return {...tool,async execute(args,exec){searches++;return tool.execute(args,exec);}};}};
+  const tools={...f.memory.tools,get vaultBackend(){return toolVaultBackend(this);},get(name,owner){const tool=f.memory.tools.get(name,owner);if(name!=='mcp__basic_memory__search_notes')return tool;return {...tool,async execute(args,exec){searches++;return tool.execute(args,exec);}};}};
   const bridge=f.bridge(undefined,{tools});f.emit(agent,'turn/start',{turn:1},bridge);
   assert.equal(agent.events.some(event=>event.type==='user/message'),false);
   await runPreStep(bridge,{turn:1,agent,messages:[directUser('我喜欢什么杯子？','pending-user')]});
@@ -253,7 +251,7 @@ test('native pre-step does not presearch; an explicit memory tool can read befor
 test('a delayed recall result is discarded after close and reopen rather than using the new epoch',async t=>{
   const f=await fixture(t,{autoRecall:true}),agent=f.actor();await f.access.set(agent.session.id,true);
   const entered=deferred(),release=deferred();
-  const tools={...f.memory.tools,get(name,owner){const tool=f.memory.tools.get(name,owner);if(name!=='mcp__basic_memory__search_notes')return tool;return {...tool,async execute(args,exec){entered.resolve();await release.promise;return tool.execute(args,exec);}};}};
+  const tools={...f.memory.tools,get vaultBackend(){return toolVaultBackend(this);},get(name,owner){const tool=f.memory.tools.get(name,owner);if(name!=='mcp__basic_memory__search_notes')return tool;return {...tool,async execute(args,exec){entered.resolve();await release.promise;return tool.execute(args,exec);}};}};
   const bridge=f.bridge(undefined,{tools});const user=f.begin(agent,1,bridge);
   await runPreStep(bridge,{turn:1,agent,messages:[user.data]});
   const pending=bridge.queryTools.find(tool=>tool.name==='memory_search').execute({query:'青瓷杯'},{agent,signal:new AbortController().signal});await entered.promise;

@@ -33,7 +33,7 @@ test('ordinary core loads without optional modules and gives a clear error for t
   const { createPersonalMemoryRuntime } = await import(pathToFileURL(path.join(target, 'personal-runtime.js')).href);
   const personal = await createPersonalMemoryRuntime({
     directory: path.join(root, 'personal'), config: {},
-    acquireMemory: async () => ({tools: {}}), llm: {},
+    llm: {},
   });
   try {
     await personal.recentStore.record({sessionId:'session-fixture',turn:1,user:{id:'fixture-1',text:'测试短期交流',time:'2026-10-31T12:00:00Z'}});

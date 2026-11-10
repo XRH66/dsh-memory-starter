@@ -3,9 +3,4 @@
       name: '@local/dsh-basic-memory-bridge'
       config:
         project: personal
-        autoRecall: true
-        autoCapture: true
-        maxRecallNotes: 3
-        maxRecallChars: 1200
-        recallTimeoutMs: 1500
         captureFolder: chats

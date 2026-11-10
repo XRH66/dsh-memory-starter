@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { apply, createBridge, inject, name } from '../lib/index.js';
+import { createBridge } from '../lib/index.js';
 import { expireMemoryContext } from '../lib/context.js';
 import { RECENT_SOURCE } from '../lib/recent-context.js';
 import { resolveConfig } from '../lib/config.js';
@@ -112,36 +112,6 @@ async function emitTurn(bridge, { turn, userText = 'I prefer jasmine tea.', answ
   bridge.onSessionEvent(agent.session, turnEnd(turn, reason));
   await bridge.waitForIdle(TARGET_SESSION_ID);
 }
-
-test('plugin metadata targets the Cordis runtime', () => {
-  assert.equal(name, 'basic-memory-bridge');
-  assert.deepEqual(inject, ['tools', 'llm', 'agents']);
-});
-
-test('apply registers lifecycle hooks and persists runtime status outside its Vault', async () => {
-  const registered = [];
-  const ctx = {
-    tools: { execute() {}, register: (definition) => { registered.push({ event: 'register', definition }); return () => {}; } },
-    llm: { stream() {} },
-    logger: { warn() {} },
-    on(event, handler, options) {
-      registered.push({ event, handler, options });
-    },
-  };
-  const bridge = apply(ctx, {vaultPath:path.join(applyRoot,'vault')});
-  await bridge.getMemoryStatus(TARGET_SESSION_ID);
-  assert.ok(JSON.parse(await fs.readFile(path.join(applyRoot,'management','memory-status','runtime.json'),'utf8')).runId);
-  assert.equal(typeof bridge.onPreStep, 'function');
-  assert.equal(typeof bridge.onRequest, 'function');
-  assert.deepEqual(registered.map((item) => item.event), ['register', 'dispose', 'register', 'dispose', 'register', 'dispose', 'agent/pre-step', 'agent/request', 'session/event', 'tools/change', 'basic-memory/retry-session', 'dispose']);
-  assert.equal(registered.find((item) => item.event === 'agent/request').handler, bridge.onRequest);
-  const preStep = registered.find((item) => item.event === 'agent/pre-step');
-  assert.deepEqual(preStep.options, { prepend: true });
-  const toolDefinitions = registered.filter((item) => item.event === 'register').map((item) => item.definition);
-  assert.deepEqual(toolDefinitions.map((item) => item.name), ['dafeiyu_records', 'soften_memory', 'recent_conversation']);
-  assert.deepEqual(toolDefinitions[0].parameters.required.sort(), ['action', 'kind']);
-  assert.equal(toolDefinitions[1].parameters.required, undefined);
-});
 
 test('permanent delete is hidden per agent while other Basic Memory tools stay available', async () => {
   const definitions = new Map();

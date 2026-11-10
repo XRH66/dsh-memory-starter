@@ -11,7 +11,7 @@ import { resolveConfig } from '../lib/config.js';
 import { createSessionMemory } from '../lib/session-memory.js';
 import { createMemoryWorker } from '../lib/worker.js';
 import { memoryStore } from './fake-memory.js';
-import { directUser, fakeAgent, fakeLlm, TARGET_SESSION } from './helpers.js';
+import { directUser, fakeAgent, fakeLlm, TARGET_SESSION, toolVaultBackend } from './helpers.js';
 
 const action = (value, attribute='饮茶偏好') => ({action:'ADD',kind:'fact',category:'preference',subject:'用户',attribute,value,evidence:value,occurredAt:'日期未明'});
 async function setup(t, llm, transform) {
@@ -138,7 +138,7 @@ for (const suspended of [false, true]) {
     });
     const [prepared, unprepared] = (await store.read()).pending;
     let writes = 0;
-    const tools = { ...f.tools, get(name, agent) {
+    const tools = { ...f.tools, get vaultBackend() { return toolVaultBackend(this); }, get(name, agent) {
       const tool = f.tools.get(name, agent);
       return { ...tool, async execute(args, exec) {
         const response = await tool.execute(args, exec);

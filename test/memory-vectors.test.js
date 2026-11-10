@@ -10,6 +10,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {RawMemoryStore,buildTurn} from '../lib/raw-rag/store.js';
 import {createRawRecall} from '../lib/raw-rag/index.js';
+import {toolVaultBackend} from './helpers.js';
 
 // Synthetic adapters only: no installed DSH, user Vault, downloads or models.
 async function maintenanceFixture(t){
@@ -146,7 +147,9 @@ async function fixture(t,overrides={}){
     throw Error('Unexpected tool '+name);
   }});
   const tools={get(name){if(!enabled)throw Error('Conversation memory is disabled');return toolDefinition(name);},
-    forManagement(check){return {get(name){check();return toolDefinition(name);}};}};
+    forManagement(check){return {get(name){check();return toolDefinition(name);}};},
+    // Management keeps working while chat access is disabled, so the backend reads the double directly.
+    vaultBackend:toolVaultBackend({get:toolDefinition})};
   const createBackend=({config:settings,profile,deviceCacheFile})=>{
     const backend={modelKey:null,batchSize:2,async prepare(){calls.push({op:'prepare',device:settings.rawRecallDevice});await hooks.prepare?.();backend.modelKey='same-weight-space';return {modelKey:backend.modelKey,dimensions:2560};},
       async planChunks(text,options){options.signal.throwIfAborted();return [{text,start:0,end:text.length,tokenBound:Math.min(text.length,100)}];},
