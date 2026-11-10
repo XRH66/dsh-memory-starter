@@ -171,5 +171,7 @@
   "test/raw-lexical.test.js",
   "test/raw-memory-authorization.test.js",
   "test/recent-memory-authorization.test.js",
-  "test/session-memory.test.js"
+  "test/session-memory.test.js",
+  "test/unified-switch-fixture.js",
+  "test/unified-vector-prune.test.js"
 ]

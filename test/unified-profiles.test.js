@@ -410,6 +410,7 @@ test('coverage compares current versions to the chosen snapshot without text rea
   assert.deepEqual([coverage.total, coverage.completed, coverage.pending, coverage.stale], [3, 1, 2, 2]);
   assert.equal(coverage.caughtUp, false); assert.equal(coverage.lastPreparation.state, 'ready');
   assert.ok(f.calls.slice(before).every(row => row.op === 'metadata'));
+  await f.api.activeSnapshot({ grant: f.g }); // pinned: snapshot pruning keeps it
   await f.api.incremental({ grant: f.g });
   assert.equal((await f.api.coverage({ grant: f.g })).caughtUp, true);
   assert.equal((await f.api.coverage({ grant: f.g, profile: original })).pending, 2);
@@ -910,12 +911,14 @@ test('receipt metadata ignores caller-supplied scope and unrelated secret/body f
   for (const forbidden of [other.ownerSubject, 'secret-body', 'secret-key', 'secret-response', 'cost']) assert.ok(!raw.includes(forbidden));
 });
 
-test('460 high-dimensional documents: incremental writes only changed chunks and retains previous snapshot versions', async t => {
+test('460 high-dimensional documents: incremental writes only changed chunks and retains pinned previous snapshot versions', async t => {
   const f = await fixture(t);
   const rows = Array.from({ length: 460 }, (_, i) => doc(`synthetic-${i}`, i % 2 ? 'raw' : 'belief', `content-${i}`));
   f.setRows(rows);
   await f.choose(profile('high-dimensional', { model: 'Qwen/Qwen3-Embedding-8B', dimensions: 4096 }));
   const first = (await f.api.prepare({ grant: f.g })).profile;
+  // An answer grant pins the snapshot it read; pruning must keep it.
+  assert.equal((await f.api.activeSnapshot({ grant: f.g })).indexId, first.indexId);
   const audit = new DatabaseSync(f.indexFile);
   try {
     audit.exec(`CREATE TABLE fixture_vector_writes (operation TEXT,version_id INTEGER,bytes INTEGER);
