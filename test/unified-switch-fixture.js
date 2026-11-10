@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createUnifiedProfiles } from '../lib/unified/profiles.js';
@@ -46,7 +47,9 @@ export async function switchFixture(t, { singleBackend = true, extra = {} } = {}
       return backend;
     }, ...extra };
   let api = createUnifiedProfiles(options);
-  t.after(() => api.close());
+  // Close SQLite before removing (Windows keeps open files); scratchDirectory's
+  // own hook can run first and silently fail on the still-open index.
+  t.after(async () => { await api.close(); await fs.rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); });
   return {
     get api() { return api; }, directory, file, indexFile, calls, hooks, g, grant,
     setRows(value) { rows = value; }, get rows() { return rows; },
