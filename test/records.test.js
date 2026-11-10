@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveConfig } from '../lib/config.js';
-import { createRecordsTool, recallPersonalForTurn } from '../lib/records.js';
+import { createRecordsTool } from '../lib/records.js';
 import { setPersonalTimeZone } from '../lib/personal-namespace.js';
 import { vaultMemoryStore } from './vault-memory.js';
 import {formatBytes} from '../lib/review.js';
@@ -345,34 +345,6 @@ test('gallery copies a real local image, revises text and keeps originals for hu
     const rejected = await call(tool, { action: 'save', kind: 'gallery', text: '假图。', imagePath: notImage }, now);
     assert.equal(rejected.ok, false);
     assert.equal(rejected.errorCode, 'INVALID_IMAGE');
-  } finally {
-    await fs.rm(path.dirname(vault), { recursive: true, force: true });
-  }
-});
-
-test('personal recall only uses subjective dafeiyu notes and skips unrelated turns', async () => {
-  const vault = await makeVault();
-  const store = await memoryStore(vault);
-  const tool = makeTool(store, vault);
-  try {
-    await call(tool, { action: 'save', kind: 'thoughts', text: '老大更喜欢先看结论。' });
-    await store.backend.write({
-      title: 'Boss', directory: 'people', content: '老大更喜欢先看结论。', tags: ['subjective'], metadata: {},
-    });
-    const tools = {};
-    const config = { project: 'personal', vaultPath: vault, recallTimeoutMs: 1500, personalRecallMaxNotes: 2, personalRecallMaxChars: 1600 };
-    const related = await recallPersonalForTurn({
-      messages: [{ role: 'user', content: [{ type: 'text', text: '老大喜欢先看结论还是过程？' }], source: { kind: 'user' } }],
-      sessionId: 'session-other', config, tools, logger: { warn() {} }, agent: {},
-    });
-    assert.match(related, /dafeiyu\/thoughts/);
-    assert.doesNotMatch(related, /personal\/people\/boss/);
-
-    const unrelated = await recallPersonalForTurn({
-      messages: [{ role: 'user', content: [{ type: 'text', text: '这段 Node 代码为什么报错？' }], source: { kind: 'user' } }],
-      sessionId: 'session-other', config, tools, logger: { warn() {} }, agent: {},
-    });
-    assert.equal(unrelated, '');
   } finally {
     await fs.rm(path.dirname(vault), { recursive: true, force: true });
   }

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createBridge } from '../lib/index.js';
-import { createRecordsTool, parseEntries, renderNoteContent, recallPersonalForTurn, loadPersonalCandidates } from '../lib/records.js';
+import { createRecordsTool, parseEntries, renderNoteContent, loadPersonalCandidates } from '../lib/records.js';
 import { entryId, entryFingerprint, entryMetadata } from '../lib/entry-priority.js';
 import { priorityFromMetadata } from '../lib/priority.js';
 import { applyMemoryActions, softenMemory } from '../lib/memory.js';
@@ -38,12 +38,7 @@ test('one entry strengthens, siblings decay, own revision/read and cross-day cop
   const count=f.memory.notes.size;f.setDay(120);
   const copy=await f.save({text:entries[0].text});assert.equal(copy.permalink,first.permalink);assert.equal(f.memory.notes.size,count);
   assert.equal(parseEntries(f.memory.notes.get(first.permalink).content).length,2);
-  const recalled=await recallPersonalForTurn({...f.ctx,config:{...f.config,now:day(120)},messages:[directUser('合作')]});
-  assert.match(recalled,/合作很有意思/);assert.doesNotMatch(recalled,/雨后|树影/);
   assert.deepEqual(parseEntries(f.memory.notes.get(first.permalink).content)[0].memory,state);
-  // Ageing now lowers ranking instead of hiding the record, even when nothing was softened.
-  assert.match(await recallPersonalForTurn({...f.ctx,config:{...f.config,now:day(240)},messages:[directUser('合作')]}),/合作/);
-  assert.match(await recallPersonalForTurn({...f.ctx,config:{...f.config,now:day(240)},messages:[directUser('逐步找到线索')]}),/合作/);
 });
 
 test('new entry on an old thoughts page is fresh without reviving old entries; diary entries have independent weights',async()=>{

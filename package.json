@@ -100,7 +100,6 @@
     "lib/status.js",
     "lib/suzu/search-session.js",
     "lib/text.js",
-    "lib/timeline.js",
     "lib/tool-call.js",
     "lib/tool-schema.js",
     "lib/unified/contract.js",

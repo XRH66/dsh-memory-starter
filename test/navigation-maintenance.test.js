@@ -6,7 +6,7 @@ import os from 'node:os';
 import { memoryStore } from './fake-memory.js';
 import { fakeAgent, fakeLlm, directUser, runPreStep, TARGET_SESSION, toolVaultBackend } from './helpers.js';
 import { resolveConfig } from '../lib/config.js';
-import { recallNavigation, noteMatchesProjectPath } from '../lib/navigation.js';
+import { noteMatchesProjectPath } from '../lib/navigation.js';
 import { maintainIndexes } from '../lib/maintenance.js';
 import { createBridge } from '../lib/index.js';
 
@@ -30,24 +30,6 @@ const plan = JSON.stringify({
   assignments:[],
   headings:[{index:indexId,find:'## 不要评价',replace:'## 评价与回应'}],
   profile:[{entryIndex:1,find:oldText,text:newText}],
-});
-
-test('unrelated, inactive, QA and softened references cannot revive through navigation', async () => {
-  const store=memoryStore();seed(store);
-  const ctx={config:resolveConfig({}),tools:store.tools,agent:fakeAgent(TARGET_SESSION),messages:[directUser('评价偏好')]};
-  store.notes.get(indexId).frontmatter.status='archived';
-  assert.equal(await recallNavigation(ctx),'');
-  delete store.notes.get(indexId).frontmatter.status;
-  store.notes.get(factId).frontmatter.status='revoked';
-  assert.equal(await recallNavigation(ctx),'');
-  store.notes.get(factId).frontmatter.status='active';
-  store.notes.get(factId).frontmatter.qa_fixture=true;
-  assert.equal(await recallNavigation(ctx),'');
-  delete store.notes.get(factId).frontmatter.qa_fixture;
-  assert.equal(await recallNavigation({...ctx,messages:[directUser('今天晚饭吃饺子')]}),'');
-  Object.assign(store.notes.get(factId).frontmatter,{base_priority:0.1,softened_at:'2026-01-01'});
-  // A broad topic can select the index, but is not a distinctive cue for its fact.
-  assert.equal(await recallNavigation({...ctx,messages:[directUser('表达')]}),'');
 });
 
 test('correction synchronizes linked rows and one self-profile entry through existing writer', async () => {

@@ -6,7 +6,6 @@ import path from 'node:path';
 import { formatRecordedAt } from '../lib/dates.js';
 import { localTime } from '../lib/local-time.js';
 import { PERSONAL_TIME_ZONE, hostTimeZone, personalTimeZone, resolvePersonalTimeZone, setPersonalTimeZone } from '../lib/personal-namespace.js';
-import { renderTimeline } from '../lib/timeline.js';
 import { resolveConfig } from '../lib/config.js';
 import { deploymentFingerprint, readDeploymentSettings, stageDeploymentTimeZone } from '../lib/deployment-config.js';
 
@@ -14,24 +13,16 @@ const instant = Date.parse('2026-06-10T03:27:00.000Z');
 const original = personalTimeZone();
 test.after(() => setPersonalTimeZone(original));
 
-test('the personal time zone changes formatting, date conversion, and timeline grouping', () => {
+test('the personal time zone changes formatting and date conversion', () => {
   setPersonalTimeZone('America/Los_Angeles');
   assert.equal(PERSONAL_TIME_ZONE, 'America/Los_Angeles');
   assert.equal(localTime(instant), '2026-06-09 20:27 -07:00');
   assert.equal(formatRecordedAt(new Date(instant).toISOString()), '2026-06-09 20:27');
-  assert.match(renderTimeline([{
-    id: 'one', sessionId: '', messageId: '', value: '测试', summary: '测试', meta: { base_priority: 1 }, at: instant,
-    timeKind: 'recorded', action: '', occurredAt: '',
-  }], { config: resolveConfig({}), sessionId: '', now: instant + 1000 }).text, /2026-06-09 20:27/);
 
   setPersonalTimeZone('Asia/Shanghai');
   assert.equal(PERSONAL_TIME_ZONE, 'Asia/Shanghai');
   assert.equal(localTime(instant), '2026-06-10 11:27 +08:00');
   assert.equal(formatRecordedAt(new Date(instant).toISOString()), '2026-06-10 11:27');
-  assert.match(renderTimeline([{
-    id: 'one', sessionId: '', messageId: '', value: '测试', summary: '测试', meta: { base_priority: 1 }, at: instant,
-    timeKind: 'recorded', action: '', occurredAt: '',
-  }], { config: resolveConfig({}), sessionId: '', now: instant + 1000 }).text, /2026-06-10 11:27/);
 });
 
 test('an invalid personal time zone falls back to Beijing time', () => {

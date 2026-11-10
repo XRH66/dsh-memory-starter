@@ -7,7 +7,7 @@ import { memoryStore } from './fake-memory.js';
 import { fakeAgent, fakeLlm, TARGET_SESSION, directUser, runPreStep, turnStart, userMessage, assistantMessage, turnEnd, toolVaultBackend } from './helpers.js';
 import { resolveConfig } from '../lib/config.js';
 import { maintainIndexes } from '../lib/maintenance.js';
-import { memoryCall, recallNavigation } from '../lib/navigation.js';
+import { memoryCall } from '../lib/navigation.js';
 import { requestedIndexTopic } from '../lib/index-pages.js';
 import { createRecoveryStore, mergePending } from '../lib/recovery.js';
 import { createBridge } from '../lib/index.js';
@@ -43,8 +43,6 @@ test('requires three distinct memories; new topic backfills older sources and en
   assert.ok(topic.frontmatter.index_topic_key);assert.ok(topic.tags.includes('index'));
   assert.match(memory.notes.get(overview.permalink).content,/我的手写说明/);
   assert.match(memory.notes.get(overview.permalink).content,/\[\[index\/摄影\|摄影\]\]/);
-  const recalled=await recallNavigation({...ctx,messages:[directUser('摄影')]});
-  assert.match(recalled,/personal\/index\/摄影/);assert.match(recalled,/喜欢拍路边的树影|用一台轻便相机拍照|周末去学摄影/);
 });
 
 test('full catalog includes topics past twenty; reuses existing title and preserves prose',async()=>{
