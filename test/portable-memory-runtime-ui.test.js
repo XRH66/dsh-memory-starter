@@ -543,6 +543,26 @@ test('local model inventory marks installed and missing choices without repeatin
   assert.match(option(OTHER_LOCAL),/未安装/);assert.match(option(LARGE_LOCAL),/已安装/);
 });
 
+test('choosing another model and returning to the one in use saves its original paths',async t=>{
+  const info=snapshot();info.rawModels=[...info.rawModels,{id:LARGE_LOCAL,label:'Qwen 8B',engine:'llamacpp',dimensions:4096}];
+  const env=environment((url,body)=>{
+    if(url===BASE+'/model-install'&&body?.action==='inventory')return inventoryResponse([
+      {id:MODEL,installed:true,source:'current',issues:[],downloadBytes:0,settings:{}},
+      {id:LARGE_LOCAL,installed:false,source:null,issues:['missing'],downloadBytes:4700000000,settings:null}]);
+    return info;
+  });t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  select(picker.tree,'检索模型').props.onChange({target:{value:LARGE_LOCAL}});await picker.flush();
+  select(picker.tree,'检索模型').props.onChange({target:{value:MODEL}});await picker.flush();
+  const residency=nodes(nodes(picker.tree,n=>n.type==='label'&&text(n).startsWith('模型常驻'))[0],n=>n.type==='select')[0];
+  residency.props.onChange({target:{value:'idle'}});await picker.flush();
+  await button(picker.tree,'保存').props.onClick();await picker.flush();
+  const call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');
+  assert.deepEqual([call.body.settings.rawRecallModel,call.body.settings.rawRecallGgufModel,call.body.settings.rawRecallLlamaServer],
+    [MODEL,'/fixture/model.gguf','/fixture/llama.exe']);
+});
+
 test('a missing local model can download files but cannot save or write model settings',async t=>{
   const info=snapshot();
   const env=environment((url,body)=>{

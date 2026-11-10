@@ -99,6 +99,11 @@ const snapshot = (enabled = [], extra = {}) => ({
     states: ['session-a', 'session-b'].map(sessionId => ({ sessionId, requested: enabled.includes(sessionId), active: enabled.includes(sessionId), pending: false })) },
   ...extra,
 });
+const autoSnapshot = (enabled = false, extra = {}) => {
+  const value = snapshot([], extra);
+  value.sessionMemory = { ...value.sessionMemory, autoEnableNew: enabled };
+  return value;
+};
 const checkbox = (host, title = '测试对话甲') => nodes(host.tree, n => n.type === 'input' && n.props['aria-label'] === '选择对话：' + title)[0];
 const writes = env => env.calls.filter(call => call.body);
 
@@ -130,6 +135,33 @@ test('portable registers the same opt-in control before the first message and in
   assert.equal(writes(env).length, 0);
   assert.ok(env.calls.every(call => call.path === path && call.options.cache === 'no-store'));
   assert.doesNotMatch(source, /纯净模式|api\/dsh-memory|api\/dsh-pure-mode/);
+});
+
+test('new conversations can default to memory on through the dedicated setting', async t => {
+  const held = deferred();
+  let info = autoSnapshot(false);
+  const env = environment((_path, body) => {
+    if (body?.enabled !== undefined) return held.promise;
+    return info;
+  });
+  t.after(() => env.close());
+  const page = env.page(); await page.flush();
+  const toggle = nodes(page.tree, node => node.type === 'input' && node.props['aria-label'] === '新对话自动开启记忆')[0];
+  assert.ok(toggle);
+  assert.equal(toggle.props.checked, false);
+  assert.match(text(page.tree), /新建的对话从第一句起就会被记住/);
+  const saving = toggle.props.onChange({ target: { checked: true } });
+  await page.flush();
+  assert.equal(nodes(page.tree, node => node.type === 'input' && node.props['aria-label'] === '新对话自动开启记忆')[0].props.disabled, true);
+  assert.deepEqual(writes(env)[0].body, { enabled: true, revision: 'r1' });
+  assert.equal(writes(env)[0].path, '/api/basic-memory-settings/session-default');
+  assert.equal(writes(env)[0].options.headers['x-basic-memory-settings'], '1');
+  held.resolve(autoSnapshot(true, { revision: 'r2' }));
+  await saving; await page.flush();
+  const updated = nodes(page.tree, node => node.type === 'input' && node.props['aria-label'] === '新对话自动开启记忆')[0];
+  assert.equal(updated.props.checked, true);
+  assert.equal(updated.props.disabled, false);
+  assert.match(text(page.tree), /新对话自动开启记忆已开启/);
 });
 
 test('old bound sessions remain unselected without new authorization', async t => {
