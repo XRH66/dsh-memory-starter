@@ -504,3 +504,54 @@ test('a load whose target revision changes while starting retires its own instan
   await f.api.registerCurrentConfig({grant,settings:{...f.config,rawRecallQueryInstruction:'changed while loading'}});
   release();await assert.rejects(loading,{code:'PROFILE_CHANGED'});assert.equal(f.instances[0].backend.disposed,true);grant.cancel();
 });
+
+// Vector model switching: a confirmed switch staged before reload prepares the
+// selected profile; without one nothing changes (no backend, no preparation).
+const switchSources=f=>{for(let i=0;i<4;i++)f.messages.set('s'+i,f.source('s'+i,i));};
+const documentEmbeds=f=>f.calls.filter(call=>call.op==='embed'&&call.kind==='document').flatMap(call=>call.texts);
+test('switch: no staged confirmation means no intent, no target and no backend',async t=>{
+  const f=await fixture(t);switchSources(f);const grant=f.manager();t.after(()=>grant.cancel());
+  await f.api.registerCurrentConfig({grant});
+  assert.equal(f.api.switchIntent(),null);assert.equal(await f.api.switchTarget({grant}),null);
+  assert.equal(f.instances.length,0);assert.equal((await f.api.status({grant})).active,null);
+});
+test('switch: confirmed reload prepares without further actions, clears the intent and is consumed once',async t=>{
+  const f=await fixture(t);switchSources(f);
+  f.options.config={...f.config,rawRecallSwitch:{confirmedAt:'fictional-confirmed-1',cloudConfirmed:false}};await f.restart();
+  let grant=f.manager();await f.api.registerCurrentConfig({grant});
+  const target=await f.api.switchTarget({grant});
+  assert.equal(target.profileId,'Qwen/Qwen3-Embedding-4B');assert.equal(f.instances.length,0);
+  assert.equal((await f.api.prepare({grant,...target})).state,'ready');
+  const status=await f.api.status({grant});assert.equal(status.switchIntent,null);assert.equal(status.activeProfileId,target.profileId);
+  grant.cancel();await f.restart();grant=f.manager();t.after(()=>grant.cancel());
+  await f.api.registerCurrentConfig({grant});
+  assert.equal(f.api.switchIntent(),null,'the same confirmation is not replayed after another restart');
+});
+test('switch: an interrupted preparation resumes after restart without re-encoding finished documents',async t=>{
+  const f=await fixture(t);switchSources(f);
+  f.options.config={...f.config,rawRecallSwitch:{confirmedAt:'fictional-confirmed-2'}};await f.restart();
+  let grant=f.manager();await f.api.registerCurrentConfig({grant});
+  const controller=new AbortController();let seen=0;
+  f.hooks.embed=async(_texts,options)=>{if(options.kind==='document'&&++seen===2)controller.abort();};
+  await assert.rejects(f.api.prepare({grant,signal:controller.signal,...await f.api.switchTarget({grant})}));
+  f.hooks.embed=undefined;grant.cancel();
+  const before=documentEmbeds(f).length;
+  await f.restart();grant=f.manager();t.after(()=>grant.cancel());await f.api.registerCurrentConfig({grant});
+  const target=await f.api.switchTarget({grant});assert.ok(target,'intent survives the interruption');
+  assert.equal((await f.api.prepare({grant,...target})).state,'ready');
+  assert.equal(documentEmbeds(f).length-before,4-1,'only unfinished documents are encoded again');
+  assert.equal(f.api.switchIntent(),null);
+});
+test('switch: cloud profiles need the per-switch confirmation and the cloud opt-in',async t=>{
+  const f=await fixture(t);switchSources(f);
+  const cloudConfig=(cloudConfirmed,allow=true,confirmedAt='c-'+cloudConfirmed+allow)=>({project:'main',captureFolder:'chats',rawRecallModel:'text-embedding-v4',rawRecallDimensions:1024,
+    rawRecallAllowCloud:allow,rawRecallSwitch:{confirmedAt,cloudConfirmed}});
+  f.options.config=cloudConfig(false);await f.restart();
+  let grant=f.manager();await f.api.registerCurrentConfig({grant});
+  assert.equal(f.api.switchIntent().cloudConfirmed,false);assert.equal(await f.api.switchTarget({grant}),null);
+  grant.cancel();f.options.config=cloudConfig(true);await f.restart();grant=f.manager();t.after(()=>grant.cancel());
+  await f.api.registerCurrentConfig({grant});assert.ok(await f.api.switchTarget({grant}));
+  f.options.config=cloudConfig(true,false,'c-revoked');await f.api.registerCurrentConfig({grant,settings:f.options.config});
+  assert.equal(f.api.switchIntent(),null,'turning the cloud switch off drops the intent');
+  assert.equal(f.calls.filter(call=>call.op==='embed').length,0,'no provider request was made');
+});

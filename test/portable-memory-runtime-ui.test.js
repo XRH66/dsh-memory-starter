@@ -507,3 +507,16 @@ test('the model tab requests installation when the local model has no install re
   assert.equal(writes(env).length,1);const call=writes(env)[0];
   assert.equal(call.path,BASE+'/model-install');assert.equal(call.body.action,'start');assert.equal(call.body.allowDownload,true);
 });
+
+test('runtime HTTP forwards switch actions with an explicit boolean cloud confirmation only',async t=>{
+  const operations=[];
+  const request=httpFixture(t,{getMemoryRuntime:()=>runtime(),runMemoryRuntime:async input=>{operations.push(input);return {ok:true};}});
+  for(const action of ['plan','switch','cancel-switch','drop-index']){
+    assert.equal((await request('POST',{action,profileId:MODEL,cloudConfirmed:true,force:true})).statusCode,200);
+    assert.deepEqual(operations.at(-1),{action,profileId:MODEL,cloudConfirmed:true});
+  }
+  assert.equal((await request('POST',{action:'switch',profileId:MODEL})).statusCode,200);
+  assert.deepEqual(operations.at(-1),{action:'switch',profileId:MODEL});
+  assert.equal((await request('POST',{action:'switch',profileId:MODEL,cloudConfirmed:'yes'})).statusCode,400);
+  assert.equal(operations.length,5);
+});
