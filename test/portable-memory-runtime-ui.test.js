@@ -520,3 +520,53 @@ test('runtime HTTP forwards switch actions with an explicit boolean cloud confir
   assert.equal((await request('POST',{action:'switch',profileId:MODEL,cloudConfirmed:'yes'})).statusCode,400);
   assert.equal(operations.length,5);
 });
+
+test('model switch panel shows honest status, confirms with the estimate and drops only an unused index',async t=>{
+  const OLD='Qwen/Qwen3-Embedding-0.6B';
+  const state=runtime();state.vectors.profiles.push({id:OLD,model:OLD,revision:7,modelState:'unloaded',progress:{state:'ready',completed:3,total:3},index:{hasSnapshot:true}});
+  state.vectors.profiles[0].index={hasSnapshot:true};state.vectors.active={id:MODEL,revision:2};
+  const plans={[MODEL]:{total:5,reusable:5,pending:0,pendingChars:0,estimatedTokens:0},[OLD]:{total:5,reusable:3,pending:2,pendingChars:12000,estimatedTokens:9000}};
+  const info=snapshot();
+  const env=environment((url,body)=>{
+    if(url===BASE+'/runtime'){
+      if(!body)return state;
+      if(body.action==='plan')return {ok:true,plan:plans[body.profileId]};
+      return {ok:true};
+    }
+    if(url===BASE+'/model')return {...info,ok:true,pendingRawModelSwitch:{cloudConfirmed:false}};
+    return info;
+  });t.after(()=>env.close());
+  const {model}=await modelPage(env);
+  let panel=env.component(component(model.tree,'ModelSwitch'));await panel.flush();
+  assert.match(text(panel.tree),/此模型：使用中。/);
+  assert.equal(nodes(panel.tree,n=>n.type==='button'&&text(n)==='清理此模型的索引').length,0,'active index cannot be dropped');
+  // View the old profile: switching back needs a reload (config differs) and shows the delta.
+  select(model.tree,'查看向量模型').props.onChange({target:{value:OLD}});await model.flush();
+  panel=env.component(component(model.tree,'ModelSwitch'));await panel.flush();
+  assert.match(text(panel.tree),/可切回，需补 2 篇/);
+  button(panel.tree,'切换到此模型').props.onClick();await panel.flush();
+  assert.match(text(panel.tree),/共 5 篇，其中 3 篇可直接复用，需编码 2 篇（约 1\.2 万字）/);
+  assert.match(text(panel.tree),/文字与条目检索不受影响/);
+  await button(panel.tree,'确认切换').props.onClick();await panel.flush();
+  const staged=writes(env).find(call=>call.path===BASE+'/model');
+  assert.equal(staged.body.confirmSwitch,true);assert.equal(staged.body.cloudConfirmed,false);assert.equal(staged.body.settings.rawRecallModel,OLD);
+  button(panel.tree,'清理此模型的索引').props.onClick();await panel.flush();
+  assert.match(text(panel.tree),/下次切回需全量重建/);
+  await button(panel.tree,'确认清理').props.onClick();await panel.flush();
+  assert.deepEqual(writes(env).filter(call=>call.path===BASE+'/runtime'&&call.body.action!=='plan').map(call=>call.body),[{action:'drop-index',profileId:OLD}]);
+});
+
+test('switching within the same configuration starts preparation without a reload',async t=>{
+  const state=runtime();state.vectors.profiles[0].index={hasSnapshot:false};state.vectors.activeProfileId=null;state.vectors.active=null;
+  const env=environment((url,body)=>{
+    if(url===BASE+'/runtime'){if(!body)return state;if(body.action==='plan')return {ok:true,plan:{total:4,reusable:0,pending:4,pendingChars:400,estimatedTokens:100}};return {ok:true,started:true};}
+    return snapshot();
+  });t.after(()=>env.close());
+  const {model}=await modelPage(env);
+  const panel=env.component(component(model.tree,'ModelSwitch'));await panel.flush();
+  assert.match(text(panel.tree),/未建索引，需编码 4 篇/);
+  button(panel.tree,'切换到此模型').props.onClick();await panel.flush();
+  await button(panel.tree,'确认切换').props.onClick();await panel.flush();
+  assert.deepEqual(writes(env).filter(call=>call.body.action==='switch').map(call=>call.body),[{action:'switch',profileId:MODEL,cloudConfirmed:false}]);
+  assert.equal(writes(env).some(call=>call.path===BASE+'/model'),false,'same configuration needs no reload');
+});
