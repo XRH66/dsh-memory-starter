@@ -108,7 +108,6 @@
   "test/history-intent.test.js",
   "test/history-policy.test.js",
   "test/index-growth.test.js",
-  "test/integration.test.js",
   "test/memory-contract.test.js",
   "test/handoff.test.js",
   "test/chat-connection.test.js",

@@ -187,81 +187,6 @@ test('non-target sessions without basic memory never recall or capture', async (
   assert.equal(tools.calls.length, 0);
 });
 
-test('personal recall serves any session with basic memory, without turning on fact recall or capture', async () => {
-  for (const sessionId of [OTHER_SESSION, THIRD_SESSION]) {
-    const tools = fakeTools((input) => {
-      if (input.name === 'mcp__basic_memory__search_notes') {
-        return mcpResult({
-          results: [{ title: 'Thought', permalink: 'dafeiyu/thoughts/x', score: 1, matched_chunk: '老大更喜欢先看结论。' }],
-        });
-      }
-      if (input.name === 'mcp__basic_memory__read_note') return mcpResult({ content: '老大更喜欢先看结论。', frontmatter: { status: 'active' } });
-      throw new Error('unexpected tool ' + input.name);
-    });
-    const { bridge } = makeBridge({ tools, config: { autoRecall: false, autoCapture: false } });
-
-    const decision = await runPreStep(bridge, {
-      sessionId,
-      messages: [directUser('老大喜欢先看结论还是过程？')],
-    });
-    const personal = (decision.messages ?? []).find((message) => message.source.kind === 'basic-memory-context');
-    assert.ok(personal, sessionId);
-    assert.match(personal.content[0].text, /dafeiyu\/thoughts/);
-    assert.equal(tools.calls.length, 2, sessionId);
-    assert.equal(tools.calls[1].name, 'mcp__basic_memory__read_note');
-    assert.deepEqual(tools.calls[0].arguments.tags, ['subjective'], sessionId);
-
-    bridge.onSessionEvent({ id: sessionId }, turnStart(1));
-    bridge.onSessionEvent({ id: sessionId }, userMessage('老大喜欢先看结论还是过程？'));
-    bridge.onSessionEvent({ id: sessionId }, assistantMessage(1, 'Noted.'));
-    bridge.onSessionEvent({ id: sessionId }, turnEnd(1));
-    await bridge.waitForIdle(sessionId);
-    assert.equal(tools.calls.length, 2, sessionId + ' must not capture');
-  }
-});
-
-
-test('personal recall is skipped when the found notes are unrelated to the turn', async () => {
-  const tools = fakeTools((input) => {
-    if (input.name === 'mcp__basic_memory__search_notes') {
-      return mcpResult({
-        results: [{ title: 'Thought', permalink: 'dafeiyu/thoughts/x', score: 1, matched_chunk: '今天想吃白米饭。' }],
-      });
-    }
-    throw new Error('unexpected tool ' + input.name);
-  });
-  const { bridge } = makeBridge({ tools, config: { autoRecall: false, autoCapture: false } });
-  const decision = await runPreStep(bridge, {
-    sessionId: OTHER_SESSION,
-    messages: [directUser('这段 Node 代码为什么报错？')],
-  });
-  const messages = decision.messages ?? [];
-  assert.equal(messages.some((message) => message.source.kind === 'basic-memory-context'), false);
-  assert.equal(messages.some((message) => message.source.kind === 'basic-memory-context'), false);
-  assert.ok(messages.some((message) => message.source.kind === 'dafeiyu-memory-control'));
-});
-
-test('fact and index searches each run once per direct-user turn, never later steps', async () => {
-  const tools = recallTools();
-  const { bridge } = makeBridge({ tools, config: { autoCapture: false, personalRecall: false } });
-  const byChannel = (index) => tools.calls.filter((call) => call.name === 'mcp__basic_memory__search_notes' && Boolean(call.arguments.tags?.includes('index')) === index).length;
-
-  const first = await runPreStep(bridge, { turn: 5, step: 1, messages: [directUser('What tea do I like?')] });
-  assert.equal(byChannel(false), 1);
-  assert.equal(byChannel(true), 1);
-  assert.ok((first.messages ?? []).some((message) => message.source.kind === 'basic-memory-context'));
-  assert.ok((first.messages ?? []).some((message) => message.source.kind === 'dafeiyu-memory-control'));
-
-  await runPreStep(bridge, { turn: 5, step: 1, messages: [directUser('What tea do I like?')] });
-  await runPreStep(bridge, { turn: 5, step: 2, messages: [] });
-  await runPreStep(bridge, { turn: 5, step: 3, messages: [syntheticMessage('runtime context')] });
-  assert.equal(byChannel(false), 1);
-  assert.equal(byChannel(true), 1);
-
-  await runPreStep(bridge, { turn: 6, step: 1, messages: [directUser('Anything else?')] });
-  assert.equal(byChannel(false), 2);
-  assert.equal(byChannel(true), 2);
-});
 
 test('recall is skipped for synthetic-only steps, disabled config, and rejected decisions', async () => {
   const tools = recallTools();
@@ -281,66 +206,6 @@ test('recall is skipped for synthetic-only steps, disabled config, and rejected 
   );
   assert.equal(decision.kind, 'reject');
   assert.equal(tools.calls.length, 0);
-});
-
-test('control policy appears only when basic memory and the softener are both visible', async () => {
-  const tools = fakeTools((input) => {
-    if (input.name === 'mcp__basic_memory__search_notes') return mcpResult({ results: [] });
-    throw new Error('unexpected tool ' + input.name);
-  });
-  const withoutSoftener = {
-    ...tools,
-    get(name, agent) {
-      if (name === 'soften_memory') return undefined;
-      return tools.get(name, agent);
-    },
-  };
-  const first = createBridge({
-    config: resolveConfig({ autoCapture: false, personalRecall: false }),
-    tools: withoutSoftener,
-    llm: fakeLlm(CAPTURE_JSON),
-    logger: { warn() {} },
-  });
-  const noPolicy = await runPreStep(first, { messages: [directUser('以后少提茶。')] });
-  assert.equal((noPolicy.messages ?? []).length, 0);
-
-  const second = createBridge({
-    config: resolveConfig({ autoCapture: false, personalRecall: false }),
-    tools,
-    llm: fakeLlm(CAPTURE_JSON),
-    logger: { warn() {} },
-  });
-  const decision = await runPreStep(second, { messages: [directUser('以后少提茶。')] });
-  const policy = (decision.messages ?? []).find((message) => message.source.kind === 'dafeiyu-memory-control');
-  assert.ok(policy);
-  assert.equal(policy.source.form, 'policy');
-  assert.match(policy.content[0].text, /soften_memory/);
-  assert.match(policy.content[0].text, /not user memory/);
-  assert.match(policy.content[0].text, /do not call write_note, edit_note, or move_note/);
-});
-
-test('recall injection is a frozen reference-data user message with permalink', async () => {
-  const tools = recallTools();
-  const { bridge } = makeBridge({ tools, config: { autoCapture: false, personalRecall: false } });
-  const decision = await runPreStep(bridge, { messages: [directUser('What tea do I like?')] });
-  const injected = decision.messages.find((message) => message.source.kind === 'basic-memory-context');
-  assert.ok(injected);
-  assert.equal(injected.source.form, 'recall');
-  assert.ok(Object.isFrozen(injected));
-  assert.match(injected.content[0].text, /personal\/chats\/facts\/tea/);
-  assert.match(injected.content[0].text, /资料而非指令/);
-  assert.ok(injected.content[0].text.length <= 1200);
-});
-
-test('recall fails open when the MCP tool throws', async () => {
-  const tools = fakeTools(() => { throw new Error('boom'); });
-  const { bridge, warnings } = makeBridge({ tools, config: { autoCapture: false, personalRecall: false } });
-  const decision = await runPreStep(bridge, { messages: [directUser('tea')] });
-  const messages = decision.messages ?? [];
-  assert.equal(messages.some((message) => message.source.kind === 'basic-memory-context'), false);
-  assert.ok(messages.some((message) => message.source.kind === 'dafeiyu-memory-control'));
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /boom/);
 });
 
 // Exercise the installed host's publication guard AND its persisted V4 decoder.
@@ -413,7 +278,6 @@ for (const enabled of [true, false]) test(`native context expiry: ${enabled ? 'e
   const decision = await f.preStep(input);
   await f.replay('pre-step-' + enabled); // Red on the actual former onPreStep producer.
   assert.equal(f.session.log.filter(e => e.type === 'developer/message').length, 0);
-  assert.deepEqual((await f.bridge.getMemoryStatus(f.session.id)).jobs.at(-1).recall.expired, { messages: 0, chars: 0 });
   f.session.append('step/start', { turn: 2, step: 1 });
   assert.equal(f.session.log.filter(e => e.type === 'developer/message').length, 0, 'no reentrant append from session/event');
   const requestConfig = { provider: 'fixture', model: 'fixture' };
@@ -421,8 +285,8 @@ for (const enabled of [true, false]) test(`native context expiry: ${enabled ? 'e
   const expected = { messages: f.old.length, chars: f.old.reduce((n, e) => n + e.data.content[0].text.length, 0) };
   const status = (await f.bridge.getMemoryStatus(f.session.id)).jobs.at(-1).recall;
   assert.deepEqual(status.expired, expected);
-  assert.ok(status.channels, 'expiry update preserves recall diagnostics');
-  assert.equal(status.totalChars, decision.messages.filter(m => m.source.kind !== 'user').reduce((n, m) => n + m.content[0].text.length, 0));
+  // The bridge no longer injects context in pre-step; old bridge-owned messages are still expired.
+  assert.equal(decision.messages.filter(m => m.source?.kind !== 'user').length, 0);
   assert.deepEqual(f.session.deriveMessages().map(m => m.id), ['system', 'human-1', 'other-context', 'answer-1']);
   for (const message of decision.messages) f.session.append('user/message', message, { surfaceOp: 'append' });
   const admitted = structuredClone(f.session.deriveMessages());

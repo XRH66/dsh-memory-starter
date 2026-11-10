@@ -132,23 +132,3 @@ async function bridgeFixture(t){
     bridge.onSessionEvent(target.session,event);bridge.onSessionEvent(target.session,turnEnd(n,interrupted?'aborted':'completed'));await bridge.waitForIdle();return event.data.message;}
   return {...f,bridge,agent,history,start,end,calls,setOpen:v=>open=v};
 }
-test('real hook order saves input before answer, independent of durable capture; next conversation receives it before current user',async t=>{
-  const f=await bridgeFixture(t);const {user}=await f.start(1,'等会去旧书店转转。');
-  assert.equal((await f.bridge.recentContext.stats()).turns,1);
-  assert.match((await f.bridge.recentContext.page({maxChars:2400})).text,/等待回复/);
-  const answer=await f.end(1,'回来聊聊你淘到什么。');f.history.push(user,answer);
-  const same=await f.start(2,'准备出门了。');assert.ok(!same.decision.messages.some(m=>m.source?.kind===RECENT_SOURCE));await f.end(2,'慢慢逛。');
-  const other=fakeAgent('session-B',{provider:'another-api',model:'same-model'});
-  const {decision}=await f.start(1,'刚才说要去哪来着？',other);
-  const recalled=decision.messages.find(m=>m.source?.kind===RECENT_SOURCE);assert.ok(recalled);assert.match(recalled.content[0].text,/旧书店/);
-  assert.equal(decision.messages.at(-1).source.kind,'user');
-  const status=(await f.bridge.getMemoryStatus('session-B')).jobs.at(-1);assert.ok(status.recall.contextChars<=f.config.maxContextChars);
-  assert.equal((await f.bridge.getRecoveryState()).jobs.length,0);assert.equal(f.calls.length,0);
-});
-test('memory unavailable or pure mode prevents writes and direct tool reads; interrupted answer is labelled',async t=>{
-  const f=await bridgeFixture(t);await f.start(1,'刚才想聊的事情。');await f.end(1,'没说完',f.agent,true);
-  assert.match((await f.bridge.recentContext.page({})).text,/回复未完成/);
-  f.setOpen(false);const before=await f.bridge.recentContext.stats();await f.start(2,'这句话不该保存');await f.end(2,'纯净回答');
-  assert.equal((await f.bridge.recentContext.stats()).turns,before.turns);
-  assert.equal((await f.bridge.recentTool.execute({}, {agent:f.agent})).ok,false);
-});

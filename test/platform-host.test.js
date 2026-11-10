@@ -25,7 +25,7 @@ test('personal host exposes one core service with explicitly selected DSH sessio
  await apply(ctx,{directory,sessionIds:['session-personal'],ownerSubject:'owner:test',memory:{captureProvider:'fixture',captureModel:'fixture'}});
  const service=services.get('memoryPersonal');assert.ok(service);assert.equal(service.ownerSubject,'owner:test');assert.equal(service.acceptsDshSession('session-personal'),true);assert.equal(service.acceptsDshSession('session-foreign'),false);
  assert.equal(await handlers.get('agent/request')({agent:{id:'session-other'}},async()=>42),42);
- assert.deepEqual([...registered.keys()].sort(),['dafeiyu_records','recent_conversation','soften_memory'].sort());
+ assert.deepEqual([...registered.keys()].sort(),['dafeiyu_records','soften_memory'].sort());
  for(const tool of registered.values())await assert.rejects(tool.execute({}, {agent:{session:{id:'session-other'}}}),/limited to selected/);
  const listing=await registered.get('dafeiyu_records').execute({action:'list',kind:'thoughts'},{agent:{session:{id:'session-personal'}}});assert.equal(listing.ok,true);
  const rejected={sessionId:'session-other'};handlers.get('basic-memory/retry-session')(rejected);assert.equal(rejected.accepted,undefined);

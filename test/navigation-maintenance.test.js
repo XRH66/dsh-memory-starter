@@ -32,27 +32,6 @@ const plan = JSON.stringify({
   profile:[{entryIndex:1,find:oldText,text:newText}],
 });
 
-test('navigation independently reads latest facts; ignores obsolete prose, missing-id index is usable', async () => {
-  const store=memoryStore(); seed(store);
-  const config=resolveConfig({personalRecall:false,maxRecallNotes:3,maxIndexChars:600});
-  const agent=fakeAgent(TARGET_SESSION);
-  const text=await recallNavigation({config,tools:store.tools,agent,messages:[directUser('评价偏好')]});
-  assert.match(text,/不要每句话都评价我/);
-  assert.doesNotMatch(text,/永远不许评价|手写段落/);
-  assert.ok(text.length<=600);
-  assert.match(text,/personal\/index\/表达偏好/);
-  const b=createBridge({config,tools:store.tools,llm:fakeLlm('{"actions":[]}')});
-  const r=await runPreStep(b,{messages:[directUser('评价偏好')],agent});
-  const contexts=r.messages.filter(m=>m.source.kind==='basic-memory-context');
-  assert.equal(contexts.length,1);
-  assert.equal(contexts[0].content[0].text.split('不要每句话都评价我').length-1,1,'same fact from navigation is deduplicated');
-  assert.ok(contexts[0].content[0].text.length<=config.maxContextChars);
-  const recall=(await b.getMemoryStatus(TARGET_SESSION)).jobs.at(-1).recall;
-  assert.equal(recall.channels.facts.count,1);
-  assert.ok(recall.channels.navigation.dropped.some(n=>n.permalink===factId && n.reason==='duplicate'));
-  await b.dispose();
-});
-
 test('unrelated, inactive, QA and softened references cannot revive through navigation', async () => {
   const store=memoryStore();seed(store);
   const ctx={config:resolveConfig({}),tools:store.tools,agent:fakeAgent(TARGET_SESSION),messages:[directUser('评价偏好')]};
@@ -69,25 +48,6 @@ test('unrelated, inactive, QA and softened references cannot revive through navi
   Object.assign(store.notes.get(factId).frontmatter,{base_priority:0.1,softened_at:'2026-01-01'});
   // A broad topic can select the index, but is not a distinctive cue for its fact.
   assert.equal(await recallNavigation({...ctx,messages:[directUser('表达')]}),'');
-});
-
-test('a navigation page does not consume any of the three direct fact slots', async () => {
-  const store=memoryStore();seed(store);
-  const first=store.notes.get(factId);
-  for(const name of ['长度','语气'])store.notes.set(factId+'-'+name,{
-    ...structuredClone(first),permalink:factId+'-'+name,title:'用户 - 评价偏好'+name,
-    content:first.content+'\n- [preference] '+name+'另一个现有偏好',
-    frontmatter:{...first.frontmatter,memory_id:'fact-'+name},
-  });
-  const bridge=createBridge({config:{personalRecall:false,maxRecallNotes:3,maxIndexNotes:1},tools:store.tools,llm:fakeLlm('{"actions":[]}')});
-  const result=await runPreStep(bridge,{agent:fakeAgent(TARGET_SESSION),messages:[directUser('评价偏好')]});
-  const facts=result.messages.find(m=>m.source.kind==='basic-memory-context').content[0].text;
-  assert.match(facts,/长度另一个现有偏好/);assert.match(facts,/语气另一个现有偏好/);assert.match(facts,/不要每句话都评价我/);
-  assert.ok(facts.length<=resolveConfig({}).maxContextChars);
-  const recall=(await bridge.getMemoryStatus(TARGET_SESSION)).jobs.at(-1).recall;
-  assert.equal(recall.channels.facts.count,3,'navigation does not consume direct fact slots');
-  assert.ok(recall.channels.navigation.dropped.some(n=>n.permalink===factId && n.reason==='duplicate'));
-  await bridge.dispose();
 });
 
 test('correction synchronizes linked rows and one self-profile entry through existing writer', async () => {

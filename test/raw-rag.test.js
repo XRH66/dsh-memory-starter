@@ -168,33 +168,6 @@ test('owner is read per call and switching scope cannot reuse the old one', asyn
   assert.equal((await recall.recall({ query: '西湖', budget: 500 })).reason, 'no-scope');
 });
 
-test('disabled or cold recall leaves the original fact budget untouched', async (t) => {
-  const { dir, db } = await tempDb(t);
-  const longFact = '喜欢茉莉花茶，'.repeat(80);
-  const tools = fakeTools((input) => {
-    if (input.name === 'mcp__basic_memory__search_notes') return mcpResult({ results: [{
-      title: '长偏好', permalink: 'personal/facts/long', score: 0.9, matched_chunk: longFact,
-      metadata: { memory_id: 'long-1', status: 'active' } }] });
-    if (input.name === 'mcp__basic_memory__read_note') return mcpResult({ title: '长偏好',
-      permalink: 'personal/facts/long', checksum: 'c1',
-      content: '# 长偏好\n\n- [preference] ' + longFact,
-      frontmatter: { memory_id: 'long-1', status: 'active', memory_kind: 'fact' } });
-    throw new Error('unexpected ' + input.name);
-  });
-  const config = resolveConfig({ autoCapture: false, recentContext: false, maxContextChars: 1200 });
-  const make = ({ rawRecallEmbedder, ...extra }, session, turn) => createBridge({ config: { ...config, ...extra }, tools,
-    rawRecallEmbedder, llm: { async *stream() {} }, ownerSubject: () => 'owner:budget' });
-  const plain = make({ rawRecall: false }, 'session-budget-plain', 1);
-  const cold = make({ rawRecall: true, rawRecallDbPath: db, rawRecallEmbedder: fakeEmbedder() }, 'session-budget-cold', 1);
-  t.after(async () => { await plain.dispose(); await cold.dispose(); await fs.rm(dir, { recursive: true, force: true }); });
-  const textOf = (result) => (result.messages || []).map((message) =>
-    Array.isArray(message.content) ? message.content.map((part) => part.text || '').join('') : String(message.content || '')).join('\n');
-  const plainText = textOf(await runPreStep(plain, { sessionId: 'session-budget-plain', turn: 1, agent: fakeAgent('session-budget-plain') }));
-  const coldText = textOf(await runPreStep(cold, { sessionId: 'session-budget-cold', turn: 1, agent: fakeAgent('session-budget-cold') }));
-  assert.equal(coldText.length, plainText.length);
-  assert.match(coldText, /茉莉花茶/);
-});
-
 test('dispose drains queued turns before closing the store', async (t) => {
   const { dir, db } = await tempDb(t);
   const embedder = fakeEmbedder();

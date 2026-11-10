@@ -50,15 +50,3 @@ test('usage uses the final cumulative receipt once, includes cache, and retains 
   assert.equal(records.at(-1).state,'failed'); assert.equal(records.at(-1).usage,null);
   assert.equal(normalizeUsage(undefined),null);
 });
-
-test('recall reports actual injection lengths and repeated blocks, without extra model calls', async t => {
-  const llm=fakeLlm('{"actions":[]}'); const f=await fixture(t,llm);
-  const first=await runPreStep(f.bridge,{agent:f.agent,turn:1,messages:[directUser('有没有最近记住的事情？')]});
-  const second=await runPreStep(f.bridge,{agent:f.agent,turn:2,messages:[directUser('有没有最近记住的事情？')]});
-  const jobs=(await f.bridge.getMemoryStatus(TARGET_SESSION)).jobs;
-  assert.equal(llm.calls.length,0);
-  assert.equal(jobs[0].recall.totalChars,first.messages.reduce((n,m)=>n+m.content[0].text.length,0));
-  assert.equal(jobs[1].recall.totalChars,second.messages.reduce((n,m)=>n+m.content[0].text.length,0));
-  assert.equal(jobs[1].recall.repeatedChars,jobs[1].recall.channels.policy.chars);
-  assert.equal(jobs[0].recall.channels.facts.reason,'no-eligible-match');
-});

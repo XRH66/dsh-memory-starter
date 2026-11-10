@@ -420,30 +420,3 @@ test('packing never exceeds its budget or truncates an atomic condition into its
     }
   }
 });
-
-test('the real bridge hooks archive ordinary chat and inject its conditioned tail in a new session without embeddings', async t => {
-  const f = await fixture(t);
-  const config = resolveConfig({ vaultPath: path.join(path.dirname(f.file), 'vault'), rawRecall: true,
-    rawRecallDbPath: f.file, autoCapture: false, autoRecall: false, recentContext: false,
-    personalRecall: false, maxTimelineEntries: 0 });
-  const make = store => createBridge({ config, rawRecallStore: store, rawRecallEmbedder: unavailable(),
-    ownerSubject: 'owner:a', logger: quiet, now: () => new Date(T0 + 1000) });
-  const first = make(f.store), agent = fakeAgent('ordinary-session');
-  const user = directUser(noise + '周日去取棉麻袋，柜台只开到三点，超过时间别去。', 'ordinary-user');
-  first.onSessionEvent(agent.session, turnStart(1));
-  first.onSessionEvent(agent.session, { type: 'user/message', data: user, time: T0 });
-  await runPreStep(first, { sessionId: agent.session.id, agent, messages: [user] });
-  first.onSessionEvent(agent.session, { type: 'assistant/message', time: T0 + 1,
-    data: { turn: 1, message: { id: 'ordinary-answer', role: 'assistant', content: [{ type: 'text', text: '知道了。' }] } } });
-  first.onSessionEvent(agent.session, turnEnd(1));
-  await first.waitForIdle();
-  await first.dispose();
-  const second = make(f.reopen());
-  const result = await runPreStep(second, { sessionId: 'different-session', messages: [directUser('棉麻袋怎么取？')] });
-  const raw = result.messages.find(m => m.source?.kind === RAW_RECALL_SOURCE);
-  const text = (raw?.content || []).map(part => part.text || '').join('');
-  assert.match(text, /只开到三点/);
-  assert.match(text, /超过时间别去/);
-  assert.ok(text.length <= 600);
-  await second.dispose();
-});

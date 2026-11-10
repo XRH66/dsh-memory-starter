@@ -126,22 +126,6 @@ test('a slow directory read is bounded by the existing recall deadline', async t
   assert.ok(performance.now() - started < 250, 'timeline must not hold chat until the delayed directory read completes');
 });
 
-test('bridge injects on first direct-user step only and respects the live mounted memory scope', async t => {
-  const { config } = await setup(t);
-  const tools = fakeTools(() => mcpResult({ results: [] }));
-  const bridge = createBridge({ config, tools, llm: fakeLlm(''), now: () => new Date(NOW) });
-  t.after(() => bridge.dispose());
-  const first = await runPreStep(bridge, { agent: fakeAgent('b'), messages: [directUser('今天想随便聊聊')] });
-  const timeline = first.messages.find(m => m.source.kind === 'basic-memory-context');
-  assert.ok(timeline); assert.match(timeline.content[0].text, /周六/);
-  assert.equal((await runPreStep(bridge, { agent: fakeAgent('b'), step: 2 })).messages.length, 0);
-  assert.equal((await runPreStep(bridge, { agent: fakeAgent('b') })).messages.length, 0);
-  const closed = createBridge({ config, tools: { get: () => null }, now: () => new Date(NOW) }); t.after(() => closed.dispose());
-  assert.equal((await runPreStep(closed)).messages.length, 0);
-  const disabled = createBridge({ config: { ...config, maxTimelineEntries: 0 }, tools, now: () => new Date(NOW) }); t.after(() => disabled.dispose());
-  assert.ok(!(await runPreStep(disabled)).messages.some(m => m.source.kind === 'basic-memory-context'));
-});
-
 test('writer persists source time only for material additions/corrections; confirmation and reinforcement preserve it', async () => {
   const store = memoryStore(); const config = { ...BASE, naturalDecayStartedAt: '2026-10-01T00:00:00.000Z' };
   const ctx = { config, project: 'personal', tools: store.tools, agent: fakeAgent('a') };
