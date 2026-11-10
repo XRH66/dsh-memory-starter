@@ -82,6 +82,31 @@ test('Qwen and cloud query formats remain unchanged', () => {
   assert.equal(modelContract(rawModelSpec(cloud),cloud).query,'plain-text');
 });
 
+test('custom Qwen3-Embedding uses the query instruction while its documents remain unchanged', () => {
+  const config=resolveConfig({rawRecallModel:'custom-api',rawRecallApiBase:'https://fictional-qwen.example/v1',
+    rawRecallApiModel:'Qwen/Qwen3-Embedding-8B',rawRecallDimensions:4096});
+  const spec=rawModelSpec(config);
+  assert.equal(spec.family,'qwen3-embedding');
+  assert.equal(formatEmbeddingInput(spec,'示例查询','query'),`Instruct: ${QWEN_QUERY_INSTRUCTION}\nQuery: 示例查询`);
+  assert.equal(formatEmbeddingInput(spec,'示例文档','document'),'示例文档');
+  assert.equal(modelContract(spec,config).query,`Instruct: ${QWEN_QUERY_INSTRUCTION}\nQuery: `);
+});
+
+test('custom BGE-M3 remains provider-embedding without a query prefix or contract change', () => {
+  const config=resolveConfig({rawRecallModel:'custom-api',rawRecallApiBase:'https://fictional-bge.example/v1',
+    rawRecallApiModel:'BAAI/bge-m3',rawRecallDimensions:1024});
+  const spec=rawModelSpec(config);
+  assert.equal(spec.family,'provider-embedding');
+  assert.equal(formatEmbeddingInput(spec,'示例查询','query'),'示例查询');
+  assert.equal(formatEmbeddingInput(spec,'示例文档','document'),'示例文档');
+  assert.deepEqual(modelContract(spec,config),{
+    schema:2,model:'custom-api',engine:'api',dimensions:1024,format:'service',query:'plain-text',task:'embedding',
+    family:'provider-embedding',document:'plain-text',pooling:'provider',normalization:'l2',maxTokens:2048,
+    windowing:'token-bounded-chunks-v2:600',tokenCounting:'utf8-byte-upper-bound-plus-16',
+    endpoint:'https://fictional-bge.example/v1/embeddings',apiModel:'BAAI/bge-m3',
+  });
+});
+
 test('query wait follows model, device and explicit override', () => {
   assert.equal(queryWaitFor(resolveConfig({rawRecallModel:'BAAI/bge-small-zh-v1.5'})),2500);
   assert.equal(queryWaitFor(resolveConfig({rawRecallModel:'Qwen/Qwen3-Embedding-0.6B'})),2500);

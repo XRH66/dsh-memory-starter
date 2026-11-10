@@ -117,6 +117,7 @@ const field=(tree,label)=>{const parent=nodes(tree,n=>n.type==='label'&&text(n).
 const writes=env=>env.calls.filter(call=>call.body);
 const inventoryResponse=models=>({ok:true,inventory:{revision:'r1',models}});
 async function modelPage(env){const page=env.page();await page.flush();button(page.tree,'维护').props.onClick();await page.flush();const model=env.component(component(page.tree,'RawModelSettings'));await model.flush();return {page,model};}
+async function statusRuntime(env){const page=env.page();await page.flush();button(page.tree,'状态').props.onClick();await page.flush();const view=env.component(component(page.tree,'MemoryRuntimeSettings'));await view.flush();return {page,view};}
 
 test('maintenance time zone shows the active and host zones and saves the configured IANA name',async t=>{
   let info=snapshot();
@@ -280,6 +281,9 @@ test('the model picker shows device choices only for llamacpp and saves onnx mod
   const call=writes(env).filter(item=>item.path===BASE+'/model').at(-1);
   assert.equal(call.body.settings.rawRecallModel,OTHER_LOCAL);
   assert.equal(call.body.settings.rawRecallDevice,'cpu');
+  assert.equal(call.body.confirmSwitch,true);assert.equal('cloudConfirmed' in call.body,false);
+  assert.match(text(picker.tree),/重启 DSH 后切换到新模型，并自动开始建索引/);
+  assert.doesNotMatch(text(picker.tree),/在后台切换/);
 });
 
 test('the expert panel hides device choices for an onnx model without mentioning GPU',async t=>{
@@ -296,20 +300,44 @@ test('cloud models never show local device, path or lifecycle controls in the ex
   const env=environment(()=>info);t.after(()=>env.close());const {model}=await modelPage(env);
   assert.equal(nodes(model.tree,n=>n.type==='select'&&n.props['aria-label']==='运行设备').length,0);
   assert.equal(nodes(model.tree,n=>n.type==='input'&&n.props.value==='/fixture/llama.exe').length,0);
-  const view=env.component(component(model.tree,'MemoryRuntimeSettings'));await view.flush();
+  assert.equal(nodes(model.tree,n=>n.type?.name==='MemoryRuntimeSettings').length,0);
+  const {view}=await statusRuntime(env);
   assert.equal(nodes(view.tree,n=>n.type==='button'&&['加载／预热','释放运行资源'].includes(text(n))).length,0);
+  assert.equal(writes(env).length,0);
+});
+
+test('status page owns runtime controls and shows the pending model, current cloud model and unbuilt index',async t=>{
+  const info=snapshot();
+  info.rawModel={fields:{rawRecallModel:'custom-api',rawRecallApiModel:'fictional-embed',rawRecallApiBase:'https://fictional-a.example/v1',rawRecallDimensions:768,rawRecallAllowCloud:true}};
+  info.rawModels=[...info.rawModels,{id:'custom-api',label:'自定义 API（OpenAI 兼容）',engine:'api',cloud:true,custom:true,dimensions:1024}];
+  info.pendingRawModel={fields:{rawRecallModel:OTHER_LOCAL,rawRecallOnnxModel:'/fixture/model.onnx',rawRecallOnnxTokenizer:'/fixture/tokenizer.json'}};
+  const env=environment(url=>url===BASE+'/runtime'?runtime():info);t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'状态').props.onClick();await page.flush();
+  const view=env.component(component(page.tree,'MemoryRuntimeSettings'));await view.flush();
+  const shown=text(page.tree),runtimeText=text(view.tree);
+  // Without a confirmed switch nothing builds by itself after the reload; say where to start it.
+  assert.match(shown,/待生效的检索模型：Qwen 0\.6B。重启 DSH（重新加载记忆框架）后切换；切换后在这里点「准备索引」建立索引/);
+  const confirmed=environment(url=>url===BASE+'/runtime'?runtime():{...info,pendingRawModelSwitch:{cloudConfirmed:false}});t.after(()=>confirmed.close());
+  const confirmedPage=confirmed.page();await confirmedPage.flush();button(confirmedPage.tree,'状态').props.onClick();await confirmedPage.flush();
+  assert.match(text(confirmedPage.tree),/切换后会自动开始建索引/);
+  assert.match(runtimeText,/当前模型：fictional-embed；运行状态/);
+  assert.match(runtimeText,/索引：未建立/);
+  assert.match(runtimeText,/点「准备索引」开始建立。云端模型会把纳入索引的内容发送到服务商并计费。/);
+  assert.ok(nodes(page.tree,n=>n.type?.name==='MemoryReviewSettings').length<=1);
+  button(page.tree,'维护').props.onClick();await page.flush();
+  assert.equal(nodes(page.tree,n=>n.type?.name==='MemoryRuntimeSettings').length,0);
   assert.equal(writes(env).length,0);
 });
 
 test('runtime distinguishes a completed old index count from pending catalogue coverage',async t=>{
   const value=runtime();value.vectors.profiles[0].progress={state:'pending',completed:4,total:4,pendingBoundaries:1};
   const env=environment(url=>url===BASE+'/runtime'?value:snapshot());t.after(()=>env.close());
-  const {model}=await modelPage(env),view=env.component(component(model.tree,'MemoryRuntimeSettings'));await view.flush();
-  assert.match(text(view.tree),/全域索引：待追平（上次完成 4 \/ 4）/);
-  assert.doesNotMatch(text(view.tree),/全域索引：已就绪/);
+  const {view}=await statusRuntime(env);
+  assert.match(text(view.tree),/索引：待追平（上次完成 4 \/ 4）/);
+  assert.doesNotMatch(text(view.tree),/索引：已就绪/);
   value.vectors.profiles[0].progress={state:'ready',completed:5,total:5};
   await button(view.tree,'刷新运行状态').props.onClick();await view.flush();
-  assert.match(text(view.tree),/全域索引：已就绪（5 \/ 5）/);assert.equal(writes(env).length,0);
+  assert.match(text(view.tree),/索引：已就绪（5 \/ 5）/);assert.equal(writes(env).length,0);
 });
 
 test('runtime status is read-only, keeps actual CPU fallback separate and dispatches explicit lifecycle targets',async t=>{
@@ -317,9 +345,9 @@ test('runtime status is read-only, keeps actual CPU fallback separate and dispat
     if(url!==BASE+'/runtime')return snapshot();
     if(body){if(body.action==='release'){value.vectors.runtime.actualDevice=null;value.vectors.profiles[0].modelState='released';}return {ok:true,started:body.action==='prepare'};}
     return value;
-  });t.after(()=>env.close());const {model}=await modelPage(env),view=env.component(component(model.tree,'MemoryRuntimeSettings'));await view.flush();
+  });t.after(()=>env.close());const {view}=await statusRuntime(env);
   assert.match(text(view.tree),/实际运行设备：CPU；回退原因：CUDA 不可用/);
-  assert.match(text(view.tree),/全域索引：已就绪（4 \/ 4）/);
+  assert.match(text(view.tree),/索引：已就绪（4 \/ 4）/);
   assert.match(text(view.tree),/已报告 20 tokens/);
   assert.equal(writes(env).length,0);
   for(const action of [['加载／预热','load'],['准备索引','prepare'],['释放运行资源','release']]){
@@ -335,7 +363,7 @@ test('runtime status is read-only, keeps actual CPU fallback separate and dispat
 test('runtime errors do not simulate success and blocked actions never send force or authorization overrides',async t=>{
   const held=deferred();let attempts=0;
   const env=environment((url,body)=>url===BASE+'/runtime'?body?(attempts++,held.promise):runtime():snapshot());t.after(()=>env.close());
-  const {model}=await modelPage(env),view=env.component(component(model.tree,'MemoryRuntimeSettings'));await view.flush();
+  const {view}=await statusRuntime(env);
   const trigger=button(view.tree,'尝试整理待办'),pending=trigger.props.onClick();trigger.props.onClick();await view.flush();
   assert.equal(attempts,1);
   held.resolve({status:403,body:{ok:false,error:'原始会话授权已撤销'}});await pending;await view.flush();
@@ -345,8 +373,7 @@ test('runtime errors do not simulate success and blocked actions never send forc
 
 test('scheduling resume and selected-batch retry use real runtime requests',async t=>{
   const env=environment((url,body)=>url===BASE+'/runtime'?body?{ok:true}:runtime():snapshot());t.after(()=>env.close());
-  const page=env.page();await page.flush();button(page.tree,'维护').props.onClick();await page.flush();
-  const view=env.component(component(page.tree,'MemoryRuntimeSettings'));await view.flush();
+  const {view}=await statusRuntime(env);
   assert.match(text(view.tree),/foreground-busy/);assert.match(text(view.tree),/原始授权及前台占用/);
   assert.equal(button(view.tree,'重试所选批次').props.disabled,true);
   await button(view.tree,'恢复后台任务').props.onClick();await view.flush();
@@ -357,8 +384,8 @@ test('scheduling resume and selected-batch retry use real runtime requests',asyn
 
 test('missing runtime callbacks remain visibly unconnected, with unknown counts and disabled model actions',async t=>{
   const env=environment(url=>url===BASE+'/runtime'?{status:404,body:{ok:false,error:'当前入口尚未接入记忆运行管理'}}:snapshot());t.after(()=>env.close());
-  const {model}=await modelPage(env),view=env.component(component(model.tree,'MemoryRuntimeSettings'));await view.flush();
-  assert.match(text(view.tree),/尚未接入记忆运行管理/);assert.match(text(view.tree),/未知 \/ 未知/);
+  const {view}=await statusRuntime(env);
+  assert.match(text(view.tree),/尚未接入记忆运行管理/);assert.match(text(view.tree),/索引：未建立/);
   assert.doesNotMatch(text(view.tree),/统一向量服务已接入/);
   assert.equal(button(view.tree,'加载／预热').props.disabled,true);assert.equal(button(view.tree,'尝试整理待办').props.disabled,true);
   assert.equal(writes(env).length,0);
@@ -412,7 +439,7 @@ test('started operations poll read-only receipts, disable competing actions and 
     if(!body)return value;
     if(body.action==='cancel'){value.operation={id:'op-one',action:'prepare',state:'failed',error:'PROFILE_CANCELLED'};return {ok:true,cancelled:true};}
     value.operation={id:'op-one',action:body.action,state:'running'};return {ok:true,started:true,id:'op-one',action:body.action};
-  });t.after(()=>env.close());const {model}=await modelPage(env),view=env.component(component(model.tree,'MemoryRuntimeSettings'));await view.flush();
+  });t.after(()=>env.close());const {view}=await statusRuntime(env);
   await button(view.tree,'准备索引').props.onClick();await view.flush();
   assert.match(text(view.tree),/操作已启动/);assert.match(text(view.tree),/操作回执：准备索引 · 进行中/);
   assert.equal(button(view.tree,'尝试整理待办').props.disabled,true);
@@ -435,12 +462,12 @@ test('clicking cancel after viewing B still targets the running load or prepare 
       value.operation={id:'operation-a',action:body.action,state:'running',profileId:body.profileId,profileRevision:body.profileRevision};
       return {ok:true,started:true,id:'operation-a',action:body.action};
     });t.after(()=>env.close());
-    const {model}=await modelPage(env),view=env.component(component(model.tree,'MemoryRuntimeSettings'));await view.flush();
+    const {view}=await statusRuntime(env);
     await button(view.tree,label).props.onClick();await view.flush();
     assert.deepEqual(writes(env)[0].body,{action,profileId:MODEL,profileRevision:2});
     value.vectors.selectedProfileId=other;
     await view.update({...view.props,modelId:other});
-    assert.match(text(view.tree),new RegExp('正在查看：'+other.replaceAll('.','\\.')));
+    assert.match(text(view.tree),/当前模型：Qwen 0\.6B/);
     const cancel=button(view.tree,'取消向量操作');assert.equal(cancel.props.disabled,false);
     await cancel.props.onClick();await view.flush();
     assert.deepEqual(writes(env).at(-1).body,{action:'cancel',profileId:MODEL,profileRevision:2});
@@ -450,8 +477,7 @@ test('clicking cancel after viewing B still targets the running load or prepare 
 
 test('string model-state receipts use top-level actual device and do not borrow another profile runtime',async t=>{
   const value=runtime();Object.assign(value.vectors.profiles[0],{modelState:'loaded',actualDevice:'cuda',fallbackReason:null,runtime:{threads:4},idleReleaseMs:120000});
-  const env=environment(url=>url===BASE+'/runtime'?value:snapshot());t.after(()=>env.close());const {model}=await modelPage(env);
-  const view=env.component(component(model.tree,'MemoryRuntimeSettings'));await view.flush();
+  const env=environment(url=>url===BASE+'/runtime'?value:snapshot());t.after(()=>env.close());const {view}=await statusRuntime(env);
   assert.match(text(view.tree),/实际运行设备：GPU（NVIDIA CUDA）/);assert.doesNotMatch(text(view.tree),/回退原因/);
   assert.match(text(view.tree),/实际空闲释放设置：120 秒；计算线程 4/);
   value.vectors.profiles[0].actualDevice=null;
@@ -488,9 +514,12 @@ test('the model tab offers a dropdown of models and saving a cloud choice requir
   assert.ok(options.some(n=>n.props.value===CLOUD&&text(n).includes('云端 · v4')));
   select.props.onChange({target:{value:CLOUD}});await picker.flush();
   assert.equal(button(picker.tree,'保存').props.disabled,true);
+  assert.match(text(picker.tree),/保存并重启后会自动建索引，费用按服务商价格计算/);
   field(picker.tree,'我知道检索内容会发送到云端').props.onChange({target:{checked:true}});await picker.flush();
   await button(picker.tree,'保存').props.onClick();await picker.flush();
   const call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');assert.equal(call.body.settings.rawRecallModel,CLOUD);assert.equal(call.body.settings.rawRecallAllowCloud,true);
+  assert.equal(call.body.confirmSwitch,true);assert.equal(call.body.cloudConfirmed,true);
+  assert.match(text(picker.tree),/建索引会把纳入索引的内容发送到服务商并计费/);
 });
 
 test('a custom API model needs an address and a model name, and vendor presets are not offered',async t=>{
@@ -516,6 +545,119 @@ test('a custom API model needs an address and a model name, and vendor presets a
   const call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');assert.equal(call.body.apiKey,'fictional-key');
   assert.deepEqual([call.body.settings.rawRecallModel,call.body.settings.rawRecallApiBase,call.body.settings.rawRecallApiModel,call.body.settings.rawRecallDimensions,call.body.settings.rawRecallAllowCloud],
     ['custom-api','https://fictional-b.example/v1','fictional-embed',768,true]);
+  assert.equal(call.body.confirmSwitch,true);assert.equal(call.body.cloudConfirmed,true);
+});
+
+test('saved custom services can be selected and save the model with serviceId',async t=>{
+  const info=snapshot();
+  info.rawModels=[...info.rawModels,{id:'custom-api',label:'自定义 API（OpenAI 兼容）',tier:'cloud',engine:'api',cloud:true,custom:true,dimensions:1024}];
+  info.embeddingServices=[{id:'service-a',name:'虚构甲',apiBase:'https://fictional-a.example/v1',apiModel:'fictional-embed',dimensions:768,hasKey:true,inUse:false},
+    {id:'service-b',name:'虚构乙',apiBase:'https://fictional-b.example/v1',apiModel:'fictional-embed-b',dimensions:1024,hasKey:false,inUse:false}];
+  const env=environment(()=>info);t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  select(picker.tree,'检索模型').props.onChange({target:{value:'custom-api'}});await picker.flush();
+  const services=select(picker.tree,'已保存的服务');
+  assert.deepEqual(nodes(services,n=>n.type==='option').map(n=>n.props.value),['','service-a','service-b']);
+  assert.match(text(services),/虚构甲（fictional-embed）/);
+  services.props.onChange({target:{value:'service-a'}});await picker.flush();
+  assert.equal(field(picker.tree,'API 地址').props.value,'https://fictional-a.example/v1');
+  assert.equal(field(picker.tree,'模型名称').props.value,'fictional-embed');
+  assert.equal(field(picker.tree,'向量维数').props.value,768);
+  assert.equal(field(picker.tree,'API Key').props.placeholder,'已保存，留空沿用');
+  assert.equal(field(picker.tree,'API Key').props.disabled,true);
+  field(picker.tree,'我知道检索内容会发送到云端').props.onChange({target:{checked:true}});await picker.flush();
+  await button(picker.tree,'保存').props.onClick();await picker.flush();
+  const call=writes(env).filter(item=>item.path===BASE+'/model').at(-1);
+  assert.equal(call.body.serviceId,'service-a');assert.equal(call.body.apiKey,undefined);
+  assert.equal(call.body.confirmSwitch,true);assert.equal(call.body.cloudConfirmed,true);
+});
+
+test('saved services support edit, delete confirmation and an in-use locked state',async t=>{
+  const serviceA={id:'service-a',name:'虚构甲',apiBase:'https://fictional-a.example/v1',apiModel:'fictional-embed-a',dimensions:768,hasKey:true,inUse:true};
+  const serviceB={id:'service-b',name:'虚构乙',apiBase:'https://fictional-b.example/v1',apiModel:'fictional-embed-b',dimensions:1024,hasKey:true,inUse:false};
+  let info=snapshot();
+  info.rawModel={fields:{rawRecallModel:'custom-api',rawRecallApiBase:serviceA.apiBase,rawRecallApiModel:serviceA.apiModel,
+    rawRecallDimensions:serviceA.dimensions,rawRecallAllowCloud:true},hasSavedApiKey:true};
+  info.rawModels=[...info.rawModels,{id:'custom-api',label:'自定义 API（OpenAI 兼容）',tier:'cloud',engine:'api',cloud:true,custom:true,dimensions:1024}];
+  info.embeddingServices=[serviceA,serviceB];
+  const env=environment((url,body)=>{
+    if(url!==BASE+'/embedding-services')return info;
+    if(body.action==='delete')info={...info,revision:'r2',embeddingServices:info.embeddingServices.filter(service=>service.id!==body.id)};
+    else info={...info,revision:'r3',embeddingServices:info.embeddingServices.map(service=>
+      service.id===body.id?{...service,name:body.name}:service)};
+    return info;
+  });t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  assert.equal(select(picker.tree,'已保存的服务').props.value,'service-a');
+  assert.equal(button(picker.tree,'删除').props.disabled,true);
+  assert.match(text(picker.tree),/正在使用，不能删除/);
+
+  select(picker.tree,'已保存的服务').props.onChange({target:{value:'service-b'}});await picker.flush();
+  assert.equal(button(picker.tree,'删除').props.disabled,false);
+  button(picker.tree,'删除').props.onClick();await picker.flush();
+  assert.match(text(picker.tree),/删除「虚构乙」？只删除这条服务配置和它的密钥，不影响已有记忆和索引。/);
+  button(picker.tree,'返回').props.onClick();await picker.flush();
+  assert.equal(nodes(picker.tree,n=>n.props?.role==='dialog').length,0);
+  button(picker.tree,'删除').props.onClick();await picker.flush();
+  await button(picker.tree,'确认删除').props.onClick();await picker.flush();
+  assert.equal(writes(env).at(-1).body.action,'delete');assert.equal(writes(env).at(-1).body.id,'service-b');
+
+  select(picker.tree,'已保存的服务').props.onChange({target:{value:'service-a'}});await picker.flush();
+  button(picker.tree,'编辑').props.onClick();await picker.flush();
+  assert.equal(field(picker.tree,'服务名称').props.value,'虚构甲');
+  assert.equal(nodes(picker.tree,n=>n.type==='label'&&text(n).startsWith('服务 API 地址')).length,0);
+  field(picker.tree,'服务名称').props.onChange({target:{value:'虚构甲改名'}});await picker.flush();
+  await button(picker.tree,'保存服务').props.onClick();await picker.flush();
+  const saved=writes(env).filter(item=>item.path===BASE+'/embedding-services').at(-1);
+  assert.equal(saved.body.action,'save');assert.equal(saved.body.id,'service-a');assert.equal(saved.body.name,'虚构甲改名');
+  assert.equal(saved.body.apiKey,undefined);
+});
+
+test('only storing a new service writes the list and never calls the model endpoint',async t=>{
+  let info=snapshot();
+  info.rawModels=[...info.rawModels,{id:'custom-api',label:'自定义 API（OpenAI 兼容）',tier:'cloud',engine:'api',cloud:true,custom:true,dimensions:1024}];
+  const env=environment((url,body)=>{
+    if(url!==BASE+'/embedding-services')return info;
+    const saved={id:'service-new',name:'fictional-new.example · fictional-new',apiBase:'https://fictional-new.example/v1',
+      apiModel:'fictional-new',dimensions:768,hasKey:true,inUse:false};
+    info={...info,revision:'r2',embeddingServices:[saved]};
+    return info;
+  });t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  select(picker.tree,'检索模型').props.onChange({target:{value:'custom-api'}});await picker.flush();
+  field(picker.tree,'API 地址').props.onChange({target:{value:'https://fictional-new.example/v1'}});await picker.flush();
+  field(picker.tree,'模型名称').props.onChange({target:{value:'fictional-new'}});await picker.flush();
+  field(picker.tree,'向量维数').props.onChange({target:{value:'768'}});await picker.flush();
+  field(picker.tree,'API Key').props.onChange({target:{value:'fictional-key'}});await picker.flush();
+  await button(picker.tree,'只存入列表').props.onClick();await picker.flush();
+  assert.equal(writes(env).filter(call=>call.path===BASE+'/model').length,0);
+  const call=writes(env).filter(item=>item.path===BASE+'/embedding-services').at(-1);
+  assert.equal(call.body.action,'save');assert.equal(call.body.apiKey,'fictional-key');
+  assert.equal(select(picker.tree,'已保存的服务').props.value,'service-new');
+  assert.match(text(picker.tree),/已存入服务列表；尚未切换模型/);
+});
+
+test('saved-service actions disable while a request is in progress',async t=>{
+  const held=deferred(),service={id:'service-a',name:'虚构甲',apiBase:'https://fictional-a.example/v1',
+    apiModel:'fictional-embed',dimensions:768,hasKey:true,inUse:false};
+  let info=snapshot();
+  info.rawModel={fields:{rawRecallModel:'custom-api',rawRecallApiBase:service.apiBase,rawRecallApiModel:service.apiModel,
+    rawRecallDimensions:service.dimensions,rawRecallAllowCloud:true},hasSavedApiKey:true};
+  info.rawModels=[...info.rawModels,{id:'custom-api',label:'自定义 API（OpenAI 兼容）',tier:'cloud',engine:'api',cloud:true,custom:true,dimensions:1024}];
+  info.embeddingServices=[service];
+  const env=environment((url,body)=>url===BASE+'/embedding-services'?held.promise:info);t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  button(picker.tree,'删除').props.onClick();await picker.flush();
+  const pending=button(picker.tree,'确认删除').props.onClick();await picker.flush();
+  assert.equal(button(picker.tree,'编辑').props.disabled,true);
+  assert.equal(button(picker.tree,'删除').props.disabled,true);
+  assert.equal(button(picker.tree,'确认删除').props.disabled,true);
+  assert.equal(button(picker.tree,'保存中').props.disabled,true);
+  held.resolve({ok:true,revision:'r2',embeddingServices:[]});await pending;await picker.flush();
 });
 
 test('the model tab saves scheduled residency and resets the idle timeout for always-loaded mode',async t=>{
@@ -529,10 +671,13 @@ test('the model tab saves scheduled residency and resets the idle timeout for al
   await button(picker.tree,'保存').props.onClick();await picker.flush();
   let call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');
   assert.equal(call.body.settings.rawRecallResidentHours,'09:30-23:45');assert.equal(call.body.settings.rawRecallIdleMs,600000);
+  assert.equal('confirmSwitch' in call.body,false);assert.equal('cloudConfirmed' in call.body,false);
+  assert.match(text(picker.tree),/已保存，重启 DSH 后生效/);
   residency().props.onChange({target:{value:'always'}});await picker.flush();
   await button(picker.tree,'保存').props.onClick();await picker.flush();
   call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');
   assert.equal(call.body.settings.rawRecallResidentHours,'');assert.equal(call.body.settings.rawRecallIdleMs,0);
+  assert.equal('confirmSwitch' in call.body,false);assert.equal('cloudConfirmed' in call.body,false);
 });
 
 test('local model inventory marks installed and missing choices without repeating the current model',async t=>{
@@ -707,10 +852,9 @@ test('a preparation refused by an in-flight chat query asks to retry after the c
   const state=runtime();state.vectors.profiles[0].progress={state:'error',completed:0,total:4,error:'EMBEDDING_BUSY'};
   state.operation={action:'prepare',state:'failed',error:'EMBEDDING_BUSY'};
   const env=environment(url=>url===BASE+'/runtime'?state:snapshot());t.after(()=>env.close());
-  const {model}=await modelPage(env);
-  const panel=env.component(component(model.tree,'MemoryRuntimeSettings'));await panel.flush();
+  const {view:panel}=await statusRuntime(env);
   const shown=text(panel.tree);
-  assert.match(shown,/全域索引：失败（0 \/ 4）；对话查询正在使用向量模型，请等这次对话结束后再点击/);
+  assert.match(shown,/索引：失败（0 \/ 4）；对话查询正在使用向量模型，请等这次对话结束后再点击/);
   assert.match(shown,/操作回执：准备索引 · 失败；对话查询正在使用向量模型/);
   assert.equal(shown.includes('EMBEDDING_BUSY'),false);
 });

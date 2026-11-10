@@ -4,16 +4,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
-import {createMemoryEntryBackend} from '../lib/memory-entry-backend.js';
 import {createMemoryEntryService} from '../lib/memory-entry-service.js';
 import {memoryStore} from './fake-memory.js';
-import {fakeAgent} from './helpers.js';
+import {fakeAgent,toolVaultBackend} from './helpers.js';
 
 const original={id:'dsh:qa:user-one',revision:1,role:'user',isCurrent:true,ownerSubject:'测试用户',project:'main'};
 const proposed=(patch={})=>({type:'plan',content:'QA 虚构计划：下周整理书架。',subject_ref:'p1',source_refs:['s1'],state:{validity:'current',progress:'planned'},tags:['测试计划'],importance:{level:'high',basis:'user_explicit',reason:'虚构用户明确说明这是优先事项'},...patch});
 async function fixture(t){
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'entry-service-')),raw=new RawMemoryStore(path.join(directory,'existing-raw.sqlite'),{warn(){}}),memory=memoryStore({project:'main'});
-  const scope={ownerSubject:'测试用户',project:'main'},config={project:'main',vaultPath:path.join(directory,'vault')},backend=createMemoryEntryBackend({tools:memory.tools,project:'main'});
+  const scope={ownerSubject:'测试用户',project:'main'},config={project:'main',vaultPath:path.join(directory,'vault')},backend=toolVaultBackend(memory.tools);
   const originals=new Map([[original.id,{...original}]]),logs=[];let allowed=true;
   const context={agent:fakeAgent('session-fixture'),check(){if(!allowed)throw Object.assign(Error('closed'),{code:'MEMORY_NOT_AUTHORIZED'});}};
   const make=(override={})=>createMemoryEntryService({scope,config,repository:()=>raw.entries,backend,sourceState:ref=>originals.get(ref.id),

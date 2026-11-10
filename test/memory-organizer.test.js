@@ -5,10 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {createMemoryOrganizer,ORGANIZER_MAX_TOKENS} from '../lib/memory-organizer.js';
 import {createMemoryEntryService} from '../lib/memory-entry-service.js';
-import {createMemoryEntryBackend} from '../lib/memory-entry-backend.js';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {MEMORY_ENTRY_TYPES} from '../lib/memory-contract.js';
 import {memoryStore} from './fake-memory.js';
+import {toolVaultBackend} from './helpers.js';
 
 const scope={ownerSubject:'虚构用户',project:'main'};
 const source=(role,index,text)=>({id:`fixture-${index}`,revision:1,role,sessionId:'original-session',text,range:{start:0,end:text.length,total:text.length}});
@@ -35,7 +35,7 @@ async function fixture(t,{output=response([item()]),finish='stop',chunks,onUsage
     target:{provider:'frozen-provider',model:'frozen-model'},referenceTokens:2048,signal:controller.signal,
     check(){if(!allowed)throw Object.assign(Error('grant revoked'),{code:'MEMORY_NOT_AUTHORIZED'});}};
   const originals=new Map(sources.map(s=>[s.id,{...s,...scope,isCurrent:true}]));
-  const initialBackend=createMemoryEntryBackend({tools:memory.tools,project:'main'});
+  const initialBackend=toolVaultBackend(memory.tools);
   const service=createMemoryEntryService({scope,config:{project:'main',captureFolder:'memory'},repository:()=>raw.entries,
     backend:decorate?decorate(initialBackend):initialBackend,sourceState:ref=>originals.get(ref.id)});
   const entries={forBatch(agent,refs){assert.equal(agent,ctx.agent);ctx.check();batchRefs.push(refs);

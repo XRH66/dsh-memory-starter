@@ -39,7 +39,6 @@
     "lib/memory-contract.js",
     "lib/memory-documents.js",
     "lib/memory-entry-access.js",
-    "lib/memory-entry-backend.js",
     "lib/memory-entry-index.js",
     "lib/memory-entry-service.js",
     "lib/memory-entry.js",
