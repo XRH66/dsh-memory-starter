@@ -176,6 +176,5 @@
   "test/unified-switch-fixture.js",
   "test/unified-vector-prune.test.js",
   "test/unified-switch-plan.test.js",
-  "test/unified-switch-wait.test.js",
   "test/unified-switch-intent.test.js"
 ]
