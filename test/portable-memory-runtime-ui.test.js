@@ -570,3 +570,15 @@ test('switching within the same configuration starts preparation without a reloa
   assert.deepEqual(writes(env).filter(call=>call.body.action==='switch').map(call=>call.body),[{action:'switch',profileId:MODEL,cloudConfirmed:false}]);
   assert.equal(writes(env).some(call=>call.path===BASE+'/model'),false,'same configuration needs no reload');
 });
+
+test('a preparation refused by an in-flight chat query asks to retry after the conversation',async t=>{
+  const state=runtime();state.vectors.profiles[0].progress={state:'error',completed:0,total:4,error:'EMBEDDING_BUSY'};
+  state.operation={action:'prepare',state:'failed',error:'EMBEDDING_BUSY'};
+  const env=environment(url=>url===BASE+'/runtime'?state:snapshot());t.after(()=>env.close());
+  const {model}=await modelPage(env);
+  const panel=env.component(component(model.tree,'MemoryRuntimeSettings'));await panel.flush();
+  const shown=text(panel.tree);
+  assert.match(shown,/全域索引：失败（0 \/ 4）；对话查询正在使用向量模型，请等这次对话结束后再点击/);
+  assert.match(shown,/操作回执：准备索引 · 失败；对话查询正在使用向量模型/);
+  assert.equal(shown.includes('EMBEDDING_BUSY'),false);
+});
