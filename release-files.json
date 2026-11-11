@@ -165,6 +165,7 @@
   "test/memory-documents.test.js",
   "test/raw-scope-view.test.js",
   "test/raw-api-credentials.test.js",
+  "test/cloud-embedding-pause.test.js",
   "test/embedding-material.test.js",
   "test/raw-context-vectors.test.js",
   "test/handoff-local-time.test.js",
