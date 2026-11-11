@@ -1,8 +1,8 @@
 {
   "name": "@local/dsh-basic-memory-bridge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "Personal long-term memory for DeepSeek Harness: per-session opt-in, verbatim transcripts, on-demand recall, background organization and optional local vector search over a Markdown Vault.",
+  "description": "dsh-memory-starter: personal long-term memory for DeepSeek Harness with per-conversation opt-in, verbatim transcripts, on-demand recall, background organization into a Markdown Vault and optional vector search.",
   "type": "module",
   "main": "lib/bundle-entry.js",
   "exports": {
@@ -160,17 +160,16 @@
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
-    "basic-memory",
     "memory"
   ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/XRH66/dsh-basic-memory-bridge.git"
+    "url": "https://github.com/XRH66/dsh-memory-starter.git"
   },
-  "homepage": "https://github.com/XRH66/dsh-basic-memory-bridge",
+  "homepage": "https://github.com/XRH66/dsh-memory-starter",
   "bugs": {
-    "url": "https://github.com/XRH66/dsh-basic-memory-bridge/issues"
+    "url": "https://github.com/XRH66/dsh-memory-starter/issues"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",
