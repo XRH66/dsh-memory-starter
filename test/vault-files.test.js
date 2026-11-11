@@ -16,6 +16,29 @@ async function fixture(t){
   return {root,vault,backend};
 }
 
+async function noteFixture(t,count=20){
+  const {root,vault,backend}=await fixture(t);
+  const directory=path.join(vault,'chats','entries');
+  await fs.mkdir(directory,{recursive:true});
+  const notes=[];
+  for(let index=0;index<count;index++){
+    const number=String(index+1).padStart(2,'0');
+    const title=`Entry ${number}`;
+    const filePath=`chats/entries/${title}.md`;
+    const permalink=`personal/chats/entries/entry-${number}`;
+    const content=`# ${title}\n\nBody ${number}.\n`;
+    await fs.writeFile(path.join(directory,`${title}.md`),`---
+title: "${title}"
+type: note
+permalink: ${permalink}
+---
+
+${content}`);
+    notes.push({filePath,permalink,title,content});
+  }
+  return {root,vault,backend,notes};
+}
+
 test('write/read round-trip preserves flat frontmatter, lists and byte checksums',async t=>{
   const {vault,backend}=await fixture(t);
   const content='# Fixture\n\nBody with a colon: "quoted" and a newline.\n';
@@ -215,4 +238,90 @@ body
 `);
   await assert.rejects(()=>backend.read('chats/facts/Nested.md'),{code:'MEMORY_FRONTMATTER_UNSUPPORTED'});
   await assert.rejects(()=>backend.read('Nested'),{code:'MEMORY_FRONTMATTER_UNSUPPORTED'});
+});
+
+test('known file path reads a matching permalink once without changing the result',async t=>{
+  const {backend,notes}=await noteFixture(t);
+  const target=notes[7];
+  const originalReadFile=fs.readFile;
+  let reads=0;
+  fs.readFile=function(...args){
+    reads++;
+    return Reflect.apply(originalReadFile,fs,args);
+  };
+  let fast,scanned,fastReads,scannedReads;
+  try{
+    fast=await backend.read(target.permalink,{knownFilePath:target.filePath});
+    fastReads=reads;
+    reads=0;
+    scanned=await backend.read(target.permalink);
+    scannedReads=reads;
+  }finally{
+    fs.readFile=originalReadFile;
+  }
+  assert.deepEqual(fast,scanned);
+  assert.equal(fast.file_path,target.filePath);
+  assert.equal(fast.content,target.content);
+  assert.equal(fastReads,1);
+  assert.ok(scannedReads>fastReads,'the fallback scans multiple note files');
+});
+
+test('missing or mismatched known paths fall back to the original scan',async t=>{
+  const {backend,notes}=await noteFixture(t);
+  const target=notes[3],other=notes[11];
+  const missing=await backend.read(target.permalink,{knownFilePath:'chats/entries/missing.md'});
+  const mismatched=await backend.read(target.permalink,{knownFilePath:other.filePath});
+  assert.equal(missing.file_path,target.filePath);
+  assert.equal(missing.content,target.content);
+  assert.equal(mismatched.file_path,target.filePath);
+  assert.equal(mismatched.content,target.content);
+});
+
+test('unsafe and non-Markdown known paths are ignored without reading outside the Vault',async t=>{
+  const {root,vault,backend,notes}=await noteFixture(t);
+  const target=notes[5];
+  const outside=path.join(root,'outside.md');
+  await fs.writeFile(outside,`---
+title: Outside
+permalink: ${target.permalink}
+---
+
+outside content
+`);
+
+  for(const knownFilePath of ['../outside.md',outside,'chats/entries/not-markdown.txt']){
+    const originalReadFile=fs.readFile,readPaths=[];
+    fs.readFile=function(file,...args){
+      readPaths.push(path.resolve(String(file)));
+      return Reflect.apply(originalReadFile,fs,[file,...args]);
+    };
+    let note;
+    try{
+      note=await backend.read(target.permalink,{knownFilePath});
+    }finally{
+      fs.readFile=originalReadFile;
+    }
+    assert.equal(note.file_path,target.filePath);
+    assert.equal(note.content,target.content);
+    assert.equal(readPaths.includes(path.resolve(outside)),false);
+    assert.ok(readPaths.every(file=>file.startsWith(path.resolve(vault)+path.sep)));
+  }
+});
+
+test('unsupported frontmatter at the known path falls back without changing behavior',async t=>{
+  const {vault,backend,notes}=await noteFixture(t);
+  const target=notes[9];
+  const unsupported='chats/entries/Unsupported.md';
+  await fs.writeFile(path.join(vault,unsupported),`---
+title: Unsupported
+metadata:
+  child: value
+---
+
+unsupported
+`);
+  const byKnownPath=await backend.read(target.permalink,{knownFilePath:unsupported});
+  const byScan=await backend.read(target.permalink);
+  assert.deepEqual(byKnownPath,byScan);
+  assert.equal(byKnownPath.file_path,target.filePath);
 });
