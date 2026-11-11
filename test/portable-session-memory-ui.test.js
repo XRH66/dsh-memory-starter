@@ -323,3 +323,11 @@ test('existing model settings save refreshes the opt-in receipt without changing
   assert.doesNotMatch(text(page.tree), /尚未接入对话记忆开关/);
   assert.equal(writes(env).length, 0);
 });
+
+test('an enabled chat that has not been opened since restart is not shown as waiting', async t => {
+  const info = snapshot(['session-a']);
+  Object.assign(info.sessionMemory.states[0], { active: false, pending: false });
+  const env = environment(() => info), page = env.page(); t.after(() => env.close()); await page.flush();
+  assert.equal(checkbox(page).props.checked, true);
+  assert.doesNotMatch(text(page.tree), /下一新回合生效|部分待生效/);
+});
