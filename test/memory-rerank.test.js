@@ -450,7 +450,7 @@ test('model settings render the optional rerank section and status page renders 
     sessionMemory:{defaultEnabled:false,effective:'next-user-turn',enabledSessions:[],states:[]},
     rawModel:{fields:{rawRecallModel:'Qwen/Qwen3-Embedding-0.6B',rawRecallThreads:2}},
     rawModels:[{id:'Qwen/Qwen3-Embedding-0.6B',label:'Qwen 0.6B',engine:'onnx',dimensions:1024}],
-    embeddingServices:[service],rerank:{enabled:false,serviceId:'',model:'BAAI/bge-reranker-v2-m3',candidates:30}};
+    embeddingServices:[service],rerank:{enabled:true,serviceId:'',model:'BAAI/bge-reranker-v2-m3',candidates:30}};
   const runtimeValue={ok:true,rerank:{enabled:true,model:'fixture/reranker',service:'fictional-rerank.example',
     state:'ready',reason:'',calls:2,failures:1,lastState:'failed',lastAt:null,tokens:12}};
   const env=uiEnvironment(url=>{
@@ -527,4 +527,9 @@ test('model settings render the optional rerank section and status page renders 
   const runtime=await waitComponent('MemoryRuntimeSettings');
   await waitText(runtime,/重排fixture\/reranker · fictional-rerank\.example · 本次启动调用 2 次，失败 1 次已开启/u);
   assert.doesNotMatch(uiText(runtime.tree),/apiKeyFile|fictional-rerank-key/u);
+  // Saved settings that differ from the running ones say a restart is needed instead of the old state.
+  snapshot.rerank={...snapshot.rerank,enabled:false};
+  button('刷新').props.onClick();
+  for(let i=0;i<20;i++){await new Promise(r=>setImmediate(r));await page.flush();}
+  await waitText(await waitComponent('MemoryRuntimeSettings'),/重排已保存，重启 DSH 后生效重启后关闭/u);
 });
