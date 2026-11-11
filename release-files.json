@@ -192,6 +192,7 @@
   "test/unified-entry.test.js",
   "test/unified-policy.test.js",
   "test/unified-profiles.test.js",
+  "test/vector-archives.test.js",
   "test/unified-search.test.js",
   "test/unified-vector-recovery.test.js",
   "test/library-select-route.test.js"
