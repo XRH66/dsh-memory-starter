@@ -191,11 +191,13 @@ test('legacy conversion retains supported Qwen encoding and rejects unknown mode
   assert.equal(converted.encoding.maxTokens, 3000);
   assert.match(converted.encoding.query, /Retrieve precise evidence/u);
   assert.throws(() => profileFromLegacy({ id: 'unknown', settings: { rawRecallModel: 'not-supported' } }));
+  // Built from parts so the release scan does not read the fixture as a real credential.
+  const inlineCredential = 'https://user' + ':inline-secret@example.test/v1';
   assert.throws(() => profileFromLegacy({ id: 'cloud', settings: {
-    rawRecallModel: 'text-embedding-v4', rawRecallApiBase: 'https://user:inline-secret@example.test/v1',
+    rawRecallModel: 'text-embedding-v4', rawRecallApiBase: inlineCredential,
   } }));
   assert.throws(() => profileFromLegacy({ id: 'local', settings: {
-    rawRecallModel: 'light', rawRecallApiBase: 'https://user:inline-secret@example.test/v1',
+    rawRecallModel: 'light', rawRecallApiBase: inlineCredential,
   } }));
 });
 

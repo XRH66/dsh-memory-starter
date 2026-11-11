@@ -172,6 +172,7 @@
   "test/vault-files.test.js",
   "test/vault-memory.js",
   "test/model-install-python.test.js",
+  "test/install-download-cancel.test.js",
   "test/model-install-split.test.js",
   "test/persona-opt-in.test.js",
   "test/portable-session-memory-host.test.js",

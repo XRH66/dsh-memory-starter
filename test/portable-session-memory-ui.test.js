@@ -89,7 +89,7 @@ function environment(handler) {
 }
 const path = '/api/basic-memory-settings/sessions';
 const snapshot = (enabled = [], extra = {}) => ({
-  ok: true, revision: 'r1', runtime: 'loaded', directory: 'X:/fixture/memory', pendingTurns: 0,
+  ok: true, revision: 'r1', runtime: 'loaded', directory: '/fixture/memory', pendingTurns: 0,
   // Deliberately retained old bindings must never count as new consent in the UI.
   sessions: [
     { id: 'session-a', title: '测试对话甲', workspace: '测试项目', bound: true },

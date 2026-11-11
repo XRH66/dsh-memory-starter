@@ -168,3 +168,26 @@ test('settings route saves a service without a restart and marks the new revisio
   assert.equal(afterSave,1);assert.equal(appliedRevision,saved.body.revision);
   assert.equal((await request({...body,revision:(await f.revision())},{header:false})).statusCode,403);
 });
+
+test('saving the setting already in use clears any pending choice instead of asking for a restart',async t=>{
+  const f=await fixture(t);
+  const service=(await f.manage(serviceInput())).embeddingServices[0];
+  let value=await f.stage({serviceId:service.id,allowCloud:true});
+  assert.ok(value.pendingRawModel);assert.equal(value.unchanged,undefined);
+  // Simulate the restart that activates the pending choice.
+  const cfg=await f.read();cfg.memory={...cfg.memory,...cfg.pendingRawRecall};
+  delete cfg.pendingRawRecall;delete cfg.pendingRawRecallAt;delete cfg.pendingRawRecallSwitch;
+  await fs.writeFile(f.file,JSON.stringify(cfg));
+  value=await f.stage({serviceId:service.id,allowCloud:true});
+  assert.equal(value.unchanged,true);assert.equal(value.pendingRawModel,null);
+  assert.equal((await f.read()).pendingRawRecall,undefined);
+  // Choosing another model and then the active one again cancels the pending switch.
+  const other=(await f.manage(serviceInput({name:'另一个',apiModel:'fictional-embed-2',apiKey:'fictional-key-b'}))).embeddingServices
+    .find(row=>row.apiModel==='fictional-embed-2');
+  value=await f.stage({serviceId:other.id,allowCloud:true,confirmSwitch:true,cloudConfirmed:true});
+  assert.ok(value.pendingRawModel);
+  value=await f.stage({serviceId:service.id,allowCloud:true});
+  assert.equal(value.unchanged,true);
+  const saved=await f.read();
+  assert.equal(saved.pendingRawRecall,undefined);assert.equal(saved.pendingRawRecallSwitch,undefined);
+});
