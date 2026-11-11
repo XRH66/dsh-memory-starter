@@ -46,9 +46,9 @@ async function queryFixture(t,options={}){
     return memory.messages.record(source,{authorize:()=>true}).source;
   };
   const answers=[];
-  const answer=reranker=>{
+  const answer=(reranker,extra={})=>{
     const value=createMemoryQueryAnswer({access,agent,raw,entries,tools:notes.tools,config,
-      ...(reranker?{reranker}:{}),...(options.now?{now:options.now}:{})});
+      ...(reranker?{reranker}:{}),...(options.now?{now:options.now}:{}),...extra});
     answers.push(value);
     return value;
   };
@@ -270,6 +270,19 @@ test('rerank timeouts fall back without opening the circuit',async t=>{
   assert.equal(second.channels.rerank.state,'timeout');assert.equal(calls,2);
   assert.equal(reranker.status().state,'ready');assert.notEqual(reranker.status().state,'paused');
   assert.equal(reranker.status().failures,2);
+});
+
+test('a short search wait keeps a slow rerank inside the caller timeout and returns the original order',async t=>{
+  const f=await queryFixture(t);
+  for(let index=1;index<=4;index++)f.save('short-'+index,'虚构短等待候选 '+index,index);
+  const baseline=await f.answer().search({query:'虚构短等待候选',limit:4});
+  const reranker=await fixtureReranker(f,{fetchImpl:(_url,{signal})=>new Promise((_resolve,reject)=>{
+    signal.addEventListener('abort',()=>reject(signal.reason??new Error('aborted')),{once:true});
+  })});
+  // The caller gives up after 1100 ms; the search itself must finish before that.
+  const found=await f.answer(reranker,{searchWaitMs:900}).search({query:'虚构短等待候选',limit:4},{signal:AbortSignal.timeout(1100)});
+  assert.deepEqual(found.records.map(record=>record.id),baseline.records.map(record=>record.id));
+  assert.equal(found.channels.rerank.state,'timeout');
 });
 
 test('rerank is skipped when the remaining query budget is under 200 milliseconds',async t=>{
