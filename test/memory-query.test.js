@@ -6,14 +6,16 @@ import os from 'node:os';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {createRawRecall} from '../lib/raw-rag/index.js';
 import {createMemoryEntryAccess} from '../lib/memory-entry-access.js';
-import {createMemoryQueryAnswer,createMemoryQueryTools,createMemoryReferenceLoader,vectorQueryText} from '../lib/memory-query.js';
+import {ANSWER_RULES,createMemoryQueryAnswer,createMemoryQueryTools,createMemoryReferenceLoader,vectorQueryText} from '../lib/memory-query.js';
+import {createBridge} from '../lib/index.js';
 import {createUnifiedProfiles} from '../lib/unified/profiles.js';
 import {resolveConfig} from '../lib/config.js';
 import {personalTimeZone,setPersonalTimeZone} from '../lib/personal-namespace.js';
 import {memoryStore} from './fake-memory.js';
-import {fakeAgent} from './helpers.js';
+import {directUser,fakeAgent,fakeLlm,runPreStep} from './helpers.js';
 
 const nextTurn=()=>new Promise(resolve=>setImmediate(resolve));
+const resultIds=(answer,result)=>result.records.map(record=>answer.resolve(record.ref)?.id);
 const legacyVaultNote=`---
 title: 用户 - 虚构宠物
 permalink: personal/chats/facts/用户-虚构宠物
@@ -70,15 +72,16 @@ test('real vector index excerpts retain absolute positions through search, open 
   await profiles.register({profile:{id:'fixture',model:'BAAI/bge-small-zh-v1.5'},grant});
   await profiles.select({profileId:'fixture',grant});await profiles.prepare({grant});
   const found=await f.answer.search({query:'QA789'}),hit=found.records[0];
-  assert.ok(hit.text.includes(marker));assert.ok(hit.anchor.range.start>9000);
-  assert.equal(hit.text,text.slice(hit.anchor.range.start,hit.anchor.range.end));
-  const opened=(await f.answer.expand({anchor:hit.anchor})).records[0];
-  assert.ok(opened.text.includes(marker));assert.equal(opened.revision,hit.revision);
-  assert.equal(opened.text,text.slice(opened.anchor.range.start,opened.anchor.range.end));
-  assert.ok(opened.anchor.nextOffset);assert.ok(!/[\uD800-\uDBFF]$/u.test(opened.text));
-  const continued=(await f.answer.expand({anchor:opened.anchor})).records[0];
-  assert.equal(continued.anchor.range.start,opened.anchor.nextOffset);
-  assert.equal(continued.text,text.slice(continued.anchor.range.start,continued.anchor.range.end));
+  const hitLocation=f.answer.resolve(hit.ref);
+  assert.ok(hit.text.includes(marker));assert.ok(hitLocation.anchor.range.start>9000);
+  assert.equal(hit.text,text.slice(hitLocation.anchor.range.start,hitLocation.anchor.range.end));
+  const opened=(await f.answer.expand({ref:hit.ref})).records[0],openLocation=f.answer.resolve(opened.ref);
+  assert.ok(opened.text.includes(marker));assert.equal(openLocation.revision,hitLocation.revision);
+  assert.equal(opened.text,text.slice(openLocation.anchor.range.start,openLocation.anchor.range.end));
+  assert.ok(openLocation.anchor.nextOffset);assert.ok(!/[\uD800-\uDBFF]$/u.test(opened.text));
+  const continued=(await f.answer.expand({ref:opened.ref})).records[0],continuedLocation=f.answer.resolve(continued.ref);
+  assert.equal(continuedLocation.anchor.range.start,openLocation.anchor.nextOffset);
+  assert.equal(continued.text,text.slice(continuedLocation.anchor.range.start,continuedLocation.anchor.range.end));
 });
 
 test('organizer requests eligible vector candidates before the limit and thresholds semantic similarity',async t=>{
@@ -100,8 +103,8 @@ test('actual original reader and native tools share the answer ledger without mo
   assert.equal(f.grants(),0);assert.equal(f.raw.status().backend.prepared,false);
   const tools=createMemoryQueryTools({answer:()=>f.answer}),exec={agent:f.agent,signal:new AbortController().signal};
   const found=await tools[0].execute({query:'书架'},exec);assert.equal(found.status,'partial');assert.equal(found.records.length,1);
-  assert.equal(found.records[0].role,'user');assert.ok(found.records[0].text.includes('只有周末'));assert.equal(found.channels.vector.state,'unavailable');
-  const opened=await tools[1].execute({anchor:found.records[0].anchor},exec);assert.deepEqual(opened.records.map(item=>item.role),['user','assistant']);
+  assert.match(found.records[0].label,/用户说/u);assert.ok(found.records[0].text.includes('只有周末'));assert.equal(found.channels.vector.state,'unavailable');
+  const opened=await tools[1].execute({ref:found.records[0].ref},exec);assert.deepEqual(opened.records.map(item=>item.label.match(/(用户说|助手说)/u)?.[0]),['用户说','助手说']);
   await tools[2].execute({},exec);await tools[0].execute({query:'尺寸'},exec);
   assert.equal((await tools[0].execute({query:'第五次'},exec)).error.code,'CALLS');assert.equal(f.grants(),1);
   assert.equal(f.raw.status().backend.prepared,false);assert.ok(f.notes.tools.calls.filter(call=>call.name.endsWith('search_notes')).every(call=>call.arguments.search_type==='text'));
@@ -119,7 +122,7 @@ test('recent bypasses vector configuration and later searches share a pending an
   t.after(()=>release(null));
   t.mock.timers.enable({apis:['setTimeout','Date'],now:10000});
   const recent=await Promise.race([f.answer.recent({}),nextTurn()]);
-  assert.equal(recent?.records[0].id,first.id);assert.equal(snapshots,0);
+  assert.equal(f.answer.resolve(recent?.records[0].ref)?.id,first.id);assert.equal(snapshots,0);
 
   const second=f.save({messageId:'second',sequence:2,text:'明天整理桌面。'});
   const waiting=f.answer.search({query:'桌面'});
@@ -127,7 +130,7 @@ test('recent bypasses vector configuration and later searches share a pending an
   await nextTurn();
   t.mock.timers.tick(2450);
   const partial=await Promise.race([waiting,nextTurn()]);
-  assert.equal(partial?.channels.vector.state,'timeout');assert.deepEqual(partial.records.map(row=>row.id),[second.id]);
+  assert.equal(partial?.channels.vector.state,'timeout');assert.deepEqual(resultIds(f.answer,partial),[second.id]);
   assert.equal(snapshots,1);assert.equal(profiles.length,0);
 
   const active={id:'fixture',revision:1,nested:{version:1}};
@@ -144,7 +147,7 @@ test('a rejected profile is isolated to the vector channel',async t=>{
   const vectors={async getSnapshot(){snapshots++;throw Error('private config location');},async query(){queries++;return {records:[]};}};
   const f=await fixture(t,{vectors}),source=f.save();
   const found=await f.answer.search({query:'书架'});
-  assert.equal(found.status,'partial');assert.equal(found.channels.vector.state,'failed');assert.deepEqual(found.records.map(row=>row.id),[source.id]);
+  assert.equal(found.status,'partial');assert.equal(found.channels.vector.state,'failed');assert.deepEqual(resultIds(f.answer,found),[source.id]);
   assert.doesNotMatch(JSON.stringify(found),/private config location/);
   assert.equal((await f.answer.search({query:'再查'})).channels.vector.state,'failed');assert.equal(snapshots,1);
   assert.equal((await f.answer.recent({})).status,'empty');assert.equal(queries,0);
@@ -175,7 +178,7 @@ test('slow final vector review releases checked text and avoids reading lower ra
   t.mock.timers.tick(500);
   const found=await Promise.race([waiting,nextTurn()]);
   assert.equal(found?.status,'partial');assert.equal(found.channels.vectorValidation.state,'timeout');
-  assert.deepEqual(found.records.map(item=>[item.id,item.text]),[[source.id,source.text],['vector-ready',rows[1].text]]);
+  assert.deepEqual(found.records.map(item=>[f.answer.resolve(item.ref)?.id,item.text]),[[source.id,source.text],['vector-ready',rows[1].text]]);
   assert.deepEqual(reads.map(read=>read.id),[source.id,'vector-ready']);assert.equal(reads[0].signal.aborted,true);
   release(rows[0]);await nextTurn();assert.equal(found.records[0].text,source.text);
 });
@@ -192,7 +195,7 @@ test('a failed duplicate loses its vector score but keeps its independent text r
     anchor:{id:duplicate.id,revision:duplicate.revision,ref:{storage:'document',id:duplicate.id}}}];
   const found=await f.answer.search({query:'书架',limit:2});
   assert.equal(found.status,'partial');assert.equal(found.channels.vectorValidation.state,'failed');
-  assert.deepEqual(reads,[duplicate.id]);assert.deepEqual(found.records.map(row=>[row.id,row.text]),[[first.id,first.text],[duplicate.id,duplicate.text]]);
+  assert.deepEqual(reads,[duplicate.id]);assert.deepEqual(found.records.map(row=>[f.answer.resolve(row.ref)?.id,row.text]),[[first.id,first.text],[duplicate.id,duplicate.text]]);
   assert.doesNotMatch(JSON.stringify(found),/private document path/);
 });
 
@@ -210,7 +213,7 @@ test('vector similarity is ranked once and final merge applies weight once',asyn
   const answer=createMemoryQueryAnswer({access:f.access,agent:f.agent,raw:f.raw,entries:f.entries,tools:f.notes.tools,config:f.config,vectors});
   t.after(()=>answer.dispose());
   const found=await answer.search({query:'书架',limit:2});
-  assert.deepEqual(found.records.map(record=>record.id),[low.id,high.id]);
+  assert.deepEqual(resultIds(answer,found),[low.id,high.id]);
 });
 
 test('memory search total wait derives from the configured model and device',async t=>{
@@ -230,10 +233,12 @@ test('P02 committed Markdown entries are found with typed state and importance, 
   const reads=()=>f.notes.tools.calls.filter(call=>call.name.endsWith('read_note')).length;
   let before=reads();
   const found=await f.answer.search({query:'书架',type:'plan',progress:'planned',subject:'owner'});
-  assert.equal(found.records.length,1);assert.equal(found.records[0].id,saved.id);assert.equal(found.records[0].importance.level,'high');assert.equal(found.records[0].state.progress,'planned');
-  assert.equal(found.records[0].speaker_ref,'owner');assert.equal(found.coverage.rawTypedFilters,'not_applicable');
-  assert.equal(reads()-before,1);assert.equal(found.records[0].revision,saved.revision);assert.equal(found.records[0].sourceStatus.manualBody,false);
-  const opened=await f.answer.expand({anchor:found.records[0].anchor});assert.equal(opened.records[0].kind,'entry');assert.equal(opened.records[1].role,'user');
+  assert.equal(found.records.length,1);const foundLocation=f.answer.resolve(found.records[0].ref);
+  assert.equal(foundLocation.id,saved.id);assert.match(found.records[0].label,/计划（尚未发生）.*当前有效/u);
+  assert.equal(found.records[0].subject_ref,'owner');assert.deepEqual(found.records[0].tags,['书架']);assert.equal(found.coverage.rawTypedFilters,'not_applicable');
+  assert.equal(reads()-before,1);assert.equal(foundLocation.revision,saved.revision);
+  const opened=await f.answer.expand({ref:found.records[0].ref});
+  assert.match(opened.records[0].label,/记忆条目/u);assert.match(opened.records[1].label,/原话 · 用户说/u);
   assert.equal((await f.answer.search({query:'书架',type:'habit'})).records.length,0);
 
   const manual='人工修订：下周再整理书架。';
@@ -243,9 +248,10 @@ test('P02 committed Markdown entries are found with typed state and importance, 
   f.memory.setControl({scope:'owner',targetType:'message',targetId:source.messageId,excluded:true});
   before=reads();
   const changed=await f.answer.search({query:'书架',type:'plan'});
-  assert.equal(reads()-before,1);assert.equal(changed.records[0].id,saved.id);
-  assert.notEqual(changed.records[0].revision,saved.revision);assert.equal(changed.records[0].text,manual);
-  assert.equal(changed.records[0].sourceStatus.manualBody,true);
+  const changedLocation=f.answer.resolve(changed.records[0].ref);
+  assert.equal(reads()-before,1);assert.equal(changedLocation.id,saved.id);
+  assert.notEqual(changedLocation.revision,saved.revision);assert.equal(changed.records[0].text,manual);
+  assert.equal('sourceStatus' in changed.records[0],false);
 });
 
 test('the first search slot keeps an unapplied user correction and excludes the active question',async t=>{
@@ -262,11 +268,11 @@ test('the first search slot keeps an unapplied user correction and excludes the 
   const question=f.save({messageId:'current-question',sequence:4,turn:3,rootTurn:3,time:3000,text:'我每周哪天不排会？'});
 
   const found=await f.answer.search({query:'排会',limit:2});
-  assert.deepEqual(found.records.map(row=>row.id),[correction.id,entry.id]);
-  assert.equal(found.records[0].source.changeKind,'correction');
-  assert.equal(found.records[1].state.validity,'current');
-  assert.ok(!found.records.some(row=>row.id===question.id));
-  const opened=await f.answer.expand({anchor:found.records[0].anchor});
+  assert.deepEqual(resultIds(f.answer,found),[correction.id,entry.id]);
+  assert.equal(found.records[0].correction,true);
+  assert.match(found.records[1].label,/当前有效/u);
+  assert.ok(!resultIds(f.answer,found).includes(question.id));
+  const opened=await f.answer.expand({ref:found.records[0].ref});
   assert.equal(opened.records[0].text,correction.text);
 });
 
@@ -283,29 +289,32 @@ test('a vector-only correction can still be reviewed for the first slot',async t
     {id:correction.id,revision:correction.revision,kind:'original',text:correction.text,
       anchor:{id:correction.id,revision:correction.revision,ref:{storage:'message',id:correction.id,revision:correction.revision}}}];
   const found=await f.answer.search({query:'日程安排',limit:1});
-  assert.equal(found.channels.originals.state,'empty');assert.equal(found.records[0].id,correction.id);
-  assert.equal(found.records[0].source.changeKind,'correction');
+  assert.equal(found.channels.originals.state,'empty');assert.equal(f.answer.resolve(found.records[0].ref).id,correction.id);
+  assert.equal(found.records[0].correction,true);
 });
 
 test('an original edit or exclusion invalidates an issued anchor; a new body never impersonates its old revision',async t=>{
   const f=await fixture(t);f.save();const found=await f.answer.search({query:'书架'});
   f.save({sequence:3,text:'改为整理工具箱。',content:[{type:'text',text:'改为整理工具箱。'}]});
-  const old=await f.answer.expand({anchor:found.records[0].anchor});assert.equal(old.records.length,0);assert.equal(old.channels.source.state,'source_changed');
-  const current=await f.answer.search({query:'工具箱'});assert.equal(current.records[0].revision,2);
+  const old=await f.answer.expand({ref:found.records[0].ref});assert.equal(old.records.length,0);assert.equal(old.channels.source.state,'source_changed');
+  const current=await f.answer.search({query:'工具箱'});assert.equal(f.answer.resolve(current.records[0].ref).revision,2);
   f.memory.setControl({scope:'owner',targetType:'message',targetId:'qa-user',excluded:true});
-  assert.equal((await f.answer.expand({anchor:current.records[0].anchor})).records.length,0);
+  assert.equal((await f.answer.expand({ref:current.records[0].ref})).records.length,0);
 });
 
 test('long messages begin near a late hit and continuation uses the delivered source offset',async t=>{
   const f=await fixture(t);f.save({text:'很久以前。'.repeat(2000)+'QA789：只有完成验收才能启动。'+'后续说明。'.repeat(2000)});
-  const found=await f.answer.search({query:'QA789'});assert.ok(found.records[0].text.includes('QA789'));assert.ok(found.records[0].anchor.range.start>9000);
-  const opened=await f.answer.expand({anchor:found.records[0].anchor});assert.ok(opened.records[0].text.includes('只有完成验收'));assert.ok(opened.records[0].anchor.nextOffset);
-  const continued=await f.answer.expand({anchor:opened.records[0].anchor});assert.equal(continued.records[0].anchor.range.start,opened.records[0].anchor.nextOffset);
+  const found=await f.answer.search({query:'QA789'}),foundLocation=f.answer.resolve(found.records[0].ref);
+  assert.ok(found.records[0].text.includes('QA789'));assert.ok(foundLocation.anchor.range.start>9000);
+  const opened=await f.answer.expand({ref:found.records[0].ref}),openLocation=f.answer.resolve(opened.records[0].ref);
+  assert.ok(opened.records[0].text.includes('只有完成验收'));assert.ok(openLocation.anchor.nextOffset);
+  const continued=await f.answer.expand({ref:opened.records[0].ref}),continuedLocation=f.answer.resolve(continued.records[0].ref);
+  assert.equal(continuedLocation.anchor.range.start,openLocation.anchor.nextOffset);
 });
 
 test('revocation and unissued paths cannot reveal originals or bypass the answer grant',async t=>{
-  const f=await fixture(t);f.save();assert.equal((await f.answer.expand({anchor:{ref:{storage:'note',identifier:'private.md'}}})).error.code,'INPUT');
-  const found=await f.answer.search({query:'书架'});f.revoke();assert.equal((await f.answer.expand({anchor:found.records[0].anchor})).status,'denied');
+  const f=await fixture(t);f.save();assert.equal((await f.answer.expand({ref:'m999'})).error.code,'INPUT');
+  const found=await f.answer.search({query:'书架'});f.revoke();assert.equal((await f.answer.expand({ref:found.records[0].ref})).status,'denied');
 });
 
 test('old-format notes in the Vault bypass Basic Memory search_notes',async t=>{
@@ -319,7 +328,7 @@ test('old-format notes in the Vault bypass Basic Memory search_notes',async t=>{
   const found=await f.answer.search({query:'阿岑'});
   assert.equal(searches,0);
   assert.equal(found.channels.legacy.records,1);
-  assert.equal(found.records[0].id,'legacy-note:vault-legacy-qa');
+  assert.equal(f.answer.resolve(found.records[0].ref).id,'legacy-note:vault-legacy-qa');
   assert.equal(found.records[0].text,'养了一只叫阿岑的猫');
 });
 
@@ -336,7 +345,7 @@ test('Basic Memory remains the old-format fallback when Vault memory directories
   const found=await f.answer.search({query:'靛蓝'});
   assert.equal(searches,1);
   assert.equal(found.channels.legacy.records,1);
-  assert.equal(found.records[0].id,'legacy-note:memory-legacy-qa');
+  assert.equal(f.answer.resolve(found.records[0].ref).id,'legacy-note:memory-legacy-qa');
   assert.equal(found.records[0].text,'QA用户喜欢靛蓝。');
 });
 
@@ -349,15 +358,16 @@ test('a migrated personal permalink remains searchable, expandable and available
   f.notes.notes.delete(key);
   note.permalink=key.replace(/^main\//,'personal/');
   f.notes.notes.set(note.permalink,note);
-  const found=await f.answer.search({query:'靛蓝'});assert.equal(found.channels.legacy.records,1);assert.equal(found.records[0].id,'legacy-note:legacy-qa');
-  assert.equal(found.records[0].type,'fact');assert.equal(found.records[0].state.validity,'current');
-  const opened=await f.answer.expand({anchor:found.records[0].anchor});assert.equal(opened.records[0].text,'QA用户喜欢靛蓝。');
+  const found=await f.answer.search({query:'靛蓝'}),foundLocation=f.answer.resolve(found.records[0].ref);
+  assert.equal(found.channels.legacy.records,1);assert.equal(foundLocation.id,'legacy-note:legacy-qa');
+  assert.match(found.records[0].label,/记忆条目 · 事实 · 当前有效/u);
+  const opened=await f.answer.expand({ref:found.records[0].ref});assert.equal(opened.records[0].text,'QA用户喜欢靛蓝。');
   const source=f.save(),writer=f.entries.forBatch(f.agent,[source]);
-  const reference={id:found.records[0].id,revision:found.records[0].revision,legacy:note.permalink};
+  const reference={id:foundLocation.id,revision:foundLocation.revision,legacy:note.permalink};
   assert.equal((await writer.readLegacy(reference))?.content,'QA用户喜欢靛蓝。');
   note.frontmatter.memory_excluded='true';
   assert.equal(await writer.readLegacy(reference),null);
-  assert.equal((await f.answer.expand({anchor:found.records[0].anchor})).channels.source.state,'source_changed');
+  assert.equal((await f.answer.expand({ref:found.records[0].ref})).channels.source.state,'source_changed');
   delete note.frontmatter.memory_excluded;
   note.filePath='work/qa-old.md';
   assert.equal(await writer.readLegacy(reference),null);
@@ -370,7 +380,7 @@ test('an excluded structured note is unavailable to text search, an issued ancho
     type:'plan',content:'QA 书架整理计划。',subject_ref:'owner',source_refs:['s1'],state:{validity:'current',progress:'planned'},tags:['书架'],
     importance:{level:'high',basis:'user_explicit',reason:'虚构用户明确优先事项'},evidence_basis:'self_report',speaker_ref:'owner'}});
   const found=await f.answer.search({query:'书架',type:'plan'});
-  assert.equal(found.records[0]?.id,saved.id);
+  assert.equal(f.answer.resolve(found.records[0]?.ref)?.id,saved.id);
   const note=f.notes.notes.get(saved.permalink);
   for(const marker of ['qa_fixture','excluded']){
     note.frontmatter[marker]=true;
@@ -379,7 +389,7 @@ test('an excluded structured note is unavailable to text search, an issued ancho
     delete note.frontmatter[marker];
   }
   note.frontmatter.excluded=true;
-  assert.equal((await f.answer.expand({anchor:found.records[0].anchor})).records.length,0);
+  assert.equal((await f.answer.expand({ref:found.records[0].ref})).records.length,0);
   assert.equal((await f.answer.search({query:'书架',type:'plan'})).records.length,0);
   delete note.frontmatter.excluded;
   assert.equal((await writer.read(saved.id))?.id,saved.id);
@@ -401,7 +411,7 @@ test('a deliberately located downweighted fact can still be opened by its issued
     content:'<!-- dsh-fact-memory -->\n# 青岚山旧行程\n\n- [fact] 去过青岚山，需要预约。\n- subject: owner\n- attribute: 行程',
     metadata:{memory_id:'soft-qa',memory_kind:'fact',status:'active',subject:'owner',attribute:'行程',value:'去过青岚山，需要预约。',base_priority:0.02}},{agent:f.agent});
   const found=await f.answer.search({query:'青岚山'});assert.equal(found.records.length,1);
-  const opened=await f.answer.expand({anchor:found.records[0].anchor});assert.equal(opened.records.length,1);assert.ok(opened.records[0].text.includes('需要预约'));
+  const opened=await f.answer.expand({ref:found.records[0].ref});assert.equal(opened.records.length,1);assert.ok(opened.records[0].text.includes('需要预约'));
 });
 
 test('portable vectors pin the answer profile, resolve issued anchors and revalidate original evidence at delivery',async t=>{
@@ -441,7 +451,7 @@ test('portable vectors pin the answer profile, resolve issued anchors and revali
   const tools=createMemoryQueryTools({answer:()=>f.answer}),exec={agent:f.agent,signal:new AbortController().signal};
   assert.equal(snapshots,0);
   const found=await tools[0].execute({query:'搬运箱子',type:'plan'},exec);
-  assert.deepEqual(found.records.map(row=>row.id),['vector-one']);assert.equal(found.channels.vector.state,'ready');
+  assert.deepEqual(resultIds(f.answer,found),['vector-one']);assert.equal(found.channels.vector.state,'ready');
   assert.equal(found.channels.sourceValidation.removed,1);assert.equal(found.coverage.complete,false);
   assert.deepEqual(calls.filter(call=>call.kind==='resolve').map(call=>call.id).sort(),['vector-one','withdrawn','wrong-role']);
 
@@ -449,13 +459,13 @@ test('portable vectors pin the answer profile, resolve issued anchors and revali
   // already pinned to this answer, including an edit to the original object.
   firstProfile.revision=99;
   activeProfile={id:'Qwen/Qwen3-Embedding-0.6B',revision:2,modelKey:'fixture-vector-space-two'};
-  const opened=await tools[1].execute({anchor:found.records[0].anchor},exec);
-  assert.deepEqual(opened.records.map(row=>row.kind),['entry','original']);assert.equal(opened.records[1].role,'user');
-  assert.equal(opened.records[1].text,source.text);assert.equal(opened.records[0].revision,'note-v1');
+  const opened=await tools[1].execute({ref:found.records[0].ref},exec);
+  assert.match(opened.records[0].label,/记忆条目/u);assert.match(opened.records[1].label,/原话 · 用户说/u);
+  assert.equal(opened.records[1].text,source.text);assert.equal(f.answer.resolve(opened.records[0].ref).revision,'note-v1');
   const next=await tools[0].execute({query:'换一组线索',type:'plan'},exec);
-  assert.deepEqual(next.records.map(row=>row.id),['vector-two']);
+  assert.deepEqual(resultIds(f.answer,next),['vector-two']);
   changeDuringOpen=true;
-  const stale=await tools[1].execute({anchor:next.records[0].anchor},exec);
+  const stale=await tools[1].execute({ref:next.records[0].ref},exec);
   assert.deepEqual(stale.records,[]);assert.equal(stale.channels.sourceValidation.state,'source_changed');
   assert.equal(stale.channels.sourceValidation.removed,1);assert.equal(stale.coverage.complete,false);
   assert.equal(snapshots,1);assert.equal(f.grants(),1);assert.equal(f.answer.budget().calls,4);
@@ -499,4 +509,26 @@ test('records carry a label saying original or entry, speaker, progress and time
   const {recordLabel}=await import('../lib/memory-query.js');
   assert.match(recordLabel({kind:'original',role:'user',time:Date.UTC(2026,4,8,6)}),/^原话 · 用户说 · 2026-05-0\d /u);
   assert.equal(recordLabel({kind:'entry',type:'plan',state:{validity:'current',progress:'planned'}}),'记忆条目 · 计划（尚未发生） · 当前有效 · 依据时间 时间未知');
+});
+
+test('answer guidance carries the full-turn title, all rules and the do-not-save warning',async t=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'answer-guidance-')),agent=fakeAgent('guidance-session');
+  const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecallDbPath:path.join(directory,'raw.sqlite'),
+    autoRecall:false,autoCapture:false,personalRecall:false,recentContext:false,rawRecall:false});
+  const notes=memoryStore({project:'main'}),grant={kind:'read',ownerSubject:'owner',project:'main',sessionId:agent.session.id,
+    rootSessionId:agent.session.id,epoch:'one',signal:new AbortController().signal};
+  const access={ownerSubject:'owner',ready:true,grant:()=>grant,validate:()=>true,validateMessage:()=>true,
+    check:()=>({allowed:true,installed:true,epoch:'one'}),withGrant:(_grant,work)=>work(),admitMessage:()=>null,
+    observe:()=>true,status:()=>({requested:false,epoch:'one'})};
+  const bridge=createBridge({config,tools:notes.tools,llm:fakeLlm('{"actions":[]}'),access,findAgent:()=>agent,
+    logger:{warn(){}},semanticOrganizer:false});
+  t.after(async()=>{await bridge.dispose();await fs.rm(directory,{recursive:true,force:true});});
+  bridge.onSessionEvent(agent.session,{type:'turn/start',data:{turn:1},seq:0,time:1000});
+  const user=directUser('按规则回答。','guidance-user');
+  bridge.onSessionEvent(agent.session,user);
+  const decision=await runPreStep(bridge,{agent,turn:1,messages:[user.data]});
+  const text=decision.messages.flatMap(message=>message.content??[]).filter(part=>part.type==='text').map(part=>part.text).join('\n');
+  assert.match(text,/本轮整个回答（包括闲聊、建议和续写）都要遵守：/u);
+  for(const rule of ANSWER_RULES)assert.ok(text.includes('- '+rule+'。'),rule);
+  assert.ok(text.includes('这些规则不是用户记忆，不得保存为事实。'));
 });

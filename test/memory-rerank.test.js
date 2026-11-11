@@ -307,12 +307,14 @@ test('a short search wait keeps a slow rerank inside the caller timeout and retu
 
 test('originals still visible in the conversation are skipped so older lines fill the slots',async t=>{
   const f=await queryFixture(t);
-  for(let index=1;index<=4;index++)f.save('visible-'+index,'虚构可见候选 '+index,index);
+  const saved=[];
+  for(let index=1;index<=4;index++)saved.push(f.save('visible-'+index,'虚构可见候选 '+index,index));
   const all=await f.answer().search({query:'虚构可见候选',limit:4});
   assert.equal(all.records.length,4);
   const visible=new Set(['visible-3','visible-4']);
-  const found=await f.answer(null,{visibleMessageIds:visible}).search({query:'虚构可见候选',limit:4});
-  assert.deepEqual(found.records.map(record=>record.source.messageId).sort(),['visible-1','visible-2']);
+  const filtered=f.answer(null,{visibleMessageIds:visible});
+  const found=await filtered.search({query:'虚构可见候选',limit:4});
+  assert.deepEqual(found.records.map(record=>filtered.resolve(record.ref).id).sort(),[saved[0].id,saved[1].id].sort());
 });
 
 test('rerank is skipped when the remaining query budget is under 200 milliseconds',async t=>{

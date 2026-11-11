@@ -495,7 +495,8 @@ test('turn-start prefetch attaches bounded earlier originals through the read gr
   // The model sees who said it and when, with the relative day computed by the program.
   const searched=await bridge.queryTools.find(tool=>tool.name==='memory_search').execute({query:'青瓷杯'},{agent,signal:new AbortController().signal});
   const hit=searched.records.find(record=>/青瓷杯/.test(record.text));
-  assert.match(hit.label,/^原话 · 用户说 · [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \+08:00（今天）$/);assert.ok(hit.localTime);
+  assert.match(hit.label,/^原话 · 用户说 · [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \+08:00（今天）$/);
+  assert.equal('localTime' in hit,false);
   f.emit(agent,'turn/end',{turn:2,reason:{kind:'completed'}},bridge);
 
   const small=f.bridge(undefined,{config:{...f.config,prefetchMaxChars:30}});

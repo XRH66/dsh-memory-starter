@@ -59,13 +59,13 @@ test('contextual raw vectors keep original identity, open preceding evidence, an
 
   const answer=f.answer();t.after(()=>answer.dispose());
   const searched=await answer.search({query:'睡前选择温水',limit:8});
-  const issued=searched.records.find(row=>row.id===center.id);assert.ok(issued,JSON.stringify(searched));
-  const opened=await answer.expand({anchor:issued.anchor});
-  assert.ok(opened.records.some(row=>row.id===before.id&&row.role==='assistant'&&row.text.includes('温水')));
-  assert.ok(opened.records.some(row=>row.id===center.id&&row.text==='后者。'));
+  const issued=searched.records.find(row=>answer.resolve(row.ref)?.id===center.id);assert.ok(issued,JSON.stringify(searched));
+  const opened=await answer.expand({ref:issued.ref});
+  assert.ok(opened.records.some(row=>answer.resolve(row.ref)?.id===before.id&&row.label.includes('助手说')&&row.text.includes('温水')));
+  assert.ok(opened.records.some(row=>answer.resolve(row.ref)?.id===center.id&&row.text==='后者。'));
 
   const changed=f.save({id:'drink-choice',role:'assistant',text:'睡前喝咖啡还是牛奶？',sequence:3});
-  const staleOpen=await answer.expand({anchor:issued.anchor});
+  const staleOpen=await answer.expand({ref:issued.ref});
   assert.deepEqual(staleOpen.records,[]);assert.equal(staleOpen.channels.source.state,'source_changed');
   assert.equal(await f.vectors.resolveDocument({grant:f.grant,id:center.id,revision:center.revision,anchor:hit.anchor}),null);
   const stale=await f.vectors.query({grant:f.grant,query:'睡前选择温水',deadline:Date.now()+2000,limit:40});
@@ -107,11 +107,12 @@ test('four background sources do not crowd the original out of the ordinary sear
   assert.equal(rawHit.anchor.embedding.sources.length,4);
   const answer=f.answer();t.after(()=>answer.dispose());
   const result=await answer.search({query:'睡前温水',limit:8});
-  const hit=result.records.find(r=>r.id===center.id);
+  const hit=result.records.find(r=>answer.resolve(r.ref)?.id===center.id);
   assert.ok(hit,JSON.stringify(result));
   assert.equal(hit.text,'后者。');assert.ok(result.budget.tokens<=1024);
-  assert.equal(hit.anchor.embedding.sources,undefined);assert.deepEqual(hit.sourceIds,[center.id]);
-  const opened=await answer.expand({anchor:hit.anchor});
-  assert.ok(opened.records.some(r=>r.id===center.id));
-  assert.ok(opened.records.some(r=>r.role==='assistant'&&r.text==='咖啡还是温水？'));
+  assert.equal('anchor' in hit,false);assert.equal('sourceIds' in hit,false);
+  assert.equal(answer.resolve(hit.ref).anchor.embedding?.sources,undefined);
+  const opened=await answer.expand({ref:hit.ref});
+  assert.ok(opened.records.some(r=>answer.resolve(r.ref)?.id===center.id));
+  assert.ok(opened.records.some(r=>r.label.includes('助手说')&&r.text==='咖啡还是温水？'));
 });
