@@ -119,6 +119,7 @@
   "test/memory-rerank.test.js",
   "test/connection-test.test.js",
   "test/raw-query-reader.test.js",
+  "test/raw-delete-route.test.js",
   "test/memory.test.js",
   "test/natural-decay.test.js",
   "test/navigation-maintenance.test.js",
