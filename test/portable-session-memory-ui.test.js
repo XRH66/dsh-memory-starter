@@ -331,3 +331,12 @@ test('an enabled chat that has not been opened since restart is not shown as wai
   assert.equal(checkbox(page).props.checked, true);
   assert.doesNotMatch(text(page.tree), /下一新回合生效|部分待生效/);
 });
+
+test('a chat switched on but not used yet is labelled on its row without an amber framework badge', async t => {
+  const info = snapshot(['session-a'], { pendingTurns: 1 });
+  Object.assign(info.sessionMemory.states[0], { active: false, pending: true });
+  const env = environment(() => info), page = env.page(); t.after(() => env.close()); await page.flush();
+  assert.match(text(page.tree), /下一新回合生效/);
+  assert.doesNotMatch(text(page.tree), /部分待生效/);
+  assert.match(text(page.tree), /记忆框架已加载/);
+});
