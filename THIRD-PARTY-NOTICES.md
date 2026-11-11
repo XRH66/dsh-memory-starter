@@ -2,21 +2,20 @@
 
 本项目自身代码采用 [MIT](LICENSE)。下列第三方代码、工具、模型与服务保留各自许可；本声明不将它们统一改为 MIT。模型权重、Python 运行库、llama.cpp 二进制与 Basic Memory 软件均不在候选中分发。
 
-## 随包复制：Suzu Memory
+## 参考与改写：Suzu Memory
 
 - 上游：[eryucheng/suzu-memory](https://github.com/eryucheng/suzu-memory)。固定提交：[`645c862470b1a207c9904e614083f8b77a8f15bf`](https://github.com/eryucheng/suzu-memory/tree/645c862470b1a207c9904e614083f8b77a8f15bf)。
 - Copyright 2026 儿玉诚也；**Apache-2.0**，完整原文随包保留在 [vendor/suzu-memory/LICENSE](vendor/suzu-memory/LICENSE)。固定上游树没有 NOTICE 文件，本文件是接入项目自行编写的来源说明。
-- 复制范围为 13 个核心包的 src、resources、schema、package.json 及根 LICENSE，共 227 个上游文件。未复制独立 DSH 插件外壳、CLI、测试或 benchmark。
-- 73 个运行源码文件的 119 处内部 `@suzu-memory/*` 导入改为相对路径；这些文件分别含修改声明。其余算法、既有指纹、资源布局和工作线程入口保留。
-- 完整文件与变换清单：[UPSTREAM.json](vendor/suzu-memory/UPSTREAM.json)；维护说明：[vendor README](vendor/suzu-memory/README.md)。
+- 发行包不含 Suzu 上游源码，只随包保留其 LICENSE。运行代码不导入上游文件；改写自上游思路的文件见下节，并在文件内保留 Apache-2.0 来源声明。
+- 开发时曾在本地 `vendor/suzu-memory/` 下放过固定提交的副本作对照，它不入库，也不进入发行包。
 
 DSH 会话开关及按需检索的方案比较也参考了 [eryucheng/dsh-suzu-memory](https://github.com/eryucheng/dsh-suzu-memory/tree/93cfd662d2662367476cfc02f3fa609a81c1bba4)。本候选不安装该第二套插件，其与核心来源分别列示，不把整个插件实现声称为本项目原创。
 
 ### Portable 原话嵌入背景适配
 
-[embedding-material.js](lib/raw-rag/embedding-material.js)参考并改写上述固定版 [embedding-indexer](vendor/suzu-memory/packages/embedding-indexer/src/index.mjs) 的 `utteranceRetrievalContext` 与 `buildMemoryEmbeddingDocument` 思路：保留原话角色、有限上下文及可追溯来源，再交给嵌入后端。适配文件保留 Apache-2.0 来源声明。不同于上游关系图双向展开，本项目从既有原文库按同会话、同轮或紧邻上一轮取有限前文；增加本项目授权片段、来源版本复核、模型长度约束及中心原文坐标映射，不导入整套 Suzu host，也不启用其生成式背景提案／审核。
+[embedding-material.js](lib/raw-rag/embedding-material.js)参考并改写上述固定版 [embedding-indexer](https://github.com/eryucheng/suzu-memory/blob/645c862470b1a207c9904e614083f8b77a8f15bf/packages/embedding-indexer/src/index.mjs) 的 `utteranceRetrievalContext` 与 `buildMemoryEmbeddingDocument` 思路：保留原话角色、有限上下文及可追溯来源，再交给嵌入后端。适配文件保留 Apache-2.0 来源声明。不同于上游关系图双向展开，本项目从既有原文库按同会话、同轮或紧邻上一轮取有限前文；增加本项目授权片段、来源版本复核、模型长度约束及中心原文坐标映射，不导入整套 Suzu host，也不启用其生成式背景提案／审核。
 
-[Anthropic Contextual Retrieval](https://www.anthropic.com/research/contextual-retrieval)仅作为“编码前补语境”的原理参考，没有复制其代码或提示词。该方案用大模型生成片段背景；本次实现仅组合已保存的原话，不增加生成模型调用，也不扩展关键词索引或引入重排模型。
+[Anthropic Contextual Retrieval](https://www.anthropic.com/research/contextual-retrieval)仅作为“编码前补语境”的原理参考，没有复制其代码或提示词。该方案用大模型生成片段背景；本次实现仅组合已保存的原话，不增加生成模型调用，也不扩展关键词索引。之后另加的可选重排默认关闭，只调用用户自己配置的 OpenAI 兼容 rerank 接口，不随包分发任何模型。
 
 ## 自有项目间复用
 

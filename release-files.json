@@ -183,5 +183,13 @@
   "test/unified-switch-fixture.js",
   "test/unified-vector-prune.test.js",
   "test/unified-switch-plan.test.js",
-  "test/unified-switch-intent.test.js"
+  "test/unified-switch-intent.test.js",
+  "test/portable-session-memory-ui.test.js",
+  "test/raw-models.test.js",
+  "test/time-zone.test.js",
+  "test/unified-entry.test.js",
+  "test/unified-policy.test.js",
+  "test/unified-profiles.test.js",
+  "test/unified-search.test.js",
+  "test/unified-vector-recovery.test.js"
 ]

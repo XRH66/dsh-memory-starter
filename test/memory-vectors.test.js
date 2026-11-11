@@ -555,3 +555,41 @@ test('switch: cloud profiles need the per-switch confirmation and the cloud opt-
   assert.equal(f.api.switchIntent(),null,'turning the cloud switch off drops the intent');
   assert.equal(f.calls.filter(call=>call.op==='embed').length,0,'no provider request was made');
 });
+
+test('a custom OpenAI-compatible embedding service runs the whole chain: saved settings, index, query',async t=>{
+  const {normalizeRawModelSettings}=await import('../lib/raw-rag/settings.js');
+  const {createEmbeddingBackend}=await import('../lib/raw-rag/backend.js');
+  const keyDirectory=await fs.mkdtemp(path.join(os.tmpdir(),'custom-api-chain-'));
+  t.after(()=>fs.rm(keyDirectory,{recursive:true,force:true}));
+  const keyFile=path.join(keyDirectory,'service.key');await fs.writeFile(keyFile,'fictional-chain-key');
+  // The settings page saves through the same normalizer; plain HTTP to a remote host stays refused.
+  const form={rawRecallModel:'custom-api',rawRecallApiBase:'https://fictional-chain.example/v1',rawRecallApiModel:'fictional-embed',rawRecallDimensions:8,rawRecallAllowCloud:true};
+  assert.throws(()=>normalizeRawModelSettings({...form,rawRecallApiBase:'http://fictional-chain.example/v1'},{}, {apiKeyProvided:true}),/HTTPS/);
+  const saved=normalizeRawModelSettings(form,{}, {apiKeyProvided:true});
+  // A tiny fictional service: each text becomes a vector of which topic words it contains.
+  const topics=['tea','coffee','train','fictional'];
+  const vectorOf=text=>{const lower=text.toLowerCase();const v=topics.map(word=>lower.includes(word)?1:0);return [...v,0.01,0,0,0];};
+  const original=globalThis.fetch,requests=[];
+  globalThis.fetch=async(url,init)=>{
+    const body=JSON.parse(init.body);requests.push({url:String(url),auth:init.headers.authorization,body});
+    return new Response(JSON.stringify({data:body.input.map((text,index)=>({index,embedding:vectorOf(text)})),usage:{total_tokens:body.input.length*3}}),
+      {status:200,headers:{'content-type':'application/json'}});
+  };
+  t.after(()=>{globalThis.fetch=original;});
+  const f=await fixture(t,{createBackend:createEmbeddingBackend,config:{project:'main',captureFolder:'chats',...saved,rawRecallApiKeyFile:keyFile}});
+  f.messages.set('tea',{...f.source('tea',0),text:'Fictional note: I drink green tea every morning.'});
+  f.messages.set('train',{...f.source('train',1),text:'Fictional note: the train leaves at nine.'});
+  const prepared=await f.prepare();assert.equal(prepared.completed,2);
+  const grant=f.manager();t.after(()=>grant.cancel());
+  const reader=f.api.forAgent(f.agent),snapshot=await reader.getSnapshot({});
+  const result=await reader.query({query:'what tea do I drink',profile:snapshot,limit:2,deadline:Date.now()+5000});
+  reader.close();
+  assert.equal(result.records[0].id,'tea');assert.equal(result.records[0].text,'Fictional note: I drink green tea every morning.');
+  assert.ok(requests.length>=2);
+  for(const request of requests){
+    assert.equal(request.url,'https://fictional-chain.example/v1/embeddings');
+    assert.equal(request.auth,'Bearer fictional-chain-key');
+    assert.equal(request.body.model,'fictional-embed');
+    assert.equal('dimensions' in request.body,false,'a custom service reports its own size');
+  }
+});
