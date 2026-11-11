@@ -52,6 +52,7 @@
     "lib/local-time.js",
     "lib/memory-query.js",
     "lib/memory-rerank.js",
+    "lib/connection-test.js",
     "lib/memory-vault-watch.js",
     "lib/memory-vectors.js",
     "lib/memory.js",

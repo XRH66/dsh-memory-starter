@@ -870,3 +870,78 @@ test('a preparation refused by an in-flight chat query asks to retry after the c
   assert.match(shown,/准备索引：失败（对话查询正在使用向量模型/);
   assert.equal(shown.includes('EMBEDDING_BUSY'),false);
 });
+
+test('status page shows the last search time, what it lost, and a summary that leaves out model loads',async t=>{
+  let value={...runtime(),searches:[]};
+  const env=environment((url,body)=>{
+    if(url!==BASE+'/runtime')return snapshot();
+    if(body?.action==='probe')return {ok:true,probe:{loadMs:2100,encodeMs:80,dimensions:2560,expectedDimensions:2560,device:'cuda'}};
+    return value;
+  });t.after(()=>env.close());const {view}=await statusRuntime(env);
+  assert.equal(rowOf(view.tree,'检索耗时').value,'暂无');assert.equal(rowOf(view.tree,'检索耗时').meta,'还没有检索记录，聊一句后再看');
+  const at=new Date().toISOString();
+  value={...value,searches:[
+    {kind:'search',at,totalMs:600,state:'ok',records:5,skippedVisible:0,vector:{state:'ready',ms:130},rerank:{state:'applied',ms:410},cold:false},
+    {kind:'search',at,totalMs:9000,state:'ok',records:5,skippedVisible:0,vector:{state:'ready',ms:8800},rerank:null,cold:true},
+    {kind:'prefetch',at,totalMs:1250,state:'ok',records:3,skippedVisible:2,vector:{state:'ready',ms:120},rerank:{state:'timeout',ms:1100},cold:false}]};
+  await view.update({tick:1});
+  assert.equal(rowOf(view.tree,'检索耗时').value,'1.25 秒 打折扣');
+  assert.equal(rowOf(view.tree,'检索耗时').meta,'回答前 · 刚刚 · 附上 3 条 · 跳过 2 条对话里已有的 · 向量 0.12 秒 · 重排 1.10 秒 · 重排超时，已按原顺序');
+  assert.equal(rowOf(view.tree,'近 3 次').value,'中位 0.60 秒');
+  assert.equal(rowOf(view.tree,'近 3 次').meta,'最慢 1.25 秒 · 打折扣或超时 1 次 · 不含 1 次模型加载');
+  await button(view.tree,'试算').props.onClick();await view.flush();
+  assert.deepEqual(writes(env).at(-1).body,{action:'probe',profileId:MODEL});
+  assert.equal(rowOf(view.tree,'试算正常').value,'0.08 秒 通过');
+  assert.match(rowOf(view.tree,'试算正常').meta,/^刚刚 · 先加载了 2\.10 秒 · .+ · 2560 维$/);
+});
+
+test('a size mismatch from the probe fails, and a paused rerank can be resumed early',async t=>{
+  const info=snapshot();info.rerank={enabled:true};
+  const value={...runtime(),rerank:{enabled:true,model:'fixture/reranker',service:'fictional-rerank.example',state:'paused',reason:'重排服务调用失败，暂停 10 分钟',
+    pausedUntil:new Date(Date.now()+5*60000-1000).toISOString(),calls:3,failures:1,tokens:0}};
+  const env=environment((url,body)=>{
+    if(url!==BASE+'/runtime')return info;
+    if(body?.action==='probe')return {ok:true,probe:{loadMs:0,encodeMs:50,dimensions:1024,expectedDimensions:2560}};
+    if(body?.action==='resume-rerank'){value.rerank={...value.rerank,state:'ready',reason:''};delete value.rerank.pausedUntil;return {ok:true,rerank:value.rerank};}
+    return value;
+  });t.after(()=>env.close());const {view}=await statusRuntime(env);
+  await button(view.tree,'试算').props.onClick();await view.flush();
+  assert.equal(rowOf(view.tree,'试算失败').meta,'返回 1024 维，索引用的是 2560 维');
+  assert.equal(rowOf(view.tree,'重排').value,'暂停中恢复使用');
+  assert.equal(rowOf(view.tree,'重排').meta,'重排服务调用失败，暂停 10 分钟 · 约 5 分钟后自动恢复');
+  await button(view.tree,'恢复使用').props.onClick();await view.flush();
+  assert.deepEqual(writes(env).at(-1).body,{action:'resume-rerank'});
+  assert.match(text(view.tree),/重排已恢复。/);assert.equal(rowOf(view.tree,'重排').value,'已开启');
+});
+
+test('vector services test from their row, a new service tests what is typed, and an edit hides the old result',async t=>{
+  const info=snapshot();
+  info.rawModels=[...info.rawModels,{id:'custom-api',label:'自定义 API（OpenAI 兼容）',tier:'cloud',engine:'api',cloud:true,custom:true,dimensions:1024}];
+  info.embeddingServices=[{id:'service-a',name:'虚构甲',apiBase:'https://fictional-a.example/v1',apiModel:'fictional-embed',dimensions:768,hasKey:true,inUse:false}];
+  const env=environment((url,body)=>{
+    if(url!==BASE+'/test')return info;
+    return body.serviceId?{ok:true,result:{ok:true,target:'embedding',ms:142,dimensions:768,host:'fictional-a.example'}}
+      :{ok:true,result:{ok:false,target:'embedding',error:{code:'key',message:'API Key 无效或没有权限',hint:'重新填写 API Key 后再测试'}}};
+  });t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  select(picker.tree,'检索模型').props.onChange({target:{value:'custom-api'}});await picker.flush();
+  pickService(picker.tree,'service-a');await picker.flush();
+  assert.match(button(picker.tree,'测试').props.title,/可能产生极少费用/);
+  await button(picker.tree,'测试').props.onClick();await picker.flush();
+  assert.deepEqual(writes(env).at(-1).body,{target:'embedding',serviceId:'service-a'});
+  assert.equal(rowOf(picker.tree,'连接正常').value,'0.14 秒 通过');
+  assert.equal(rowOf(picker.tree,'连接正常').meta,'刚刚 · 返回 768 维 · fictional-a.example');
+  pickService(picker.tree,'');await picker.flush();
+  assert.equal(nodes(picker.tree,n=>n.props?.className==='memory-row'&&text(n).startsWith('连接')).length,0);
+  assert.equal(button(picker.tree,'测试连接').props.disabled,true);
+  field(picker.tree,'API 地址').props.onChange({target:{value:'https://fictional-new.example/v1'}});await picker.flush();
+  field(picker.tree,'模型名称').props.onChange({target:{value:'fictional-new'}});await picker.flush();
+  field(picker.tree,'API Key').props.onChange({target:{value:'fictional-typed-key'}});await picker.flush();
+  await button(picker.tree,'测试连接').props.onClick();await picker.flush();
+  assert.deepEqual(writes(env).at(-1).body,{target:'embedding',model:'custom-api',apiBase:'https://fictional-new.example/v1',apiModel:'fictional-new',dimensions:1024,apiKey:'fictional-typed-key'});
+  assert.equal(rowOf(picker.tree,'连接失败').meta,'API Key 无效或没有权限。重新填写 API Key 后再测试');
+  assert.doesNotMatch(JSON.stringify(nodes(picker.tree,n=>n.props?.role==='status').map(text)),/fictional-typed-key/);
+  field(picker.tree,'API Key').props.onChange({target:{value:'fictional-other-key'}});await picker.flush();
+  assert.equal(nodes(picker.tree,n=>n.props?.className==='memory-row'&&text(n).startsWith('连接失败')).length,0);
+});

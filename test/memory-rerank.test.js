@@ -250,6 +250,26 @@ test('HTTP failures keep query order and open a ten-minute rerank circuit',async
   assert.deepEqual(paused.records.map(record=>record.id),baseline.records.map(record=>record.id));
   assert.equal(paused.channels.rerank.state,'paused');assert.equal(calls,1);
   assert.equal(reranker.status().state,'paused');assert.equal(reranker.status().failures,1);
+  assert.ok(reranker.status().pausedUntil);
+  // Resuming after the user checked the service lets the next query call it again.
+  assert.equal(reranker.resume().state,'ready');
+  await f.answer(reranker).search({query:'虚构失败候选',limit:4});
+  assert.equal(calls,2);
+});
+
+test('each search reports its kind, time, count and rerank time, never its text',async t=>{
+  const f=await queryFixture(t);
+  for(let index=1;index<=5;index++)f.save('timed-'+index,'虚构计时候选 '+index,index);
+  const reranker=await fixtureReranker(f,{fetchImpl:async()=>response({results:[{index:1,relevance_score:.9}]})});
+  const reports=[];
+  await f.answer(reranker,{searchKind:'prefetch',onSearch:row=>reports.push(row),visibleMessageIds:new Set(['timed-5'])})
+    .search({query:'虚构计时候选',limit:3});
+  assert.equal(reports.length,1);
+  const [row]=reports;
+  assert.equal(row.kind,'prefetch');assert.ok(['ok','partial'].includes(row.state));assert.equal(row.records,3);assert.equal(row.skippedVisible,1);
+  assert.equal(row.cold,false);assert.ok(Number.isFinite(row.totalMs));assert.ok(Number.isFinite(row.text.ms));
+  assert.equal(row.rerank.state,'applied');assert.ok(Number.isFinite(row.rerank.ms));
+  assert.doesNotMatch(JSON.stringify(row),/虚构计时候选/);
 });
 
 test('rerank timeouts fall back without opening the circuit',async t=>{
@@ -541,6 +561,8 @@ test('model settings render the optional rerank section and status page renders 
   const keyInput=uiNodes(rerank.tree,node=>node.type==='input'&&node.props['aria-label']==='重排 API Key')[0];
   assert.equal(address.props.placeholder,'https://api.siliconflow.cn/v1');
   assert.ok(keyInput);
+  const testButton=uiNodes(rerank.tree,node=>node.type==='button'&&uiText(node)==='测试连接')[0];
+  assert.equal(testButton.props.disabled,true);assert.equal(testButton.props.title,'请先填写地址和模型');
   const enable=uiNodes(rerank.tree,node=>node.type==='input'&&node.props.type==='checkbox')[0];
   enable.props.onChange({target:{checked:true}});
   await waitText(rerank,/重排模型/u);
@@ -548,7 +570,7 @@ test('model settings render the optional rerank section and status page renders 
   assert.equal(modelInput.props.value,'BAAI/bge-reranker-v2-m3');
   button('状态').props.onClick();
   const runtime=await waitComponent('MemoryRuntimeSettings');
-  await waitText(runtime,/重排fixture\/reranker · fictional-rerank\.example · 本次启动调用 2 次，失败 1 次已开启/u);
+  await waitText(runtime,/重排fixture\/reranker · fictional-rerank\.example · 本次启动调用 2 次，失败 1 次 · 12 tokens已开启/u);
   assert.doesNotMatch(uiText(runtime.tree),/apiKeyFile|fictional-rerank-key/u);
   // Saved settings that differ from the running ones say a restart is needed instead of the old state.
   snapshot.rerank={...snapshot.rerank,enabled:false};
