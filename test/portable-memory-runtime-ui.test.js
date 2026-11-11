@@ -139,7 +139,13 @@ test('maintenance time zone shows the active and host zones and saves the config
   const page=env.page();await page.flush();
   const zone=env.component(component(page.tree,'TimeZoneSettings'));await zone.flush();
   assert.match(text(zone.tree),/当前生效：America\/Los_Angeles；本机时区：America\/Los_Angeles/);
-  field(zone.tree,'个人时区').props.onChange({target:{value:'Asia/Shanghai'}});await zone.flush();
+  const zones=select(zone.tree,'个人时区');
+  const offered=nodes(zones,n=>n.type==='option').map(n=>n.props.value);
+  assert.equal(offered[0],'');assert.ok(offered.includes('Asia/Shanghai'));assert.ok(offered.includes('America/Los_Angeles'));
+  assert.equal(new Set(offered).size,offered.length);
+  assert.match(text(zones),/北京时间　UTC\+8 · Asia\/Shanghai/);
+  zones.props.onChange({target:{value:'Asia/Shanghai'}});await zone.flush();
+  assert.equal(select(zone.tree,'个人时区').props.value,'Asia/Shanghai');
   await button(zone.tree,'保存时区').props.onClick();await zone.flush();
   const write=writes(env).at(-1);
   assert.equal(write.path,BASE+'/time-zone');
