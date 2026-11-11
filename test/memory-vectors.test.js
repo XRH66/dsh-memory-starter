@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHook} from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -90,6 +91,30 @@ test('maintenance without active index stays unprepared and does not load a mode
   await f.api.resume();await f.api.flush();assert.equal(f.instances.length,0);
   assert.equal((await f.cli('status')).indexReconciliation.state,'unprepared');
   await f.prepare();assert.equal((await f.cli('status')).indexReconciliation.state,'ready');
+});
+
+test('background document enumeration does not create a timer for each item',{timeout:10000},async t=>{
+  const f=await fixture(t);
+  for(let i=0;i<30;i++)f.note('main/dafeiyu/diary/'+String(i).padStart(2,'0'),'fictional diary '+i);
+  await f.prepare();
+  let timeouts=0,immediates=0;
+  const hook=createHook({init(_id,type){if(type==='Timeout')timeouts++;else if(type==='Immediate')immediates++;}}).enable();
+  try{
+    const prepared=await f.prepare();
+    assert.equal(prepared.completed,30);
+  }finally{hook.disable();}
+  assert.ok(timeouts<30,`background enumeration created ${timeouts} timers for 30 documents`);
+  assert.ok(immediates>=30,`background enumeration created only ${immediates} immediates for 30 documents`);
+});
+
+test('an already-aborted background signal exits without waiting',async t=>{
+  const f=await fixture(t);f.messages.set('m1',f.source('m1',0));
+  const grant=f.manager();t.after(()=>grant.cancel());
+  await f.api.ready();await f.api.registerCurrentConfig({grant});
+  const controller=new AbortController();controller.abort();
+  const started=Date.now();
+  await assert.rejects(f.api.prepare({grant,signal:controller.signal}),{name:'AbortError'});
+  assert.ok(Date.now()-started<100);
 });
 
 test('maintenance watermarks distinguish rapid changes, ignore another owner, and retain changes during a pass',async t=>{
