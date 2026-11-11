@@ -114,6 +114,13 @@ const runtime=()=>({ok:true,vectors:{activeProfileId:MODEL,selectedProfileId:MOD
 const component=(tree,name)=>{const node=nodes(tree,n=>typeof n.type==='function'&&n.type.name===name)[0];assert.ok(node,'Missing component: '+name);return node;};
 const select=(tree,label)=>{const node=nodes(tree,n=>n.type==='select'&&n.props['aria-label']===label)[0];assert.ok(node,'Missing select: '+label);return node;};
 const field=(tree,label)=>{const parent=nodes(tree,n=>n.type==='label'&&text(n).startsWith(label))[0];assert.ok(parent,'Missing field: '+label);return nodes(parent,n=>n.type==='input')[0];};
+// A status line: name (and optional meta) on the left, value on the right.
+const rowOf=(tree,name)=>{const node=nodes(tree,n=>n.props?.className==='memory-row'&&text(children(children(n)[0])[0]).startsWith(name))[0];assert.ok(node,'Missing row: '+name);
+  const [main,value]=children(node);return {value:text(value),meta:text(children(main)[1]??'')};};
+const helpTexts=tree=>nodes(tree,n=>typeof n.type==='function'&&n.type.name==='Help').map(n=>n.props.text);
+const serviceRadios=tree=>nodes(tree,n=>n.type==='input'&&n.props.type==='radio'&&n.props.name==='memory-service');
+const chosenService=tree=>serviceRadios(tree).find(n=>n.props.checked)?.props.value;
+const pickService=(tree,id)=>{const radio=serviceRadios(tree).find(n=>n.props.value===id);assert.ok(radio,'Missing service: '+id);radio.props.onChange();};
 const writes=env=>env.calls.filter(call=>call.body);
 const inventoryResponse=models=>({ok:true,inventory:{revision:'r1',models}});
 async function modelPage(env){const page=env.page();await page.flush();button(page.tree,'维护').props.onClick();await page.flush();const model=env.component(component(page.tree,'RawModelSettings'));await model.flush();return {page,model};}
@@ -142,7 +149,7 @@ test('maintenance time zone shows the active and host zones and saves the config
 test('cloud expert settings keep only environment and timing fields and preserve the saved endpoint',async t=>{
   const info=snapshot();info.rawModel={fields:{rawRecallModel:CLOUD,rawRecallApiBase:'https://fictional-a.example/v1',rawRecallApiKeyEnv:'FICTIONAL_A_KEY',rawRecallAllowCloud:true}};
   const env=environment(()=>info);t.after(()=>env.close());const {model}=await modelPage(env);
-  assert.match(text(model.tree),/当前模型：云端 v4。更换模型请到「记忆」页的「检索模型」/);
+  assert.equal(rowOf(model.tree,'当前模型').value,'云端 v4');assert.match(rowOf(model.tree,'当前模型').meta,/更换模型请到「检索模型」页/);
   assert.equal(nodes(model.tree,n=>n.type==='label'&&text(n).startsWith('API 地址')).length,0);
   assert.equal(nodes(model.tree,n=>n.type==='input'&&n.props.type==='password').length,0);
   assert.doesNotMatch(text(model.tree),/复用.*密钥|允许云端|向量维度/);
@@ -190,9 +197,9 @@ test('settings page recognizes the active Include entry at a frozen version file
   const frozen={entryId:'include:basic-memory-bridge',moduleName:'file:///fixture/dsh-basic-memory-bridge/.local/runtime/versions/memory-pipeline-4b-fixture/lib/bundle-entry.js',enabled:true,fiberPhase:'active'};
   const env=environment(()=>snapshot(),[frozen]);t.after(()=>env.close());
   const page=env.page();await page.flush();
-  const line=nodes(page.tree,node=>node.type==='div'&&node.props.className==='memory-line'&&text(children(node)[0])==='记忆框架')[0];
+  const line=nodes(page.tree,node=>node.type==='div'&&node.props.className==='memory-group-head'&&text(children(node)[0])==='记忆框架')[0];
   assert.ok(line);assert.equal(text(line),'记忆框架已加载');
-  assert.match(text(page.tree),/记忆框架已加载，各对话记忆状态见下方/);
+  assert.equal(nodes(line,node=>typeof node.type==='function'&&node.type.name==='Help')[0].props.text,'记忆框架已加载，设置已生效。');
   assert.equal(writes(env).length,0);assert.ok(env.calls.every(call=>call.path===BASE+'/sessions'));
 });
 
@@ -214,7 +221,7 @@ test('core status requires enabled active identity and retains legacy aliases an
   for(const [plugins,loaded] of cases){
     const env=environment(()=>snapshot(),plugins);t.after(()=>env.close());
     const page=env.page();await page.flush();
-    const line=nodes(page.tree,node=>node.type==='div'&&node.props.className==='memory-line'&&text(children(node)[0])==='记忆框架')[0];
+    const line=nodes(page.tree,node=>node.type==='div'&&node.props.className==='memory-group-head'&&text(children(node)[0])==='记忆框架')[0];
     assert.ok(line);assert.equal(text(line),'记忆框架'+(loaded?'已加载':'未加载'),JSON.stringify(plugins));
     assert.equal(writes(env).length,0);
   }
@@ -224,7 +231,7 @@ test('expert panel fixes the current model, collapses resource paths and preserv
   const env=environment(()=>snapshot());t.after(()=>env.close());const {model}=await modelPage(env);
   assert.equal(button(model.tree,'标准模式').props['aria-pressed'],true);
   assert.equal(nodes(model.tree,n=>n.type==='details')[0].props.open,false);
-  assert.match(text(model.tree),/当前模型：Qwen 4B。更换模型请到「记忆」页的「检索模型」/);
+  assert.equal(rowOf(model.tree,'当前模型').value,'Qwen 4B');assert.match(rowOf(model.tree,'当前模型').meta,/更换模型请到「检索模型」页/);
   assert.equal(nodes(model.tree,n=>n.type==='select'&&n.props['aria-label']==='查看向量模型').length,0);
   assert.equal(nodes(model.tree,n=>n.type==='button'&&['切换到此模型','恢复上次向量设置','下载'].includes(text(n))).length,0);
   assert.equal(select(model.tree,'运行设备').props.value,'auto');
@@ -316,13 +323,13 @@ test('status page owns runtime controls and shows the pending model, current clo
   const view=env.component(component(page.tree,'MemoryRuntimeSettings'));await view.flush();
   const shown=text(page.tree),runtimeText=text(view.tree);
   // Without a confirmed switch nothing builds by itself after the reload; say where to start it.
-  assert.match(shown,/待生效的检索模型：Qwen 0\.6B。重启 DSH（重新加载记忆框架）后切换；切换后在这里点「准备索引」建立索引/);
+  assert.match(shown,/待生效：Qwen 0\.6B，重启 DSH 后切换；切换后在这里点「准备索引」。/);
   const confirmed=environment(url=>url===BASE+'/runtime'?runtime():{...info,pendingRawModelSwitch:{cloudConfirmed:false}});t.after(()=>confirmed.close());
   const confirmedPage=confirmed.page();await confirmedPage.flush();button(confirmedPage.tree,'状态').props.onClick();await confirmedPage.flush();
   assert.match(text(confirmedPage.tree),/切换后会自动开始建索引/);
-  assert.match(runtimeText,/当前模型：fictional-embed；运行状态/);
-  assert.match(runtimeText,/索引：未建立/);
-  assert.match(runtimeText,/点「准备索引」开始建立。云端模型会把纳入索引的内容发送到服务商并计费。/);
+  assert.equal(rowOf(view.tree,'当前模型').meta,'fictional-embed');
+  assert.equal(rowOf(view.tree,'索引').value,'未建立');
+  assert.equal(rowOf(view.tree,'索引').meta,'点「准备索引」建立；云端模型会按量计费');void runtimeText;
   assert.ok(nodes(page.tree,n=>n.type?.name==='MemoryReviewSettings').length<=1);
   button(page.tree,'维护').props.onClick();await page.flush();
   assert.equal(nodes(page.tree,n=>n.type?.name==='MemoryRuntimeSettings').length,0);
@@ -333,11 +340,11 @@ test('runtime distinguishes a completed old index count from pending catalogue c
   const value=runtime();value.vectors.profiles[0].progress={state:'pending',completed:4,total:4,pendingBoundaries:1};
   const env=environment(url=>url===BASE+'/runtime'?value:snapshot());t.after(()=>env.close());
   const {view}=await statusRuntime(env);
-  assert.match(text(view.tree),/索引：待追平（上次完成 4 \/ 4）/);
-  assert.doesNotMatch(text(view.tree),/索引：已就绪/);
+  assert.equal(rowOf(view.tree,'索引').value,'4 / 4 待追平');assert.equal(rowOf(view.tree,'索引').meta,'有新内容待补进索引');
+  assert.doesNotMatch(rowOf(view.tree,'索引').value,/已就绪/);
   value.vectors.profiles[0].progress={state:'ready',completed:5,total:5};
-  await button(view.tree,'刷新运行状态').props.onClick();await view.flush();
-  assert.match(text(view.tree),/索引：已就绪（5 \/ 5）/);assert.equal(writes(env).length,0);
+  await view.update({tick:1});
+  assert.equal(rowOf(view.tree,'索引').value,'5 / 5 已就绪');assert.equal(writes(env).length,0);
 });
 
 test('runtime status is read-only, keeps actual CPU fallback separate and dispatches explicit lifecycle targets',async t=>{
@@ -346,9 +353,9 @@ test('runtime status is read-only, keeps actual CPU fallback separate and dispat
     if(body){if(body.action==='release'){value.vectors.runtime.actualDevice=null;value.vectors.profiles[0].modelState='released';}return {ok:true,started:body.action==='prepare'};}
     return value;
   });t.after(()=>env.close());const {view}=await statusRuntime(env);
-  assert.match(text(view.tree),/实际运行设备：CPU；回退原因：CUDA 不可用/);
-  assert.match(text(view.tree),/索引：已就绪（4 \/ 4）/);
-  assert.match(text(view.tree),/已报告 20 tokens/);
+  assert.equal(rowOf(view.tree,'运行设备').value,'CPU');assert.match(rowOf(view.tree,'运行设备').meta,/回退原因：CUDA 不可用/);
+  assert.equal(rowOf(view.tree,'索引').value,'4 / 4 已就绪');
+  assert.match(rowOf(view.tree,'用量').value,/20 tokens/);
   assert.equal(writes(env).length,0);
   for(const action of [['加载／预热','load'],['准备索引','prepare'],['释放运行资源','release']]){
     await button(view.tree,action[0]).props.onClick();await view.flush();
@@ -356,7 +363,7 @@ test('runtime status is read-only, keeps actual CPU fallback separate and dispat
     assert.deepEqual(call.body,{action:action[1],profileId:MODEL,profileRevision:2});
     if(action[1]==='prepare')assert.match(text(view.tree),/操作已启动/);
   }
-  assert.match(text(view.tree),/实际运行设备：未加载/);
+  assert.equal(rowOf(view.tree,'运行设备').value,'未加载');
   assert.ok(env.calls.filter(call=>call.path===BASE+'/runtime').every(call=>call.options.cache==='no-store'));
 });
 
@@ -374,7 +381,7 @@ test('runtime errors do not simulate success and blocked actions never send forc
 test('scheduling resume and selected-batch retry use real runtime requests',async t=>{
   const env=environment((url,body)=>url===BASE+'/runtime'?body?{ok:true}:runtime():snapshot());t.after(()=>env.close());
   const {view}=await statusRuntime(env);
-  assert.match(text(view.tree),/foreground-busy/);assert.match(text(view.tree),/原始授权及前台占用/);
+  assert.match(text(view.tree),/foreground-busy/);assert.ok(helpTexts(view.tree).some(value=>/授权和前台是否占用/.test(value)));
   assert.equal(button(view.tree,'重试所选批次').props.disabled,true);
   await button(view.tree,'恢复后台任务').props.onClick();await view.flush();
   select(view.tree,'重试批次').props.onChange({target:{value:'batch-one'}});await view.flush();
@@ -385,7 +392,7 @@ test('scheduling resume and selected-batch retry use real runtime requests',asyn
 test('missing runtime callbacks remain visibly unconnected, with unknown counts and disabled model actions',async t=>{
   const env=environment(url=>url===BASE+'/runtime'?{status:404,body:{ok:false,error:'当前入口尚未接入记忆运行管理'}}:snapshot());t.after(()=>env.close());
   const {view}=await statusRuntime(env);
-  assert.match(text(view.tree),/尚未接入记忆运行管理/);assert.match(text(view.tree),/索引：未建立/);
+  assert.match(text(view.tree),/尚未接入记忆运行管理/);assert.equal(rowOf(view.tree,'索引').value,'未建立');
   assert.doesNotMatch(text(view.tree),/统一向量服务已接入/);
   assert.equal(button(view.tree,'加载／预热').props.disabled,true);assert.equal(button(view.tree,'尝试整理待办').props.disabled,true);
   assert.equal(writes(env).length,0);
@@ -441,7 +448,7 @@ test('started operations poll read-only receipts, disable competing actions and 
     value.operation={id:'op-one',action:body.action,state:'running'};return {ok:true,started:true,id:'op-one',action:body.action};
   });t.after(()=>env.close());const {view}=await statusRuntime(env);
   await button(view.tree,'准备索引').props.onClick();await view.flush();
-  assert.match(text(view.tree),/操作已启动/);assert.match(text(view.tree),/操作回执：准备索引 · 进行中/);
+  assert.match(text(view.tree),/操作已启动/);assert.match(text(view.tree),/准备索引：进行中/);
   assert.equal(button(view.tree,'尝试整理待办').props.disabled,true);
   assert.equal(env.timers.size,1);const before=writes(env).length;
   for(const tick of [...env.timers.values()])await tick();await view.flush();assert.equal(writes(env).length,before);
@@ -467,7 +474,7 @@ test('clicking cancel after viewing B still targets the running load or prepare 
     assert.deepEqual(writes(env)[0].body,{action,profileId:MODEL,profileRevision:2});
     value.vectors.selectedProfileId=other;
     await view.update({...view.props,modelId:other});
-    assert.match(text(view.tree),/当前模型：Qwen 0\.6B/);
+    assert.equal(rowOf(view.tree,'当前模型').meta,'Qwen 0.6B');
     const cancel=button(view.tree,'取消向量操作');assert.equal(cancel.props.disabled,false);
     await cancel.props.onClick();await view.flush();
     assert.deepEqual(writes(env).at(-1).body,{action:'cancel',profileId:MODEL,profileRevision:2});
@@ -478,12 +485,12 @@ test('clicking cancel after viewing B still targets the running load or prepare 
 test('string model-state receipts use top-level actual device and do not borrow another profile runtime',async t=>{
   const value=runtime();Object.assign(value.vectors.profiles[0],{modelState:'loaded',actualDevice:'cuda',fallbackReason:null,runtime:{threads:4},idleReleaseMs:120000});
   const env=environment(url=>url===BASE+'/runtime'?value:snapshot());t.after(()=>env.close());const {view}=await statusRuntime(env);
-  assert.match(text(view.tree),/实际运行设备：GPU（NVIDIA CUDA）/);assert.doesNotMatch(text(view.tree),/回退原因/);
-  assert.match(text(view.tree),/实际空闲释放设置：120 秒；计算线程 4/);
+  assert.equal(rowOf(view.tree,'运行设备').value,'GPU（NVIDIA CUDA）');assert.doesNotMatch(rowOf(view.tree,'运行设备').meta,/回退原因/);
+  assert.match(rowOf(view.tree,'运行设备').meta,/空闲 120 秒后释放 · 4 线程/);
   value.vectors.profiles[0].actualDevice=null;
-  await button(view.tree,'刷新运行状态').props.onClick();await view.flush();
-  assert.match(text(view.tree),/运行状态：未加载/);assert.match(text(view.tree),/实际运行设备：未加载/);
-  await view.update({modelId:'Qwen/Qwen3-Embedding-0.6B'});assert.match(text(view.tree),/实际运行设备：未报告/);
+  await view.update({tick:2});
+  assert.equal(rowOf(view.tree,'当前模型').value,'未加载');assert.equal(rowOf(view.tree,'运行设备').value,'未加载');
+  await view.update({modelId:'Qwen/Qwen3-Embedding-0.6B'});assert.equal(rowOf(view.tree,'运行设备').value,'未报告');
 });
 
 test('session HTTP adapter preserves the deployment status string and separates the detailed runtime object',async t=>{
@@ -557,15 +564,14 @@ test('saved custom services can be selected and save the model with serviceId',a
   const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
   const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
   select(picker.tree,'检索模型').props.onChange({target:{value:'custom-api'}});await picker.flush();
-  const services=select(picker.tree,'已保存的服务');
-  assert.deepEqual(nodes(services,n=>n.type==='option').map(n=>n.props.value),['','service-a','service-b']);
-  assert.match(text(services),/虚构甲（fictional-embed）/);
-  services.props.onChange({target:{value:'service-a'}});await picker.flush();
-  assert.equal(field(picker.tree,'API 地址').props.value,'https://fictional-a.example/v1');
-  assert.equal(field(picker.tree,'模型名称').props.value,'fictional-embed');
-  assert.equal(field(picker.tree,'向量维数').props.value,768);
-  assert.equal(field(picker.tree,'API Key').props.placeholder,'已保存，留空沿用');
-  assert.equal(field(picker.tree,'API Key').props.disabled,true);
+  assert.deepEqual(serviceRadios(picker.tree).map(n=>n.props.value),['service-a','service-b','']);
+  assert.match(text(picker.tree),/虚构甲fictional-a\.example · fictional-embed · 768 维/);
+  pickService(picker.tree,'service-a');await picker.flush();
+  assert.equal(chosenService(picker.tree),'service-a');
+  // A saved service carries its own address, model and size; the new-service fields are hidden.
+  assert.equal(nodes(picker.tree,n=>n.type==='label'&&text(n).startsWith('API 地址')).length,0);
+  // The saved service already has a key, so no key field is offered for it.
+  assert.equal(nodes(picker.tree,n=>n.type==='label'&&text(n).startsWith('API Key')).length,0);
   field(picker.tree,'我知道检索内容会发送到云端').props.onChange({target:{checked:true}});await picker.flush();
   await button(picker.tree,'保存').props.onClick();await picker.flush();
   const call=writes(env).filter(item=>item.path===BASE+'/model').at(-1);
@@ -590,11 +596,11 @@ test('saved services support edit, delete confirmation and an in-use locked stat
   });t.after(()=>env.close());
   const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
   const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
-  assert.equal(select(picker.tree,'已保存的服务').props.value,'service-a');
+  assert.equal(chosenService(picker.tree),'service-a');
   assert.equal(button(picker.tree,'删除').props.disabled,true);
-  assert.match(text(picker.tree),/正在使用，不能删除/);
+  assert.equal(button(picker.tree,'删除').props.title,'正在使用，不能删除');
 
-  select(picker.tree,'已保存的服务').props.onChange({target:{value:'service-b'}});await picker.flush();
+  pickService(picker.tree,'service-b');await picker.flush();
   assert.equal(button(picker.tree,'删除').props.disabled,false);
   button(picker.tree,'删除').props.onClick();await picker.flush();
   assert.match(text(picker.tree),/删除「虚构乙」？只删除这条服务配置和它的密钥，不影响已有记忆和索引。/);
@@ -604,7 +610,7 @@ test('saved services support edit, delete confirmation and an in-use locked stat
   await button(picker.tree,'确认删除').props.onClick();await picker.flush();
   assert.equal(writes(env).at(-1).body.action,'delete');assert.equal(writes(env).at(-1).body.id,'service-b');
 
-  select(picker.tree,'已保存的服务').props.onChange({target:{value:'service-a'}});await picker.flush();
+  pickService(picker.tree,'service-a');await picker.flush();
   button(picker.tree,'编辑').props.onClick();await picker.flush();
   assert.equal(field(picker.tree,'服务名称').props.value,'虚构甲');
   assert.equal(nodes(picker.tree,n=>n.type==='label'&&text(n).startsWith('服务 API 地址')).length,0);
@@ -636,7 +642,7 @@ test('only storing a new service writes the list and never calls the model endpo
   assert.equal(writes(env).filter(call=>call.path===BASE+'/model').length,0);
   const call=writes(env).filter(item=>item.path===BASE+'/embedding-services').at(-1);
   assert.equal(call.body.action,'save');assert.equal(call.body.apiKey,'fictional-key');
-  assert.equal(select(picker.tree,'已保存的服务').props.value,'service-new');
+  await picker.update({info});assert.equal(chosenService(picker.tree),'service-new');
   assert.match(text(picker.tree),/已存入服务列表；尚未切换模型/);
 });
 
@@ -734,7 +740,7 @@ test('a missing local model can download files but cannot save or write model se
   select(picker.tree,'检索模型').props.onChange({target:{value:OTHER_LOCAL}});await picker.flush();
   assert.equal(button(picker.tree,'保存').props.disabled,true);
   const preparation=env.component(component(picker.tree,'ModelPreparation'));await preparation.flush();
-  assert.match(text(preparation.tree),/该模型尚未下载（约 585\.1 MB）。下载只保存文件，不会切换模型。/);
+  assert.match(text(preparation.tree),/尚未下载（约 585\.1 MB）。下载只保存文件，不切换模型。/);
   await button(preparation.tree,'下载').props.onClick();await preparation.flush();
   const start=writes(env).find(call=>call.path===BASE+'/model-install'&&call.body.action==='start');
   assert.equal(start.body.downloadOnly,true);assert.equal(start.body.allowDownload,true);
@@ -836,7 +842,7 @@ test('model status panel reports the index estimate and drops only an unused ind
   });t.after(()=>env.close());
   const {model}=await modelPage(env);
   const panel=env.component(component(model.tree,'ModelSwitch'));await panel.flush();
-  assert.match(text(panel.tree),/此模型：使用中。/);
+  assert.equal(rowOf(panel.tree,'此模型').value,'使用中');
   assert.equal(nodes(panel.tree,n=>n.type==='button'&&text(n)==='切换到此模型').length,0);
   assert.equal(nodes(panel.tree,n=>n.type==='button'&&text(n)==='清理此模型的索引').length,0,'active index cannot be dropped');
   await panel.update({...panel.props,modelId:OLD});
@@ -854,7 +860,7 @@ test('a preparation refused by an in-flight chat query asks to retry after the c
   const env=environment(url=>url===BASE+'/runtime'?state:snapshot());t.after(()=>env.close());
   const {view:panel}=await statusRuntime(env);
   const shown=text(panel.tree);
-  assert.match(shown,/索引：失败（0 \/ 4）；对话查询正在使用向量模型，请等这次对话结束后再点击/);
-  assert.match(shown,/操作回执：准备索引 · 失败；对话查询正在使用向量模型/);
+  assert.equal(rowOf(panel.tree,'索引').value,'0 / 4 出错');assert.match(rowOf(panel.tree,'索引').meta,/对话查询正在使用向量模型，请等这次对话结束后再点击/);
+  assert.match(shown,/准备索引：失败（对话查询正在使用向量模型/);
   assert.equal(shown.includes('EMBEDDING_BUSY'),false);
 });

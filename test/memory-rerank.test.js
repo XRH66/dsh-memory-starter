@@ -513,7 +513,7 @@ test('model settings render the optional rerank section and status page renders 
   const direct=uiNodes(rerank.tree,node=>node.type==='input'&&node.props.type==='radio'&&node.props.value==='direct')[0];
   assert.ok(direct);
   direct.props.onChange();
-  await waitText(rerank,/重排服务地址/u);
+  await waitText(rerank,/服务地址/u);
   const address=uiNodes(rerank.tree,node=>node.type==='input'&&node.props['aria-label']==='重排服务地址')[0];
   const keyInput=uiNodes(rerank.tree,node=>node.type==='input'&&node.props['aria-label']==='重排 API Key')[0];
   assert.equal(address.props.placeholder,'https://api.siliconflow.cn/v1');
@@ -525,6 +525,6 @@ test('model settings render the optional rerank section and status page renders 
   assert.equal(modelInput.props.value,'BAAI/bge-reranker-v2-m3');
   button('状态').props.onClick();
   const runtime=await waitComponent('MemoryRuntimeSettings');
-  await waitText(runtime,/重排：已开启（fixture\/reranker · fictional-rerank\.example）· 本次启动已调用 2 次、失败 1 次/u);
+  await waitText(runtime,/重排fixture\/reranker · fictional-rerank\.example · 本次启动调用 2 次，失败 1 次已开启/u);
   assert.doesNotMatch(uiText(runtime.tree),/apiKeyFile|fictional-rerank-key/u);
 });

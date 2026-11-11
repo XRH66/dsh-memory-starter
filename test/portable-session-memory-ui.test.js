@@ -104,7 +104,10 @@ const autoSnapshot = (enabled = false, extra = {}) => {
   value.sessionMemory = { ...value.sessionMemory, autoEnableNew: enabled };
   return value;
 };
-const checkbox = (host, title = '测试对话甲') => nodes(host.tree, n => n.type === 'input' && n.props['aria-label'] === '选择对话：' + title)[0];
+// Each conversation row carries one on/off switch; its label says what clicking it will do.
+const sessionSwitches = host => nodes(host.tree, n => n.type === 'input' && n.props.role === 'switch' && /^(启用|关闭)本对话记忆：/.test(n.props['aria-label']));
+const checkbox = (host, title = '测试对话甲') => sessionSwitches(host).find(n => n.props['aria-label'].endsWith('：' + title));
+const helpTexts = host => nodes(host.tree, n => typeof n.type === 'function' && n.type.name === 'Help').map(n => n.props.text);
 const writes = env => env.calls.filter(call => call.body);
 
 test('handoff control offers presets and custom tokens, validates capacity and saves through the actual settings endpoint',async t=>{
@@ -149,7 +152,7 @@ test('new conversations can default to memory on through the dedicated setting',
   const toggle = nodes(page.tree, node => node.type === 'input' && node.props['aria-label'] === '新对话自动开启记忆')[0];
   assert.ok(toggle);
   assert.equal(toggle.props.checked, false);
-  assert.match(text(page.tree), /新建的对话从第一句起就会被记住/);
+  assert.ok(helpTexts(page).some(value => /新建的对话从第一句起就会被记住/.test(value)));
   const saving = toggle.props.onChange({ target: { checked: true } });
   await page.flush();
   assert.equal(nodes(page.tree, node => node.type === 'input' && node.props['aria-label'] === '新对话自动开启记忆')[0].props.disabled, true);
@@ -168,9 +171,8 @@ test('old bound sessions remain unselected without new authorization', async t =
   const env = environment(() => snapshot()), page = env.page(); t.after(() => env.close()); await page.flush();
   assert.equal(checkbox(page).props.checked, false);
   assert.equal(checkbox(page, '测试对话乙').props.checked, false);
-  assert.match(text(page.tree), /只有开启的对话会被记住/);
-  assert.match(text(page.tree), /关闭不会删除已记住的内容/);
-  assert.equal(nodes(page.tree, n => n.type === 'button' && text(n) === '启用本对话记忆').length, 2);
+  assert.ok(helpTexts(page).some(value => /只有开启记忆的对话会被记住/.test(value) && /关闭不会删除已记住的内容/.test(value)));
+  assert.equal(sessionSwitches(page).filter(n => n.props['aria-label'].startsWith('启用本对话记忆：')).length, 2);
   assert.equal(writes(env).length, 0);
 });
 
@@ -217,24 +219,24 @@ test('pending activation refreshes into actual active permission', async t => {
   assert.equal(env.timers.size, 0);
 });
 
-test('selected sessions save through replace and respect runtime states instead of old bound fields', async t => {
+test('a conversation switch saves through bind and respects runtime states instead of old bound fields', async t => {
   let info = snapshot();
   const env = environment((_path, body) => {
     if (body) {
-      info = snapshot(body.value, { revision: 'r2', pendingTurns: 1 });
+      info = snapshot([body.value], { revision: 'r2', pendingTurns: 1 });
       Object.assign(info.sessionMemory.states[0], { active: false, pending: true });
     }
     return info;
   }); t.after(() => env.close());
   const page = env.page(); await page.flush();
-  checkbox(page).props.onChange({ target: { checked: true } }); await page.flush();
-  assert.match(text(page.tree), /已选择开启，尚未保存/);
-  await button(page.tree, '保存对话选择').props.onClick(); await page.flush();
-  assert.deepEqual(writes(env)[0].body, { action: 'replace', value: ['session-a'], revision: 'r1' });
+  await checkbox(page).props.onChange({ target: { checked: true } }); await page.flush();
+  assert.equal(writes(env).length, 1);
+  assert.deepEqual(writes(env)[0].body, { action: 'bind', value: 'session-a', revision: 'r1' });
   assert.equal(checkbox(page).props.checked, true);
+  assert.equal(checkbox(page).props['aria-label'], '关闭本对话记忆：测试对话甲');
   assert.equal(checkbox(page, '测试对话乙').props.checked, false);
-  assert.match(text(page.tree), /已保存开启，下一新回合生效/);
-  assert.match(text(page.tree), /对话选择已保存/);
+  assert.match(text(page.tree), /测试项目 · 下一新回合生效/);
+  assert.match(text(page.tree), /已保存，从下一新回合生效/);
 });
 
 test('page can find a chosen conversation and directly bind it without replacing others', async t => {
@@ -245,8 +247,8 @@ test('page can find a chosen conversation and directly bind it without replacing
   }); t.after(() => env.close());
   const page = env.page(); await page.flush();
   nodes(page.tree, n => n.type === 'input' && n.props.type === 'search')[0].props.onChange({ target: { value: '另一项目' } }); await page.flush();
-  assert.equal(nodes(page.tree, n => n.type === 'input' && n.props.type === 'checkbox').length, 1);
-  await button(page.tree, '启用本对话记忆').props.onClick(); await page.flush();
+  assert.equal(sessionSwitches(page).length, 1);
+  await checkbox(page, '测试对话乙').props.onChange({ target: { checked: true } }); await page.flush();
   assert.deepEqual(writes(env)[0].body, { action: 'bind', value: 'session-b', revision: 'r1' });
   assert.deepEqual(info.sessionMemory.enabledSessions, ['session-a', 'session-b']);
 });
@@ -258,13 +260,12 @@ test('revision conflict refreshes authoritative state and never retries the writ
     return info;
   }); t.after(() => env.close());
   const page = env.page(); await page.flush();
-  checkbox(page).props.onChange({ target: { checked: true } }); await page.flush();
-  await button(page.tree, '保存对话选择').props.onClick(); await page.flush();
+  await checkbox(page).props.onChange({ target: { checked: true } }); await page.flush();
   assert.equal(writes(env).length, 1);
   assert.match(text(page.tree), /配置已修改/);
   assert.equal(checkbox(page).props.checked, false);
   assert.equal(checkbox(page, '测试对话乙').props.checked, true);
-  assert.doesNotMatch(text(page.tree), /对话选择已保存/);
+  assert.doesNotMatch(text(page.tree), /已保存/);
 });
 
 test('late save for a previous conversation cannot overwrite the newly opened conversation', async t => {
@@ -294,7 +295,8 @@ test('missing opt-in receipt never presents legacy bindings as granted permissio
   await page.flush(); await header.flush();
   assert.equal(checkbox(page).props.checked, false);
   assert.equal(button(header.tree, '启用本对话记忆').props.disabled, true);
-  assert.match(text(page.tree), /旧绑定不作为新授权/);
+  assert.match(text(page.tree), /尚未接入对话记忆开关/);
+  assert.equal(nodes(page.tree, n => n.type === 'fieldset')[0].props.disabled, true);
   assert.match(text(header.tree), /尚未接通/);
   assert.equal(writes(env).length, 0);
 });
@@ -317,7 +319,7 @@ test('existing model settings save refreshes the opt-in receipt without changing
   modelSettings.props.onSaved(savedConfiguration); await page.flush();
   button(page.tree, '记忆').props.onClick(); await page.flush();
   assert.equal(checkbox(page).props.checked, true);
-  assert.match(text(page.tree), /本回合允许使用记忆/);
+  assert.doesNotMatch(text(page.tree), /下一新回合生效/);
   assert.doesNotMatch(text(page.tree), /尚未接入对话记忆开关/);
   assert.equal(writes(env).length, 0);
 });
