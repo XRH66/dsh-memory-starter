@@ -18,8 +18,12 @@ async function handoffFixture(t){
   const logger={warn(){}},agent=fakeAgent('session-handoff-sample'),events=[],appended=[];
   const findAgent=id=>id===agent.session.id?agent:undefined;
   Object.defineProperty(agent.session,'seq',{get:()=>events.length});
+  agent.session.log=events;
   agent.session.snapshotEvents=(from,to)=>events.slice(from,to);
+  agent.session.deriveEventMessage=event=>event.type==='user/message'?event.data:event.data?.message;
   agent.session.deriveMessages=()=>appended.map(event=>event.data);
+  Object.defineProperty(agent.session,'surface',{configurable:true,get:()=>({nodes:events
+    .filter(event=>event.surfaceOp==='append').map(event=>event.seq)})});
   const listCalls=[];
   async function openRuntime(){
     const access=await createSessionMemory({directory,ownerSubject:'fixture-owner',logger,
@@ -43,6 +47,16 @@ async function handoffFixture(t){
     const event={seq:events.length,time:Date.UTC(2026,10,8)+events.length*1000,type,data,surfaceOp:'append'};
     events.push(event);if(dispatch)current.bridge.onSessionEvent(agent.session,event);return event;
   };
+  emit('system/message',{
+    turn:1,
+    step:1,
+    message:{
+      id:'system-'+agent.session.id,
+      role:'system',
+      content:[{type:'text',text:'system prompt'}],
+      source:{kind:'system-prompt'},
+    },
+  },false);
   agent.session.append=(type,data)=>{const event=emit(type,data);appended.push(event);return event;};
   const scope={ownerSubject:'fixture-owner',project:'main'};
   const statusDir=path.join(managementDirectory(config),'memory-status');

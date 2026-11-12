@@ -60,6 +60,7 @@ async function fixture(t,overrides={}) {
 }
 
 function attachSurface(f,bridge,agent) {
+  seedSystemHead(f,agent);
   const surface=()=>{
     let active=[];
     for(const event of agent.events){
@@ -76,6 +77,26 @@ function attachSurface(f,bridge,agent) {
   agent.session.deriveMessages=()=>surface().map(seq=>agent.events.find(event=>event.seq===seq))
     .filter(Boolean).map(event=>event.type==='user/message'?event.data:event.data?.message).filter(Boolean);
   agent.session.append=(type,data,options={})=>f.emit(agent,type,data,bridge,{surfaceOp:options.surfaceOp??'append'});
+}
+
+function seedSystemHead(f,agent){
+  if(agent.events[0]?.type==='system/message')return;
+  f.emit(agent,'system/message',{
+    turn:1,
+    step:1,
+    message:{
+      id:'system-'+agent.session.id,
+      role:'system',
+      content:[{type:'text',text:'system prompt'}],
+      source:{kind:'system-prompt'},
+    },
+  },undefined,{surfaceOp:'append'});
+  agent.session.log=agent.events;
+  agent.session.deriveEventMessage??=(event=>event.type==='user/message'?event.data:event.data?.message);
+  if(!Object.getOwnPropertyDescriptor(agent.session,'surface')){
+    Object.defineProperty(agent.session,'surface',{configurable:true,get:()=>({nodes:agent.events
+      .filter(event=>event.surfaceOp==='append').map(event=>event.seq)})});
+  }
 }
 
 test('explicit access is lazy: default-off initialization and a closed session never create stores or touch the Vault',async t=>{
@@ -216,6 +237,7 @@ test('restart repairs unfinished text projections from original proofs without r
 test('request hook injects one handoff only after a change, reuses HTTP retries and retains it on later normal turns',async t=>{
   const f=await fixture(t,{recentContext:true,autoCapture:false}),a=f.actor(),b=f.actor('session-next');let connection='qa-connection-one';
   const bridge=f.bridge(undefined,{resolveChatConnection:()=>({connection,coverage:'fixture'})});
+  seedSystemHead(f,a);seedSystemHead(f,b);
   const injected=[];
   for(const agent of [a,b])agent.session.append=(type,data,options)=>{
     assert.equal(type,'user/message');assert.equal(options.surfaceOp,'append');
@@ -342,6 +364,7 @@ test('child-agent requests neither inject handoffs nor change the root conversat
 
 test('closing during handoff preparation removes pending memory additions and still admits the actual user message',async t=>{
   const f=await fixture(t,{recentContext:true,autoCapture:false}),a=f.actor(),b=f.actor('session-close-during-handoff'),bridge=f.bridge();
+  attachSurface(f,bridge,a);attachSurface(f,bridge,b);
   let appends=0;
   for(const agent of [a,b])agent.session.append=(type,data)=>{appends++;return f.emit(agent,type,data,bridge);};
   async function prepare(agent,turn,user){return bridge.onPreStep({agent,turn,step:1,messages:[user.data],signal:new AbortController().signal},async()=>({kind:'enter',messages:[user.data]}));}
