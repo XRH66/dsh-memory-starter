@@ -22,26 +22,12 @@ async function temp(t){
 function embedding(modelKey='fixture:m1'){
   return {...embeddingContract(modelKey,2),calls:0,async embed(texts){this.calls+=texts.length;return texts.map(s=>String(s).includes('老物件')?[1,0]:[0,1]);},dispose(){}};
 }
-function config(dir){return resolveConfig({vaultPath:path.join(dir,'vault'),rawRecall:true,rawRecallTimeoutMs:10000,rawRecallMinScore:0.8});}
+function config(dir){return resolveConfig({vaultPath:path.join(dir,'vault'),rawRecall:true,rawRecallMinScore:0.8});}
 async function archive(store,embedder,input){
   const turn=buildTurn(input);store.archiveTurn(turn);
   await seedTurnVectors(store,embedder,turn,text=>text.includes('老物件')?[1,0]:[0,1]);
   return turn;
 }
-
-test('formal search reaches the oldest tail beyond 2000 windows, with scope and time intact',async t=>{
-  const dir=await temp(t),store=new RawMemoryStore(path.join(dir,'raw.sqlite')),embedder=embedding();
-  const old=await archive(store,embedder,{scope:'owner:a',sessionId:'session-fixture-old',turn:0,completedAt:1,messages:[{id:'old-user',role:'user',text:'普通句子。'.repeat(400)+'老物件放在高柜顶层。'}]});
-  for(let i=1;i<=2100;i++)await archive(store,embedder,{scope:'owner:a',sessionId:'session-fixture-noise',turn:i,completedAt:i+1,messages:[{id:'noise-'+i,role:'user',text:'今天讨论普通天气。'}]});
-  await archive(store,embedder,{scope:'owner:b',sessionId:'session-fixture-other',turn:1,completedAt:1,messages:[{id:'foreign',role:'user',text:'老物件属于别人。'}]});
-  await archive(store,embedder,{scope:'owner:a',sessionId:'session-fixture-future',turn:1,completedAt:99999,messages:[{id:'future',role:'user',text:'老物件未来才搬走。'}]});
-  const recall=createRawRecall({config:config(dir),store,embedder,ownerSubject:'owner:a'});
-  const result=await recall.retrieve({query:'老物件在哪里',asOf:5000});
-  assert.equal(result.partial,false);assert(result.scannedWindows>2100);
-  assert.deepEqual(result.turns.map(x=>x.turnId),[old.turnId]);
-  assert.match(result.turns[0].messages[0].text,/高柜顶层/);
-  await recall.dispose();
-});
 
 test('exclusion survives restart, reimport and model switch without embedding excluded sources',async t=>{
   const dir=await temp(t),file=path.join(dir,'raw.sqlite');let store=new RawMemoryStore(file);
@@ -51,11 +37,10 @@ test('exclusion survives restart, reimport and model switch without embedding ex
   store=new RawMemoryStore(file);store.archiveTurn(buildTurn({...input,messages:[{...input.messages[0],text:'老物件改了位置。'}]}));
   const embedder=embedding('fixture:m2'),recall=createRawRecall({config:config(dir),store,embedder,ownerSubject:'owner:a'});
   assert.equal((await recall.indexPending()).embedded,0);
-  assert.equal((await recall.retrieve({query:'老物件',asOf:10})).turns.length,0);
+  assert.equal(store.searchText('老物件',{scope:'owner:a'}).length,0);
   assert.throws(()=>store.setControl({scope:'owner:b',targetType:'message',targetId:'excluded-message',excluded:true}),/scope mismatch/);
   await recall.dispose();
 });
-
 test('fact softening follows verified message IDs across restart and model identities',async t=>{
   const dir=await temp(t),vault=path.join(dir,'vault'),facts=path.join(vault,'chats','facts');await fs.mkdir(facts,{recursive:true});
   const note=metadata=>'---\n'+Object.entries(metadata).map(([key,value])=>key+': '+(typeof value==='string'?JSON.stringify(value):value)).join('\n')+'\n---\n\n老物件。\n';
@@ -65,7 +50,7 @@ test('fact softening follows verified message IDs across restart and model ident
   const input={scope:'owner:a',sessionId:'session-fixture-linked',turn:1,completedAt:1,messages:[{id:'linked-message',role:'user',text:'老物件。'},{id:'linked-reply',role:'assistant',text:'老物件。'}]};
   await archive(store,embedding(),input);assert.equal(syncFactualPriorities(store,{vaultPath:vault,scope:'owner:a'}).sources,1);store.close();
   store=new RawMemoryStore(file);const recall=createRawRecall({config:{...config(dir),rawRecallMinScore:0.1},store,embedder:embedding('fixture:m2'),ownerSubject:'owner:a'});
-  await recall.indexPending();const r=await recall.retrieve({query:'老物件',asOf:10});assert.equal(r.turns[0].score,0.25);
+  await recall.indexPending();const hits=store.searchText('老物件',{scope:'owner:a'});assert.equal(hits[0].weight,0.25);
   await recall.dispose();
 });
 
@@ -140,14 +125,4 @@ test('switching mode after preview aborts import before any history is written',
   const store=new RawMemoryStore(path.join(dir,'raw.sqlite')),embedder=embedding(),recall=createRawRecall({config:config(dir),store,embedder,ownerSubject:'owner:a'});
   await assert.rejects(applyHistory(plan,{store,recall}),/mode-policy-changed/);
   assert.equal(store.stats(embedder.modelKey,'owner:a').turns,0);assert.equal(embedder.calls,0);await recall.dispose();
-});
-
-test('cancelling a paged search discards quotes instead of returning a partial answer',async t=>{
-  const dir=await temp(t),store=new RawMemoryStore(path.join(dir,'raw.sqlite')),embedder=embedding();
-  for(let i=0;i<600;i++)await archive(store,embedder,{scope:'owner:a',sessionId:'session-fixture-cancel',turn:i,completedAt:1,messages:[{id:'cancel-'+i,role:'user',text:'老物件。'}]});
-  const controller=new AbortController(),pages=store.windowPages.bind(store);let readPages=0;
-  store.windowPages=function*(...args){for(const page of pages(...args)){if(++readPages===1)setImmediate(()=>controller.abort());yield page;}};
-  const recall=createRawRecall({config:config(dir),store,embedder,ownerSubject:'owner:a'});
-  const result=await recall.recall({query:'老物件',asOf:10,budget:600,signal:controller.signal});
-  assert.equal(result.reason,'cancelled');assert.equal(result.text,'');assert(readPages>0&&readPages<3);await recall.dispose();
 });

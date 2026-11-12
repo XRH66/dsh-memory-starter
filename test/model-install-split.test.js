@@ -62,3 +62,14 @@ test('download-only installation writes a receipt but never stages the selected 
   assert.equal((await waitFor(f.installer,'prepared')).state,'prepared');
   assert.equal(f.staged.length,1);
 });
+
+test('download completion is visible only after its install lock is released',async t=>{
+  const f=await fixture(t),input={revision:'r1',settings:f.currentSettings,allowDownload:true,useExisting:true};
+  const lock=path.join(f.root,'runtime','embedding-install-v1','install.lock');
+  await f.installer.start({...input,downloadOnly:true});
+  assert.equal((await waitFor(f.installer,'downloaded')).state,'downloaded');
+  await assert.rejects(fs.access(lock),{code:'ENOENT'});
+  await f.installer.start(input);
+  assert.equal((await waitFor(f.installer,'prepared')).state,'prepared');
+  assert.equal(f.staged.length,1);
+});

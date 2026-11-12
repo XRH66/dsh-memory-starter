@@ -51,7 +51,6 @@ test('portable host replaces pure-mode isolation while retaining the fixed perso
 test('changing one opt-in never authorizes other legacy bindings and survives restart',async t=>{
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'opt-in-legacy-'));
   assert.equal(path.dirname(directory),path.resolve(os.tmpdir()));
-  t.after(()=>fs.rm(directory,{recursive:true,force:true}));
   const ids=['session-legacy-a','session-legacy-b'],cfg={ownerDirectory:directory,dshSessionIds:ids,fixture:true};
   let effects=[],opens=0;
   async function start(){
@@ -71,6 +70,10 @@ test('changing one opt-in never authorizes other legacy bindings and survives re
   }
   async function stop(){const current=effects;effects=[];for(const dispose of current.reverse())await dispose?.();}
   t.after(stop);
+  t.after(async()=>{
+    assert.equal(path.dirname(directory),path.resolve(os.tmpdir()));
+    await fs.rm(directory,{recursive:true,force:true});
+  });
   let {service,control}=await start();
   assert.deepEqual(ids.map(id=>control.status(id).requested),[false,false]);
   await service.applySessionSelection(cfg,'enable-a',{action:'bind',value:ids[0]});

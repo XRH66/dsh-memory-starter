@@ -230,6 +230,79 @@ export function fakeAgent(sessionId, target = { provider: 'fake-provider', model
   };
 }
 
+/**
+ * Insert a legacy fact/event note without invoking the removed capture writer.
+ * The body mirrors the former managed Markdown format so parser and soften
+ * behavior keep their production inputs.
+ */
+export function writeLegacyMemoryNote(store, {
+  memoryId = randomUUID(),
+  kind = 'fact',
+  status = 'active',
+  category = kind === 'event' ? 'event' : 'preference',
+  title = kind === 'event' ? '2026-10-17 - 虚构事件' : '饮品偏好 - 甜度',
+  subject = '',
+  attribute = '',
+  value = '不加糖',
+  occurredAt = '日期未明',
+  recordedAt = '2026-10-24T04:00:00.000Z',
+  recordedAtText = '2026-10-24 12:00',
+  requirementScope = '',
+  historyTitle = '',
+  timeExpression = '',
+  timeAnchor = '',
+  sourceEventTime = '',
+  sources = [],
+  metadata = {},
+  project = 'personal',
+  captureFolder = 'chats',
+  permalink,
+  filePath,
+  checksum = 'fixture-' + memoryId,
+} = {}) {
+  const directory = captureFolder + '/' + (kind === 'event' ? 'events' : 'facts');
+  const lines = ['<!-- dsh-fact-memory -->', '# ' + title, ''];
+  lines.push('- [' + category + '] ' + value);
+  if (subject) lines.push('- subject: ' + subject);
+  if (attribute) lines.push('- attribute: ' + attribute);
+  lines.push('- 发生日期: ' + occurredAt);
+  lines.push('- 记录日期: ' + recordedAtText);
+  if (requirementScope) lines.push('- 适用范围: ' + requirementScope);
+  if (historyTitle) lines.push('- 历史证据: [[' + historyTitle + ']]');
+  if (timeExpression) lines.push('- time_expression: ' + timeExpression);
+  if (timeAnchor) lines.push('- time_anchor: ' + timeAnchor);
+  if (sourceEventTime) lines.push('- source_event_time: ' + sourceEventTime);
+  const note = {
+    title,
+    permalink: permalink ?? project + '/' + directory + '/' + memoryId,
+    directory,
+    content: lines.join('\n').replace(/\n+$/, '') + '\n',
+    frontmatter: {
+      source: 'dsh',
+      source_plugin: 'dsh-basic-memory-bridge',
+      memory_id: memoryId,
+      memory_kind: kind,
+      status,
+      subject,
+      attribute,
+      value,
+      occurred_at: occurredAt,
+      recorded_at: recordedAt,
+      source_message_id: String(sources[0]?.message_id ?? ''),
+      source_session_id: String(sources[0]?.session_id ?? ''),
+      source_turn: String(sources[0]?.turn ?? ''),
+      sources: JSON.stringify(sources),
+      ...metadata,
+    },
+    tags: ['dsh-memory', kind === 'event' ? 'dsh-event' : 'dsh-fact'],
+    checksum,
+    updated: recordedAt,
+  };
+  note.filePath = filePath ?? directory + '/' + memoryId + '.md';
+  store.notes.set(note.permalink, note);
+  return note;
+}
+
 export function directUser(text, id = randomUUID()) {
   return { id, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } };
 }

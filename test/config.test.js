@@ -40,6 +40,7 @@ test('schemastery schema accepts an empty config and applies defaults', () => {
     maxRecallNotes: 3, personalRecall: false, maxIndexNotes: 0, maxTimelineEntries: 0,
     recallTimeoutMs: 1500, maxIndexChars: 600, maxTimelineChars: 500,
     recentContextTokens: 8192, maxAutomaticFailures: 7,
+    rawRecallMaxChars: 900, rawRecallCandidates: 20, rawRecallTop: 6, rawRecallTimeoutMs: 7000,
   };
   assert.doesNotThrow(() => Config(old));
   assert.equal(resolveConfig(old).maxRecallNotes, undefined);
@@ -47,6 +48,10 @@ test('schemastery schema accepts an empty config and applies defaults', () => {
   assert.equal(resolveConfig(old).maxTimelineChars, undefined);
   assert.equal(resolveConfig(old).recentContextTokens, undefined);
   assert.equal(resolveConfig(old).maxAutomaticFailures, undefined);
+  assert.equal(resolveConfig(old).rawRecallMaxChars, undefined);
+  assert.equal(resolveConfig(old).rawRecallCandidates, undefined);
+  assert.equal(resolveConfig(old).rawRecallTop, undefined);
+  assert.equal(resolveConfig(old).rawRecallTimeoutMs, undefined);
 });
 
 

@@ -17,8 +17,7 @@ const {positionals,values}=parseArgs({allowPositionals:true,options:{
   'normal-default':{type:'boolean'},'exclude-session':{type:'string',multiple:true},
   'max-turns':{type:'string'},'batch-size':{type:'string'},'max-source-mb':{type:'string'},
   session:{type:'string'},turn:{type:'string'},message:{type:'string'},weight:{type:'string'},
-  exclude:{type:'boolean'},include:{type:'boolean'},reason:{type:'string'},query:{type:'string'},help:{type:'boolean'},
-  'text-only':{type:'boolean'},since:{type:'string'},until:{type:'string'},
+  exclude:{type:'boolean'},include:{type:'boolean'},reason:{type:'string'},help:{type:'boolean'},
 }});
 const command=positionals[0];
 const write=async(file,value)=>{
@@ -28,12 +27,6 @@ const write=async(file,value)=>{
 const number=(name,fallback)=>{
   if(values[name]===undefined)return fallback;
   const n=Number(values[name]);if(!Number.isSafeInteger(n)||n<=0)throw Error('Invalid positive integer --'+name);return n;
-};
-const time=(name,fallback)=>{
-  if(values[name]===undefined)return fallback;
-  const raw=values[name],value=/^-?\d+$/.test(raw)?Number(raw):Date.parse(raw);
-  if(!Number.isSafeInteger(value)||Math.abs(value)>8.64e15)throw Error('Invalid --'+name+' timestamp (use milliseconds or ISO time with timezone)');
-  return value;
 };
 let store,recall;
 // The live process owns vector-queue.json. The CLI only reads its acknowledgement;
@@ -56,7 +49,7 @@ async function indexReconciliation(config,ownerSubject,maintenanceRevision){
 }
 try{
   if(values.help||!command){
-    console.log('Local raw memory: preview --deployment FILE --out PLAN [--normal-default]; apply --plan PLAN [--max-turns N]; status --deployment FILE; index --deployment FILE; query --deployment FILE (--query TEXT | --message ID) [--text-only] [--session ID] [--since ISO_TIME] [--until ISO_TIME]; control --deployment FILE (--session ID [--turn N] | --message ID) (--exclude | --include | --weight 0..1); sync-softening --deployment FILE');
+    console.log('Local raw memory maintenance: preview --deployment FILE --out PLAN [--normal-default]; apply --plan PLAN [--max-turns N]; status --deployment FILE; index --deployment FILE; control --deployment FILE (--session ID [--turn N] | --message ID) (--exclude | --include | --weight 0..1); sync-softening --deployment FILE');
   }else{
     let result;
     if(command==='preview'){
@@ -90,10 +83,10 @@ try{
           }finally{db.close();}
         }
       }else{
-        if(!['apply','control','sync-softening','query','index'].includes(command))throw Error('Unknown raw-memory command');
+        if(!['apply','control','sync-softening','index'].includes(command))throw Error('Unknown raw-memory command');
         if(command==='apply'&&!config.rawRecall)throw Error('Enable rawRecall before importing history');
         let backup=null;
-        if(command!=='query'&&fsSync.existsSync(dbFile)){
+        if(fsSync.existsSync(dbFile)){
           const dir=path.join(path.dirname(dbFile),'backups');await fs.mkdir(dir,{recursive:true});
           backup=path.join(dir,'before-'+command+'-'+new Date().toISOString().replace(/[:.]/g,'-')+'-'+process.pid+'.sqlite');
           const db=new DatabaseSync(dbFile,{readOnly:true});try{db.prepare('VACUUM INTO ?').run(backup);}finally{db.close();}
@@ -121,13 +114,6 @@ try{
           const weight=values.weight===undefined?1:Number(values.weight);
           result={ok:true,backup,...store.setControl({scope,targetType,targetId,weight,excluded:Boolean(values.exclude),reason:values.reason||'explicit local operator control'})};
         }else if(command==='sync-softening')result={ok:true,backup,...priorities};
-        else{
-          if(!values.query&&!values.message)throw Error('query needs --query or --message');
-          const since=time('since',0),asOf=time('until',Date.now());
-          if(since>asOf)throw Error('--since must not exceed --until');
-          result={ok:true,...await recall.recall({query:values.query,budget:config.rawRecallMaxChars,
-            mode:values['text-only']?'text':'hybrid',messageId:values.message,sessionId:values.session,since,asOf})};
-        }
       }
       if(['status','control','sync-softening'].includes(command))result.indexReconciliation=await indexReconciliation(config,scope,store?store.maintenanceRevision(scope):maintenanceRevision);
       if(values.out)await write(values.out,result);

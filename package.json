@@ -71,7 +71,6 @@
     "lib/raw-rag/rerank-http.js",
     "lib/raw-rag/embedding-material.js",
     "lib/raw-rag/fact-priority.js",
-    "lib/raw-rag/history.js",
     "lib/raw-rag/index.js",
     "lib/raw-rag/install-catalog.js",
     "lib/raw-rag/install-download.js",
@@ -82,7 +81,6 @@
     "lib/raw-rag/messages.js",
     "lib/raw-rag/models.js",
     "lib/raw-rag/query-reader.js",
-    "lib/raw-rag/select.js",
     "lib/raw-rag/settings.js",
     "lib/raw-rag/store.js",
     "lib/recent-context.js",
@@ -107,8 +105,6 @@
     "lib/usage.js",
     "lib/vault-files.js",
     "lib/worker.js",
-    "scripts/verify-raw-recall.mjs",
-    "scripts/raw-memory.mjs",
     "scripts/embedding-model.mjs",
     "scripts/unpack-embedding.ps1",
     "cordis.patch.yml",
@@ -123,8 +119,7 @@
   },
   "scripts": {
     "test": "node --test --test-timeout=120000 test/*.test.js",
-    "privacy": "node scripts/check-release.mjs",
-    "verify:raw-recall": "node scripts/verify-raw-recall.mjs"
+    "privacy": "node scripts/check-release.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-session": "0.2.1-rc.5",

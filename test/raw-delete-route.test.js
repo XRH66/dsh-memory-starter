@@ -75,7 +75,7 @@ test('withdrawing a searched original removes its text index and notifies vector
   const f=await fixture(t);
   const saved=f.store.messages.record(message(),allowed).source,removed=[];
   f.projector.projectMessage(saved,allowed);
-  assert.ok((await f.projector.retrieve({query:'备用钥匙',mode:'text',authorize:()=>true})).turns.length>0);
+  assert.ok(f.projector.queryReader({ownerSubject:owner,project:'main'},allowed).search({query:'备用钥匙'}).sources.length>0);
   assert.ok(f.bridge.vectors,'fixture must exercise the vector notification path');
   f.bridge.vectors.notifyChanged=async notice=>removed.push(notice);
 
@@ -91,7 +91,7 @@ test('withdrawing a searched original removes its text index and notifies vector
   assert.equal(removed[0].revision,saved.revision);
   const searched=await request(f.handler,{url:'/api/basic-memory-settings/raw-messages?query='+encodeURIComponent('备用钥匙')});
   assert.deepEqual(searched.body.messages,[]);
-  assert.equal((await f.projector.retrieve({query:'备用钥匙',mode:'text',authorize:()=>true})).turns.length,0);
+  assert.equal(f.projector.queryReader({ownerSubject:owner,project:'main'},allowed).search({query:'备用钥匙'}).sources.length,0);
 });
 
 test('a stale message revision is rejected without changing the original',async t=>{

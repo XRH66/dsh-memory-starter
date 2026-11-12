@@ -162,13 +162,12 @@ test('cloud expert settings keep only environment and timing fields and preserve
   button(model.tree,'专家模式').props.onClick();await model.flush();
   assert.equal(field(model.tree,'API Key 环境变量').props.value,'FICTIONAL_A_KEY');
   field(model.tree,'API Key 环境变量').props.onChange({target:{value:'FICTIONAL_B_KEY'}});await model.flush();
-  field(model.tree,'单次编码超时（毫秒）').props.onChange({target:{value:'5000'}});await model.flush();
   field(model.tree,'检索总等待（毫秒，0 为自动）').props.onChange({target:{value:'2500'}});await model.flush();
   await button(model.tree,'应用运行设置').props.onClick();await model.flush();
   const call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');
   assert.equal(call.body.settings.rawRecallApiBase,'https://fictional-a.example/v1');
   assert.equal(call.body.settings.rawRecallApiKeyEnv,'FICTIONAL_B_KEY');
-  assert.equal(call.body.settings.rawRecallTimeoutMs,5000);assert.equal(call.body.settings.rawRecallQueryWaitMs,2500);
+  assert.equal(call.body.settings.rawRecallQueryWaitMs,2500);
   assert.equal(call.body.apiKey,undefined);assert.equal(call.body.reuseApiKey,undefined);
 });
 
@@ -262,7 +261,6 @@ test('saving runtime settings posts new fields and retains legacy threads withou
   field(model.tree,'CPU llama-server 程序').props.onChange({target:{value:'/fixture/cpu.exe'}});await model.flush();
   field(model.tree,'CUDA llama-server 程序').props.onChange({target:{value:'/fixture/cuda.exe'}});await model.flush();
   field(model.tree,'空闲后多少分钟').props.onChange({target:{value:'3'}});await model.flush();
-  field(model.tree,'单次编码超时（毫秒）').props.onChange({target:{value:'10000'}});await model.flush();
   assert.equal(field(model.tree,'检索总等待（毫秒，0 为自动）').props.value,0);
   field(model.tree,'检索总等待（毫秒，0 为自动）').props.onChange({target:{value:'3500'}});await model.flush();
   await button(model.tree,'应用运行设置').props.onClick();await model.flush();
@@ -271,7 +269,6 @@ test('saving runtime settings posts new fields and retains legacy threads withou
   assert.equal(call.body.settings.rawRecallDevice,'cuda');
   assert.equal(call.body.settings.rawRecallCpuThreads,6);assert.equal(call.body.settings.rawRecallGpuThreads,4);
   assert.equal(call.body.settings.rawRecallIdleMs,180000);assert.equal(call.body.settings.rawRecallThreads,3);
-  assert.equal(call.body.settings.rawRecallTimeoutMs,10000);
   assert.equal(call.body.settings.rawRecallQueryWaitMs,3500);
   assert.equal(call.body.settings.rawRecallLlamaCpuServer,'/fixture/cpu.exe');
   assert.equal(call.body.settings.rawRecallLlamaCudaServer,'/fixture/cuda.exe');
