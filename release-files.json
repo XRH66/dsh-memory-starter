@@ -85,6 +85,7 @@
   "scripts/embedding-model.mjs",
   "scripts/unpack-embedding.ps1",
   "test/embedding-fixture.js",
+  "test/embedding-dimensions.test.js",
   "test/embedding-services.test.js",
   "test/entry-links.test.js",
   "test/bridge.test.js",

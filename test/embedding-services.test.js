@@ -40,7 +40,7 @@ test('embedding services can be created, edited and deleted without exposing sec
   assert.equal(value.embeddingServices.length,1);
   const first=value.embeddingServices[0];
   assert.equal(first.name,'fictional-a.example · fictional-embed');
-  assert.deepEqual(Object.keys(first).sort(),['apiBase','apiModel','dimensions','hasKey','id','inUse','name']);
+  assert.deepEqual(Object.keys(first).sort(),['apiBase','apiModel','defaultDimensions','dimensions','effectiveDimensions','hasKey','id','inUse','name','sendDimensions']);
   assert.equal(JSON.stringify(value).includes('apiKeyFile'),false);
   assert.equal(JSON.stringify(value).includes('apiKeyService'),false);
   const saved=(await f.read()).embeddingServices[0];
@@ -190,4 +190,51 @@ test('saving the setting already in use clears any pending choice instead of ask
   assert.equal(value.unchanged,true);
   const saved=await f.read();
   assert.equal(saved.pendingRawRecall,undefined);assert.equal(saved.pendingRawRecallSwitch,undefined);
+});
+
+test('a direct custom save records the dimensions actually used, and an old 0 entry still matches and reads as the default',async t=>{
+  const f=await fixture(t);
+  await f.stage({settings:{rawRecallModel:'custom-api',rawRecallApiBase:'https://fictional-zero.example/v1',
+    rawRecallApiModel:'zero-model',rawRecallDimensions:0,rawRecallAllowCloud:true},apiKey:'fictional-zero-key'});
+  let cfg=await f.read();
+  assert.equal(cfg.embeddingServices.length,1);
+  assert.equal(cfg.embeddingServices[0].dimensions,1024);
+  assert.equal(cfg.pendingRawRecall.rawRecallDimensions,0);
+  // The same choice with an explicit 1024 is the same service, not a second row.
+  await f.stage({settings:{rawRecallModel:'custom-api',rawRecallApiBase:'https://fictional-zero.example/v1',
+    rawRecallApiModel:'zero-model',rawRecallDimensions:1024,rawRecallAllowCloud:true},apiKey:'fictional-zero-key-2'});
+  cfg=await f.read();
+  assert.equal(cfg.embeddingServices.length,1);
+
+  // An entry written by an older version with dimensions 0.
+  cfg.embeddingServices[0].dimensions=0;
+  cfg.memory={...cfg.memory,...cfg.pendingRawRecall};delete cfg.pendingRawRecall;delete cfg.pendingRawRecallAt;
+  await fs.writeFile(f.file,JSON.stringify(cfg));
+  const listed=(await readDeploymentSettings(f.file)).embeddingServices[0];
+  assert.equal(listed.dimensions,0);
+  assert.equal(listed.effectiveDimensions,1024);
+  assert.equal(listed.defaultDimensions,true);
+  assert.equal(listed.inUse,true);
+  // Saving an in-use service with its effective size is not a change of size.
+  const renamed=await f.manage({action:'save',id:listed.id,name:'改名',apiBase:listed.apiBase,apiModel:listed.apiModel,dimensions:1024});
+  assert.equal(renamed.embeddingServices[0].name,'改名');
+  await assert.rejects(f.manage({action:'save',id:listed.id,name:'改名',apiBase:listed.apiBase,apiModel:listed.apiModel,dimensions:512}),/正在使用/);
+});
+
+test('asking the service for a size is a per-service option carried into the model selection',async t=>{
+  const f=await fixture(t);
+  await assert.rejects(f.manage(serviceInput({sendDimensions:'yes'})),/请求维数选项格式无效/);
+  const created=(await f.manage(serviceInput({sendDimensions:true}))).embeddingServices[0];
+  assert.equal(created.sendDimensions,true);
+  assert.equal((await f.read()).embeddingServices[0].sendDimensions,true);
+  const staged=await f.stage({serviceId:created.id,settings:{}});
+  assert.equal(staged.pendingRawModel.fields.rawRecallApiSendDimensions,true);
+  assert.equal(staged.pendingRawModel.fields.rawRecallDimensions,768);
+  // While the selection is pending the service is in use: the option cannot flip under it.
+  await assert.rejects(f.manage({action:'save',id:created.id,name:created.name,apiBase:created.apiBase,apiModel:created.apiModel,
+    dimensions:768,sendDimensions:false}),/正在使用/);
+  await f.stage({cancel:true});
+  const off=(await f.manage({action:'save',id:created.id,name:created.name,apiBase:created.apiBase,apiModel:created.apiModel,
+    dimensions:768,sendDimensions:false})).embeddingServices[0];
+  assert.equal(off.sendDimensions,false);
 });

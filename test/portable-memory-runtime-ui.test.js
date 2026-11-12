@@ -936,7 +936,7 @@ test('vector services test from their row, a new service tests what is typed, an
   field(picker.tree,'模型名称').props.onChange({target:{value:'fictional-new'}});await picker.flush();
   field(picker.tree,'API Key').props.onChange({target:{value:'fictional-typed-key'}});await picker.flush();
   await button(picker.tree,'测试连接').props.onClick();await picker.flush();
-  assert.deepEqual(writes(env).at(-1).body,{target:'embedding',model:'custom-api',apiBase:'https://fictional-new.example/v1',apiModel:'fictional-new',dimensions:1024,apiKey:'fictional-typed-key'});
+  assert.deepEqual(writes(env).at(-1).body,{target:'embedding',model:'custom-api',apiBase:'https://fictional-new.example/v1',apiModel:'fictional-new',dimensions:1024,sendDimensions:false,apiKey:'fictional-typed-key'});
   assert.equal(rowOf(picker.tree,'连接失败').meta,'API Key 无效或没有权限。重新填写 API Key 后再测试');
   assert.doesNotMatch(JSON.stringify(nodes(picker.tree,n=>n.props?.role==='status').map(text)),/fictional-typed-key/);
   field(picker.tree,'API Key').props.onChange({target:{value:'fictional-other-key'}});await picker.flush();
