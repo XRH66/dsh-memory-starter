@@ -4,6 +4,12 @@
 
 0.5.0 起，记忆插件、安装入口和固定版本组合统一放在 `dsh-memory-starter`。0.5.0 及以前，记忆插件与安装组合曾分别放在 `dsh-memory-starter`（原名 `dsh-basic-memory-bridge`）和 `codex-deepseek-starter`；下表保留合并前的用户更新记录。
 
+## 0.6.0（2026-11-12）
+
+- 将 `codex-deepseek-starter` 的安装、部署、升级、示例和第三方声明并入本仓库；`dsh-memory-starter` 成为唯一主入口。
+- 安装文档调整到 `docs/install/`，部署脚本调整到 `scripts/install/`，并合并安装工具测试和依赖。
+- 记忆插件运行代码与兼容标识不变；本次主要变更是仓库入口和发布结构。
+
 ## 0.5.0（2026-11-12）
 
 本仓库内置记忆插件 0.5.0，配套人设插件 dsh-global-settings 0.2.0（不变）。固定版本见[安装说明](docs/install/setup.md#3-安装插件)。适配 DSH 0.2.1-rc.5。

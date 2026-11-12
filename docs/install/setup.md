@@ -48,7 +48,7 @@ $paths = Get-Content (Join-Path $deploy 'paths.json') -Raw | ConvertFrom-Json
 再安装固定版本的两个插件：
 
 ```powershell
-$memoryRef = '<本仓库发布标签或完整提交>'                      # 发布时填入对应版本，例如 v0.6.0
+$memoryRef = 'v0.6.0'                                        # 本仓库发布标签
 $settingsCommit = 'f5778e8a7ddcf2be5ba83f895db587b384455a78' # dsh-global-settings 0.2.0
 dsh plugin --profile web add "github:XRH66/dsh-memory-starter#$memoryRef"
 dsh plugin --profile web add "github:XRH66/dsh-global-settings#$settingsCommit"

@@ -37,7 +37,7 @@ node scripts/install/configure.mjs --out $deploy
 | 组件 | 作用 | 是否必装 |
 | --- | --- | --- |
 | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | 聊天、模型调用和插件运行环境 | 必装 |
-| 本仓库记忆插件 0.5.0 | 按对话开启、原话库、按需检索、后台整理、遗忘曲线、短期接续、可选向量检索、删除原话和旧记忆迁移 | 必装 |
+| 本仓库记忆插件 0.6.0 | 按对话开启、原话库、按需检索、后台整理、遗忘曲线、短期接续、可选向量检索、删除原话和旧记忆迁移 | 必装 |
 | [dsh-global-settings](https://github.com/XRH66/dsh-global-settings) 0.2.0 | 全局人设、自我档案、当前对话的记忆状态显示 | 推荐 |
 | [Obsidian](https://obsidian.md/) | 查看、编辑记忆 Vault | 可选 |
 
@@ -93,4 +93,4 @@ npm run privacy  # 在按 release-files.json 导出的干净发行目录中运�
 
 本仓库原名 `dsh-basic-memory-bridge`，0.4.0 起不再依赖 Basic Memory 并改名。为了让已安装的 DSH 继续识别它，包名仍是 `@local/dsh-basic-memory-bridge`，接口路径 `/api/basic-memory-*` 和笔记来源字段 `source_plugin` 也保留旧名。
 
-MIT。当前版本 0.5.0，适配 DSH 0.2.1-rc.5。
+MIT。当前版本 0.6.0，适配 DSH 0.2.1-rc.5。
