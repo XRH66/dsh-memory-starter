@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { formatRecordedAt } from '../lib/dates.js';
 import { localTime } from '../lib/local-time.js';
-import { PERSONAL_TIME_ZONE, hostTimeZone, personalTimeZone, resolvePersonalTimeZone, setPersonalTimeZone } from '../lib/personal-namespace.js';
+import { PERSONAL_TIME_ZONE, hostTimeZone, personalTimeZone, resolvePersonalTimeZone, setPersonalTimeZone, shanghaiClock } from '../lib/personal-namespace.js';
 import { resolveConfig } from '../lib/config.js';
 import { deploymentFingerprint, readDeploymentSettings, stageDeploymentTimeZone } from '../lib/deployment-config.js';
 
@@ -23,6 +23,35 @@ test('the personal time zone changes formatting and date conversion', () => {
   assert.equal(PERSONAL_TIME_ZONE, 'Asia/Shanghai');
   assert.equal(localTime(instant), '2026-06-10 11:27 +08:00');
   assert.equal(formatRecordedAt(new Date(instant).toISOString()), '2026-06-10 11:27');
+});
+
+test('fixed local times preserve cross-day, cross-year and DST output byte for byte', () => {
+  const cases = [
+    {
+      zone: 'America/New_York',
+      iso: '2026-01-01T00:30:45.000Z',
+      recorded: '2025-12-31 19:30',
+      clock: { date: '2025-12-31', time: '19:30', stamp: '193045', iso: '2026-01-01T00:30:45.000Z' },
+    },
+    {
+      zone: 'America/New_York',
+      iso: '2026-03-08T07:30:45.000Z',
+      recorded: '2026-03-08 03:30',
+      clock: { date: '2026-03-08', time: '03:30', stamp: '033045', iso: '2026-03-08T07:30:45.000Z' },
+    },
+    {
+      zone: 'Asia/Shanghai',
+      iso: '2026-12-31T16:30:45.000Z',
+      recorded: '2027-01-01 00:30',
+      clock: { date: '2027-01-01', time: '00:30', stamp: '003045', iso: '2026-12-31T16:30:45.000Z' },
+    },
+  ];
+
+  for (const item of cases) {
+    setPersonalTimeZone(item.zone);
+    assert.equal(formatRecordedAt(item.iso), item.recorded);
+    assert.deepEqual(shanghaiClock(new Date(item.iso)), item.clock);
+  }
 });
 
 test('an invalid personal time zone falls back to Beijing time', () => {

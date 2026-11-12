@@ -2,10 +2,40 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { after } from 'node:test';
-import { toolFailureText, unwrapToolValue } from '../lib/mcp.js';
 
 export const TARGET_SESSION = 'session-fixture-primary';
 export const OTHER_SESSION = 'session-00000000-0000-0000-0000-000000000000';
+
+export function unwrapToolValue(result) {
+  if (!result || typeof result !== 'object' || result.isError === true) return null;
+  const value = result.value;
+  if (!value || typeof value !== 'object') return null;
+  if (value.structuredContent !== null && typeof value.structuredContent === 'object') {
+    const structured = value.structuredContent;
+    return structured.result !== undefined ? structured.result : structured;
+  }
+  if (Array.isArray(value.content)) {
+    const block = value.content.find((item) => item && item.type === 'text' && typeof item.text === 'string');
+    if (!block) return null;
+    try {
+      return JSON.parse(block.text);
+    } catch {
+      return { text: block.text };
+    }
+  }
+  return null;
+}
+
+export function toolFailureText(result) {
+  if (!result || typeof result !== 'object') return 'tool returned no result';
+  if (result.error && typeof result.error === 'object' && typeof result.error.message === 'string') return result.error.message;
+  if (typeof result.error === 'string') return result.error;
+  if (Array.isArray(result.content)) {
+    const block = result.content.find((item) => item && item.type === 'text' && typeof item.text === 'string');
+    if (block) return block.text.slice(0, 300);
+  }
+  return 'tool reported an error';
+}
 
 export function mcpResult(payload) {
   return {

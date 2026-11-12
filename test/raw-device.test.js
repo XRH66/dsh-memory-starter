@@ -31,7 +31,9 @@ function fakeLlama({ attempts = [], dimensions = 2560, gate, onSpawn } = {}) {
       onSpawn?.({ server, args, device, active });
       active++; peak = Math.max(peak, active);
       const child = new EventEmitter(); child.stderr = new PassThrough();
-      current = { child, plan, device, args, server }; children.push(current);
+      let diagnosticsWritten;
+      const diagnostics = new Promise(resolve => { diagnosticsWritten = resolve; });
+      current = { child, plan, device, args, server, diagnostics }; children.push(current);
       calls.push({ server, args, device }); events.push('start:' + device);
       let closed = false;
       const close = code => { if (closed) return; closed = true; active--; events.push('close:' + device); child.emit('close', code); };
@@ -40,6 +42,7 @@ function fakeLlama({ attempts = [], dimensions = 2560, gate, onSpawn } = {}) {
       setImmediate(() => {
         if (plan.log) child.stderr.write(plan.log + '\n');
         else if (device === 'cuda' && !plan.noOffload) child.stderr.write('load_tensors: offloaded 37/37 layers to GPU\n');
+        diagnosticsWritten();
         if (plan.errorCode) child.emit('error', Object.assign(new Error('spawn failed'), { code: plan.errorCode }));
         if (plan.exit || plan.errorCode) close(plan.exit || 1);
       });
@@ -48,10 +51,13 @@ function fakeLlama({ attempts = [], dimensions = 2560, gate, onSpawn } = {}) {
     async fetch(url, options) {
       requests.push({ url, options });
       if (url.endsWith('/health')) {
-        await delay(2); // deliver the startup device diagnostics first
+        await current.diagnostics;
         return { ok: !current.plan.unhealthy };
       }
-      if (url.endsWith('/v1/models')) return answer({ data: [{ id: current.plan.badAlias ? 'wrong-model' : MODEL }] });
+      if (url.endsWith('/v1/models')) {
+        await current.diagnostics;
+        return answer({ data: [{ id: current.plan.badAlias ? 'wrong-model' : MODEL }] });
+      }
       if (url.endsWith('/tokenize')) return answer({ tokens: [1, 2, 3] });
       if (url.endsWith('/v1/embeddings')) {
         await gate?.(JSON.parse(options.body).input);

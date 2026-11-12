@@ -220,6 +220,33 @@ test('facts show occurrence and record dates separately and keep the first recor
   }
 });
 
+test('memory history clock preserves cross-year, cross-day and DST output', async t => {
+  t.after(() => setPersonalTimeZone('Asia/Shanghai'));
+  const cases = [
+    ['America/New_York', '2026-01-01T00:30:45.000Z', '2025-12-31 20251231193045'],
+    ['America/New_York', '2026-03-08T07:30:45.000Z', '2026-03-08 20260308033045'],
+    ['Asia/Shanghai', '2026-12-31T16:30:45.000Z', '2027-01-01 20270101003045'],
+  ];
+  for (const [zone, iso, stamp] of cases) {
+    setPersonalTimeZone(zone);
+    const store = memoryStore();
+    const vault = await makeVault();
+    try {
+      const ctx = context(store, vault);
+      await applyMemoryActions(ctx, [factAction()], opts(0, { now: () => new Date(iso) }));
+      const note = [...store.notes.values()][0];
+      await applyMemoryActions(ctx, [factAction({
+        action: 'UPDATE', targetMemoryId: note.frontmatter.memory_id, value: '半糖', evidence: '半糖',
+      })], opts(0, { turn: 4, messageId: 'msg-2', eventSeq: 12, now: () => new Date(iso) }));
+      const history = [...store.notes.values()].find((item) => item.frontmatter.status === 'history');
+      assert.ok(history);
+      assert.match(history.title, new RegExp(`^历史 - 饮品偏好 - ${stamp} - [a-f0-9]{6}$`));
+    } finally {
+      await fs.rm(vault, { recursive: true, force: true });
+    }
+  }
+});
+
 test('corrections keep a revoked old copy instead of rewriting history', async () => {
   const store = memoryStore();
   const vault = await makeVault();

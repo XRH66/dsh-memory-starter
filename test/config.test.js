@@ -36,9 +36,14 @@ test('schemastery schema accepts an empty config and applies defaults', () => {
   const value = Config({});
   assert.equal(value.captureFolder, 'chats');
   // Options removed with the old injection path are still accepted and ignored.
-  const old = { maxRecallNotes: 3, personalRecall: false, maxIndexNotes: 0, maxTimelineEntries: 0, recallTimeoutMs: 1500 };
+  const old = {
+    maxRecallNotes: 3, personalRecall: false, maxIndexNotes: 0, maxTimelineEntries: 0,
+    recallTimeoutMs: 1500, maxIndexChars: 600, maxTimelineChars: 500,
+  };
   assert.doesNotThrow(() => Config(old));
   assert.equal(resolveConfig(old).maxRecallNotes, undefined);
+  assert.equal(resolveConfig(old).maxIndexChars, undefined);
+  assert.equal(resolveConfig(old).maxTimelineChars, undefined);
 });
 
 
