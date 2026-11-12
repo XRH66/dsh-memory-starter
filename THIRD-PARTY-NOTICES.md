@@ -35,9 +35,9 @@ Suzu 固定核心的闭包只使用内部包及 Node 内置模块；内部导入
 
 ## 宿主用途路由与 Go 多连接准备工具
 
-[scripts/dsh-memory-routing](scripts/dsh-memory-routing/README.md)公开复用本项目第一批 rc5 候选的路由变换、连接变换和随机身份 helper，继续使用本项目 MIT。公开交付仅移除注释中的本机路径，变换／helper 逻辑不改；[prepare 入口](scripts/prepare-dsh-memory-routing.mjs)以显式安装目录和独立新输出取代原来的固定本机路径包装。
+`scripts/dsh-memory-routing/` 和 `scripts/prepare-dsh-memory-routing.mjs` 是此前 rc5 候选使用的宿主路由、连接变换和随机身份 helper，继续使用本项目 MIT。上述工具不在当前公开发布白名单内；未来单独发布时须同时提供源码、来源说明和完整许可。
 
-变换锚点及最小 fresh fixture 中的 DSH 片段源于官方 `@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-llm-pi-ai` **0.2.1-rc.5**，Copyright (c) 2026 DeepSeek，MIT；完整署名及原许可保存在[该目录 NOTICE](scripts/dsh-memory-routing/NOTICE.md)。不随这些工具分发本机 baseline、变换后的安装 bundle 或用户配置。
+变换锚点及最小 fresh fixture 中的 DSH 片段源于官方 `@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-llm-pi-ai` **0.2.1-rc.5**，Copyright (c) 2026 DeepSeek，MIT。当前发布包不分发这些工具，也不分发本机 baseline、变换后的安装 bundle 或用户配置；完整署名与许可应在后续单独发布时一并提供。
 
 检查还固定 `@earendil-works/pi-ai` **1.5.0**；其 primary 包清单声明 MIT，来源为 [earendil-works/pi 的 packages/ai](https://github.com/earendil-works/pi/tree/main/packages/ai)。本次没有复制或修改 SDK 源码。生成的 baseline／candidate 只是用户所选安装的本地审阅副本，不是本项目重新发布的第三方软件包；工具不应用补丁、不安装依赖、不计算新哈希。
 

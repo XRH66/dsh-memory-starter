@@ -1,0 +1,36 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)][string]$Deployment,
+    [switch]$Start
+)
+
+$ErrorActionPreference = 'Stop'
+$deploymentPath = (Resolve-Path -LiteralPath $Deployment).Path
+$paths = Get-Content -LiteralPath (Join-Path $deploymentPath 'paths.json') -Raw | ConvertFrom-Json
+$hasControl = Test-Path -LiteralPath (Join-Path $deploymentPath 'codex.mcp.toml')
+$tokenPath = Join-Path $deploymentPath 'mcp-token.private'
+if ($hasControl -and -not (Test-Path -LiteralPath $tokenPath)) {
+    if (-not $Start) { throw 'Start this deployment first to create its local control token.' }
+    $newToken = & node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))"
+    if ($LASTEXITCODE -ne 0) { throw 'Could not generate the control token.' }
+    [IO.File]::WriteAllText($tokenPath, $newToken)
+}
+$env:DSH_HOME = $paths.harnessHome
+$env:DSH_AGENTS_HOME = $paths.harnessHome
+# The memory plugin treats DSH_MEMORY_VAULT as an existing library and would refuse to set up inside it.
+Remove-Item Env:DSH_MEMORY_VAULT, Env:BASIC_MEMORY_CONFIG_DIR -ErrorAction SilentlyContinue
+if ($hasControl) {
+    $env:DSH_MCP_CONTROL_TOKEN = (Get-Content -LiteralPath $tokenPath -Raw).Trim()
+    if ($env:DSH_MCP_CONTROL_TOKEN -notmatch '^[a-f0-9]{64}$') { throw 'Invalid deployment token file; do not overwrite an existing credential.' }
+    $env:DSH_MCP_URL = 'http://127.0.0.1:8931/mcp'
+    $env:DSH_CODEX_CONFIG = Join-Path $deploymentPath 'codex.mcp.toml'
+} else {
+    Remove-Item Env:DSH_MCP_CONTROL_TOKEN, Env:DSH_MCP_URL, Env:DSH_CODEX_CONFIG -ErrorAction SilentlyContinue
+}
+$env:DSH_STARTER_ROOT = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
+if ($Start) {
+    & dsh --profile web --patch (Join-Path $deploymentPath 'dsh.patch.yml') --host 127.0.0.1 --port 8931 --no-open
+    if ($LASTEXITCODE -ne 0) { throw "Harness exited with code $LASTEXITCODE" }
+} else {
+    Write-Host 'Deployment environment loaded for this PowerShell session. No service was started.'
+}

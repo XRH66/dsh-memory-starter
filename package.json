@@ -2,7 +2,7 @@
   "name": "@local/dsh-basic-memory-bridge",
   "version": "0.5.0",
   "private": true,
-  "description": "dsh-memory-starter: personal long-term memory for DeepSeek Harness with per-conversation opt-in, verbatim transcripts, on-demand recall, background organization into a Markdown Vault and optional vector search.",
+  "description": "dsh-memory-starter: installation entry, deployment generator and personal long-term memory for DeepSeek Harness with per-conversation opt-in, verbatim transcripts, on-demand recall, background organization into a Markdown Vault and optional vector search.",
   "type": "module",
   "main": "lib/bundle-entry.js",
   "exports": {
@@ -119,12 +119,20 @@
   },
   "scripts": {
     "test": "node --test --test-timeout=120000 test/*.test.js",
-    "privacy": "node scripts/check-release.mjs"
+    "test:install": "node --test test/install-deployment.test.js",
+    "check": "npm test && npm run privacy && npm run links",
+    "privacy": "node scripts/check-release.mjs",
+    "links": "node scripts/check-links.mjs",
+    "install:configure": "node scripts/install/configure.mjs",
+    "install:cli": "node scripts/install/dsh-cli.mjs",
+    "install:patches": "node scripts/install/optional-patches.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-session": "0.2.1-rc.5",
     "@deepseek-ai/dsh-session-format-catalog": "0.2.1-rc.5",
-    "@deepseek-ai/schemastery": "~3.18.5"
+    "@deepseek-ai/schemastery": "~3.18.5",
+    "@modelcontextprotocol/client": "2.4.0",
+    "smol-toml": "^1.4.2"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh": ">=0.2.1-rc.2"
@@ -163,6 +171,7 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",
     "@deepseek-ai/dsh-scope": "0.2.1-rc.5",
-    "@local/dsh-global-settings": "git+https://github.com/XRH66/dsh-global-settings.git#f5778e8a7ddcf2be5ba83f895db587b384455a78"
+    "@local/dsh-global-settings": "git+https://github.com/XRH66/dsh-global-settings.git#f5778e8a7ddcf2be5ba83f895db587b384455a78",
+    "yaml": "^2.8.1"
   }
 }

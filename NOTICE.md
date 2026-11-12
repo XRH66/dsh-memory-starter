@@ -1,0 +1,77 @@
+# 来源、致谢与许可
+
+本项目是在 DeepSeek Harness 上搭建的长期记忆与人设方案，不是从零实现的聊天平台。感谢下列项目及贡献者。仓库拥有者、许可证中的版权主体和本项目维护者可能不同；原版权声明按上游原文保留。
+
+原始许可核对日期：2026-10-26；0.5.0 配套组合复核：2026-11-12。固定版本以安装文档、下表和 `package-lock.json` 为准；升级时同时更新对应来源与许可信息。
+
+## 默认记忆方案依赖谁
+
+| 项目及来源 | 上游维护方 | 本方案如何使用 | 版本与许可依据 |
+| --- | --- | --- | --- |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | deepseek-ai / DeepSeek | 提供聊天、模型调用、工具、插件和会话运行环境；不由本项目开发 | 适配0.2.1-rc.5；[上游MIT许可](https://github.com/deepseek-ai/deepseek-harness/blob/master/LICENSE) |
+| [Obsidian](https://github.com/obsidianmd/obsidian-releases) | Obsidian | 可选，直接查看和编辑记忆 Vault；不随本仓库打包 | 客户端遵循[Obsidian自己的许可与条款](https://obsidian.md/license)；发布仓库不等于客户端开源源码，也不适用本仓库MIT |
+
+## 本项目做了哪些部分
+
+| 内容 | 本项目负责的范围 | 与第三方的边界 |
+| --- | --- | --- |
+| [dsh-global-settings](https://github.com/XRH66/dsh-global-settings) | 本项目维护的全局人设、自我档案与记忆状态面板 | 使用DSH插件及Web接口；不是DSH官方功能；插件自身[MIT](https://github.com/XRH66/dsh-global-settings/blob/main/LICENSE) |
+| 本仓库配置生成、启动脚本、安装说明和共享记忆维护约定 | 将上述组件串成独立部署，并明确客户端如何共用记忆 | 不把第三方软件、模型、账户或个人数据作为本项目原创内容分发 |
+
+记忆插件源码就在本仓库，人设插件在独立仓库维护，并由[安装说明](docs/install/setup.md)按完整版本引用。本仓库自己的代码使用[MIT](LICENSE)，这不是对所有依赖的统一授权。
+
+## 可选工程控制的上游与改编
+
+这些内容仅用于[工程控制附录](docs/install/control.md)，不是记忆功能的前置条件。
+
+| 本仓库中的内容 | 原项目 / 维护方 | 引用、改编或调用关系 |
+| --- | --- | --- |
+| DSH会话控制服务 | [mochgolf/dsh-mcp-control](https://github.com/mochgolf/dsh-mcp-control)，仓库维护方 **mochgolf** | 从固定提交[`fdb74dd`](https://github.com/mochgolf/dsh-mcp-control/tree/fdb74ddd872bc005581c035c2e4d6422618a330e)构建0.2.1插件；提供start/send/status/result等MCP接口。MIT；[保留的原许可证](third-party/dsh-mcp-control.LICENSE)中的版权主体为 **2026 DeepSeek**，不改成本站维护者 |
+| [scripts/install/dsh-cli.mjs](scripts/install/dsh-cli.mjs) | 围绕上述控制插件接口编写的本机CLI，经本方案整理为可移植客户端 | 本版加入可配置端点、TOML/环境凭据读取及精简结果处理。固定上游提交没有这个CLI文件，不能把本地新增脚本说成上游原生功能；控制服务本身仍归上游项目 |
+| 委派协作方法来源 | [LomoMao/delegate-to-deepseek-harness](https://github.com/LomoMao/delegate-to-deepseek-harness)，维护方 **LomoMao**及贡献者 | 早期安装入口参考过该技能的结构与协作方法；当前主仓库不随包分发该技能源码，保留[原MIT许可证](third-party/delegate-to-deepseek-harness.LICENSE)以记录来源 |
+
+## JavaScript直接依赖与传递依赖
+
+下表根据当前锁文件和实际安装包的 `package.json` 核对；不是把依赖代码重新授权为MIT。运行 `npm ci` 从npm获取包，本仓库不提交 `node_modules`。包内LICENSE/NOTICE随对应包保留；版本变更时重新核对。
+
+| 包 | 锁定版本 | 用途 / 依赖层级 | 上游来源 | 许可 |
+| --- | --- | --- | --- | --- |
+| `@modelcontextprotocol/client` | 2.4.0 | 直接依赖：MCP客户端 | [modelcontextprotocol/typescript-sdk](https://github.com/modelcontextprotocol/typescript-sdk) | Apache-2.0 |
+| `@modelcontextprotocol/core` | 2.4.0 | 传递依赖 | [modelcontextprotocol/typescript-sdk](https://github.com/modelcontextprotocol/typescript-sdk) | Apache-2.0 |
+| `cross-spawn` | 7.0.6 | 传递依赖 | [moxystudio/node-cross-spawn](https://github.com/moxystudio/node-cross-spawn) | MIT |
+| `eventsource` | 3.0.7 | 传递依赖 | [EventSource/eventsource](https://github.com/EventSource/eventsource) | MIT |
+| `eventsource-parser` | 3.1.1 | 传递依赖 | [rexxars/eventsource-parser](https://github.com/rexxars/eventsource-parser) | MIT |
+| `isexe` | 2.0.0 | 传递依赖 | [isaacs/isexe](https://github.com/isaacs/isexe) | ISC |
+| `jose` | 6.2.13 | 传递依赖 | [panva/jose](https://github.com/panva/jose) | MIT |
+| `path-key` | 3.1.1 | 传递依赖 | [sindresorhus/path-key](https://github.com/sindresorhus/path-key) | MIT |
+| `pkce-challenge` | 5.0.1 | 传递依赖 | [crouchcd/pkce-challenge](https://github.com/crouchcd/pkce-challenge) | MIT |
+| `shebang-command` | 2.0.0 | 传递依赖 | [kevva/shebang-command](https://github.com/kevva/shebang-command) | MIT |
+| `shebang-regex` | 3.0.0 | 传递依赖 | [sindresorhus/shebang-regex](https://github.com/sindresorhus/shebang-regex) | MIT |
+| `smol-toml` | 1.9.1 | 直接依赖：解析Codex TOML配置 | [squirrelchat/smol-toml](https://github.com/squirrelchat/smol-toml) | BSD-3-Clause |
+| `which` | 2.0.2 | 传递依赖 | [isaacs/node-which](https://github.com/isaacs/node-which) | ISC |
+| `yaml` | 2.9.1 | 开发依赖：测试中解析YAML | [eemeli/yaml](https://github.com/eemeli/yaml) | ISC |
+| `zod` | 4.6.7 | 传递依赖 | [colinhacks/zod](https://github.com/colinhacks/zod) | MIT |
+
+其中MCP TypeScript SDK的安装包作者字段为Anthropic, PBC，项目由modelcontextprotocol组织维护；2.4.0的client/core包使用Apache-2.0，不应沿用其他版本的许可印象。
+
+## 安装工具与可选客户端
+
+安装过程使用[Node.js](https://github.com/nodejs/node)、[npm](https://github.com/npm/cli)、[Git](https://git-scm.com/)、以及本地向量模型需要的[Python](https://www.python.org/)；可选工程控制构建使用[pnpm](https://github.com/pnpm/pnpm)。这些工具由各自项目提供，本仓库只给出调用和安装步骤，不重新分发其运行时。
+
+支持MCP的第三方Agent是使用者自行选择的客户端，不属于本仓库组件。工程附录中的Codex示例来自[OpenAI Codex](https://developers.openai.com/codex/)，只说明连接方法；本方案不附带该产品或账户，也不代表获得官方背书。
+
+所有第三方项目名称及品牌归各自权利人。发布文章或介绍本项目时，应保留上述上游名称与链接，明确本项目贡献的是记忆插件、人设插件和集成工作，不将 DSH、向量模型、控制服务或参考技能描述为自研。
+
+## 0.5.0 配套组合
+
+本仓库 0.5.0，内置记忆插件 0.5.0；配套人设插件 dsh-global-settings 0.2.0。完整固定版本见[安装说明](docs/install/setup.md)，以上版本不改变第三方归属或许可。0.3.0 及更早组合使用的 Basic Memory（AGPL-3.0-or-later）、dsh-session-settings 和纯净模式插件已不在本组合中。
+
+第三方 GenUI 与 billion-context 的可选改动、来源、适用版本及许可由 [可选组件说明](docs/install/optional-components.md) 单独列出，不作为本项目从零自研的功能。公开包不包含私人实验、记忆、迁移清单或运行备份。
+
+
+| 可选上游 | 维护方与适配版本 | 本包包含的改动与许可 |
+| --- | --- | --- |
+| [dsh-genui](https://github.com/lhuans/dsh-genui) | lhuans，0.3.1且精确文件指纹匹配 | 按需加载规范的新增模块与窄范围变换；[保留上游MIT](third-party/dsh-genui.LICENSE) |
+| [billion-context](https://github.com/ranxianglei/billion-context) | ranxianglei，0.1.208且精确文件指纹匹配 | 非终止空帧的窄范围流处理变换；[保留上游完整许可证](third-party/billion-context.LICENSE)，含 MIT 正文及「Additional Term — Attribution on Product Surfaces」（产品出处标注）；适用条件与要求以完整原文为准 |
+
+[补丁清单](third-party/patches/manifest.json)记录适配指纹，[应用工具](scripts/install/optional-patches.mjs)默认只读；显式应用需用户先停机及新私有备份，支持受指纹约束的恢复，绝不重启。这里只分发变换规则与新增模块，不捆绑上游整包，不宣称补丁已被上游合入。
