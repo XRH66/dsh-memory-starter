@@ -316,6 +316,31 @@ test('cloud models never show local device, path or lifecycle controls in the ex
   assert.equal(writes(env).length,0);
 });
 
+test('status page connects pending turns and the live pipeline without a dead recovery field',async t=>{
+  const info=snapshot();
+  info.pendingTurns=3;
+  info.memoryRuntime={pipeline:{pending:2}};
+  const env=environment(url=>url===BASE+'/runtime'?runtime():info);t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'状态').props.onClick();await page.flush();
+  assert.equal(rowOf(page.tree,'待处理').value,'2 项');
+  assert.equal(rowOf(page.tree,'待处理').meta,'3 个对话的开关将在下一回合生效');
+  assert.doesNotMatch(text(page.tree),/暂时无法读取/);
+
+  info.pendingTurns=0;
+  info.memoryRuntime={pipeline:{pending:0}};
+  await button(page.tree,'刷新').props.onClick();await page.flush();
+  assert.equal(rowOf(page.tree,'待处理').value,'0 项');
+  assert.equal(rowOf(page.tree,'待处理').meta,'');
+
+  delete info.pendingTurns;
+  info.memoryRuntime={};
+  await button(page.tree,'刷新').props.onClick();await page.flush();
+  assert.equal(rowOf(page.tree,'待处理').value,'暂无数据');
+  assert.equal(rowOf(page.tree,'待处理').meta,'');
+  assert.doesNotMatch(text(page.tree),/暂时无法读取/);
+  assert.equal(writes(env).length,0);
+});
+
 test('status page owns runtime controls and shows the pending model, current cloud model and unbuilt index',async t=>{
   const info=snapshot();
   info.rawModel={fields:{rawRecallModel:'custom-api',rawRecallApiModel:'fictional-embed',rawRecallApiBase:'https://fictional-a.example/v1',rawRecallDimensions:768,rawRecallAllowCloud:true}};
