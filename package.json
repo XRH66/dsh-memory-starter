@@ -49,6 +49,7 @@
     "lib/memory-policy/index.js",
     "lib/memory-query-lanes.js",
     "lib/legacy-notes.js",
+    "lib/legacy-import.js",
     "lib/local-time.js",
     "lib/memory-query.js",
     "lib/memory-rerank.js",
