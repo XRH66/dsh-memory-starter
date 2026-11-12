@@ -1,96 +1,108 @@
-# DSH 长期记忆与人设
+> **主仓库说明（0.6.0，2026-11-12）**
+>
+> 本仓库现在是整套 DSH 记忆与人设方案的唯一主仓库，同时承载记忆插件、安装、部署、升级和示例。
+>
+> 当前安装从[安装说明](docs/install/setup.md)开始，升级从[升级说明](docs/install/upgrade.md)开始。原来的 `codex-deepseek-starter` 已迁移并归档。
+>
+> 下面保留原记忆插件 README 的完整正文，用来继续说明插件能力、参数和历史版本。
 
-给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）加上本地长期记忆和固定人设。记忆按对话开启，原话由程序保存，模型需要时自己去查；后台把聊天整理成 Markdown 条目，可以用 Obsidian 直接查看和修改。
+# dsh-memory-starter
 
-**不需要 Codex、OpenAI 账户或任何第三方 Agent 软件。** 只要有 DSH 和你自己能用的模型服务。本仓库既是记忆插件源码，也是从安装、升级到继续改代码的统一入口。
+给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）用的个人长期记忆插件，也是一个可以复制、魔改的起点。非官方插件，MIT 许可。
 
-## 开始
+> 本仓库原名 `dsh-basic-memory-bridge`。0.4.0 起已不再依赖 Basic Memory，因此改名。为了让已安装的 DSH 继续认得它，插件包名仍是 `@local/dsh-basic-memory-bridge`，内部接口和笔记里的来源字段也保持旧名字，不影响使用。
 
-首版面向 Windows PowerShell，需要 Git、Node.js 22.19+ 或 24+、npm。
+## 它做什么
 
-### 1. 准备仓库
+- **按对话开启**：默认不读也不记。在设置页给某个对话打开记忆后，从下一回合起才保存双方原话。也可以打开「新对话自动开启记忆」。
+- **原话由程序保存**：对话原文存进本地 SQLite，并建立全文索引，不经过模型改写。
+- **按需检索**：回答前不自动塞入记忆，由对话模型在需要时调用 `memory_search`、`memory_open`、`memory_recent` 查询。开启记忆的回合会附带一组回答规则（查不到就说不知道，不编日期等）。
+- **后台整理**：空闲时把对话合批整理成十二类条目（事实、关系、偏好、事件、计划等），写成 Markdown 存进 Vault，可用 Obsidian 直接查看和修改。
+- **遗忘曲线**：按条目类型设半衰期（事实、关系类 365 天，目标、看法类 90 天，事件、计划类 30 天），衰减只降低排序，不隐藏条目；再次确认会恢复权重。
+- **短期接续**：换对话或换模型时，自动带上其他对话里最近的原文，同一对话只保留一条，没有新内容就不注入。
+- **向量检索（可选）**：本地 Qwen3-Embedding 0.6B／4B／8B、BGE，或任意 OpenAI 兼容的向量接口（如硅基流动 `BAAI/bge-m3`）；可选重排。每个模型的索引是一个独立档案，换模型不清理旧索引，切回来只补新增部分。详见[向量模型安装与切换](MODEL-SETUP.zh-CN.md)。
+- **删除原话**：在「维护 → 删除原话」按关键词找到某条原话并删除，之后它不再被检索、接续或整理（只标记撤回，可追溯）。
+
+## 安装
+
+需要 DSH 0.2.1-rc.5 及以上，Node.js 22.19+ 或 24+。
+
+1. 把插件装进 DSH 的档案（以 `web` 档案为例，`<提交>` 换成要安装的版本提交）：
+
+   ```powershell
+   dsh plugin --profile web add "github:XRH66/dsh-memory-starter#<提交>"
+   ```
+
+2. 重启 DSH，先新建一个对话（打开页面时通常已有一个空白对话），再打开设置里的「记忆框架」。首次使用只有一个配置页：填一个记忆目录（绝对路径，不能和已有的记忆库重叠），选负责后台整理的模型服务和型号，勾选至少一个对话，点启用。
+3. 按页面提示再重启一次 DSH，记忆功能才开始运行。
+4. 在「记忆」页给要记的对话打开记忆。时区默认北京时间，可在同一页改。
+5. 想用向量检索的话，先在「记忆」页打开「原话检索」，再到「检索模型」页选模型（本地模型可在页面上下载，接口模型填地址、模型名、维数和密钥），保存后在「状态」页点「准备索引」。
+
+没有向量模型时，全文检索和条目检索照常可用。
+
+设置页分为「记忆／检索模型／状态／维护」四页。状态页可以看到索引进度、最近 20 次检索的耗时，以及各服务的连接测试。
+
+## 数据放在哪里
+
+全部在你选的记忆目录里，仓库和插件目录都不存数据：
+
+- `vault/`：整理出的条目、想法和日记，都是 Markdown，可以用 Obsidian 当作 Vault 打开；
+- `management/`：原话库（SQLite）、索引、整理队列、待审清单和状态，不进入记忆正文。
+
+记忆存在本地，不代表模型推理也在本地。开启记忆的对话、后台整理的内容会发给你选的对话模型和整理模型；选用接口向量模型时，被索引的内容也会发给向量服务。密钥单独保存，页面不回显。
+
+## 从旧版本迁移
+
+旧版本的记忆目录可以在「维护 → 记忆库」直接切过来使用。切到旧库后，可以在「维护 → 旧记忆迁移」把旧格式笔记一键转成新条目：程序原样搬移结构化字段，整理模型只做分类选择题，拿不准的少数条目留给你确认。旧文件不会被修改。
+
+## 可选：人设和状态面板
+
+[dsh-global-settings](https://github.com/XRH66/dsh-global-settings) 提供全局人设、自我档案和当前对话的记忆状态显示，不装也不影响记忆功能。
+
+## 开发
 
 ```powershell
-git clone https://github.com/XRH66/dsh-memory-starter.git
-Set-Location dsh-memory-starter
 npm ci
-npm run check
+npm test
 ```
 
-### 2. 生成独立部署
+测试只用临时目录和虚构数据，不调用模型接口、不读真实记忆。`npm run privacy` 检查发行包：要求目录里的每个文件都在 `release-files.json` 白名单内，所以要在新克隆的仓库或按白名单导出的目录里运行。
 
-输出目录必须位于仓库外，并且尚不存在：
+主要代码：
 
-```powershell
-$deploy = Join-Path $env:LOCALAPPDATA 'dsh-memory-deployment'
-node scripts/install/configure.mjs --out $deploy
-```
-
-### 3. 安装并首次配置
-
-按[安装说明](docs/install/setup.md)安装固定版本的人设插件和本仓库记忆插件，然后启动独立 DSH，在「记忆框架」页面选择新记忆目录、整理模型和第一个对话。
-
-已经在用 0.4.0 或 0.3.0 的，看[升级说明](docs/install/upgrade.md)。
-
-## 组成
-
-| 组件 | 作用 | 是否必装 |
-| --- | --- | --- |
-| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | 聊天、模型调用和插件运行环境 | 必装 |
-| 本仓库记忆插件 0.6.0 | 按对话开启、原话库、按需检索、后台整理、遗忘曲线、短期接续、可选向量检索、删除原话和旧记忆迁移 | 必装 |
-| [dsh-global-settings](https://github.com/XRH66/dsh-global-settings) 0.2.0 | 全局人设、自我档案、当前对话的记忆状态显示 | 推荐 |
-| [Obsidian](https://obsidian.md/) | 查看、编辑记忆 Vault | 可选 |
-
-安装说明按固定提交引用记忆插件和人设插件。历史仓库 `codex-deepseek-starter` 已并入本仓库，只保留迁移说明。
-
-## 能做什么
-
-- **按对话开启：** 默认不读不记；打开某个对话的记忆后，从下一回合开始保存双方实际提交的正文。
-- **按需检索：** 回答前不默认塞入大包记忆。模型需要旧依据时调用 `memory_search`，需要展开时调用 `memory_open`，查看近期原文时调用 `memory_recent`。
-- **后台整理：** 把获准原话整理成事实、偏好、事件、目标、计划、关系等十二类条目，写入 Markdown Vault 和本地索引。
-- **短期接续：** 切换对话、模型或连接时，按设置带入其他对话最近的获准原文；正常连续聊天沿用 DSH 自己的上下文。
-- **可选向量：** 支持本地 Qwen3-Embedding／BGE 和 OpenAI 兼容接口；每个模型或接口服务一份索引档案，切回时只补差量。
-- **维护入口：** 可删除原话、切换记忆库、把 0.3.0 旧笔记迁移成新条目；旧文件不被修改。
-
-## 从这里开始改
-
-| 想改什么 | 主要入口 |
+| 位置 | 内容 |
 | --- | --- |
-| 安装、部署生成和升级流程 | `scripts/install/`、[安装说明](docs/install/setup.md)、[升级说明](docs/install/upgrade.md) |
-| 原话存储、全文检索和向量材料 | `lib/raw-rag/` |
-| 向量服务、档案和模型选择 | `lib/memory-vectors.js`、`lib/unified/`、[模型设置](MODEL-SETUP.zh-CN.md) |
-| 检索工具、排序和展开 | `lib/memory-query.js`、`lib/memory-query-lanes.js`、`lib/entry-priority.js` |
-| 后台整理与十二类条目 | `lib/memory-organizer.js`、`lib/memory-pipeline.js`、`lib/memory-entry.js` |
-| 对话开关、接续和宿主接线 | `lib/session-memory.js`、`lib/handoff.js`、`lib/platform-host.js` |
-| 设置页和状态页 | `lib/client.js`、`lib/settings-host.js` |
-| 可选组件补丁 | `scripts/install/optional-patches.mjs`、[可选组件](docs/install/optional-components.md) |
+| `lib/bundle-entry.js` | 插件入口：未配置时只提供设置页，配置后启动记忆 |
+| `lib/platform-host.js`、`lib/personal-runtime.js` | 记忆运行时的组装 |
+| `lib/session-memory.js` | 按对话开关 |
+| `lib/memory-query*.js` | `memory_search` 等查询工具 |
+| `lib/memory-pipeline.js`、`lib/memory-organizer.js` | 后台整理 |
+| `lib/vault-files.js` | Vault 中 Markdown 的读写 |
+| `lib/raw-rag/` | 原话库、全文索引、向量后端和模型安装 |
+| `lib/client.js` | 设置页前端 |
 
-代码入口是 `lib/bundle-entry.js`，全部参数以 `lib/config.js` 为准。修改后运行：
+全部参数以 [lib/config.js](lib/config.js) 为准。
 
-```powershell
-node --test --test-timeout=60000 test/*.test.js
-npm run links
-npm run privacy  # 在按 release-files.json 导出的干净发行目录中运行
-```
+## 版本
 
-## 文档
+**0.5.0**
+- 向量索引按模型存成可切换的档案：本地各型号和每个接口服务各有一份，切走保留，切回只补差量；「检索模型」页列出各档案的维数、文档数和占用。
+- 新增「维护 → 删除原话」和「维护 → 旧记忆迁移」（旧格式笔记一键转成新条目，整理模型只做分类，拿不准的留给你确认，旧文件不动）。
+- 接口向量服务记录实际使用的维数；可为支持的模型勾选「向服务商请求这个维数」。
+- 架构精简：去掉不用对话开关的运行方式（插件配置写 `sessionMemory: false` 会直接报错）、旧原句召回链、旧整理动作写入器和 Basic Memory 回退；没有整理模型时只保存原话，不再写旧格式笔记。`lib/` 从约 2.1 万行降到约 1.8 万行。
+- 修复：模型安装刚完成就开始下一个安装时偶发失败。
 
-- [安装说明](docs/install/setup.md)
-- [升级说明](docs/install/upgrade.md)
-- [模型设置](MODEL-SETUP.zh-CN.md)
-- [隐私说明](docs/install/privacy.md)
-- [验证与适配边界](docs/install/validation.md)
-- [可选组件补丁](docs/install/optional-components.md)
-- [工程控制附录](docs/install/control.md)
-- [更新记录](CHANGELOG.md)
-- [第三方来源与许可](NOTICE.md)
+**0.4.0**
+- 去掉 Basic Memory：条目和全文索引走本地 SQLite，Markdown 由插件直接读写，不再需要安装 Basic Memory 或 MCP 客户端。
+- 删除 legacy、unified 模式、QQBridge、旧逐轮提炼和回答前自动注入链，只保留 portable 一种运行方式。
+- 新增「新对话自动开启记忆」、OpenAI 兼容向量接口及已保存服务列表、可选重排、服务连接测试和检索耗时显示。
+- 检索模型「检测／下载／保存后启用」分开；一次确认即可切换模型，切换前给出复用和需编码的预估。
+- 遗忘曲线按条目类型设置；默认北京时间，可选其他时区。
+- 检索结果瘦身（短编号、每次最多 10 条）和回答规则，减少作答时编造。
+- 性能与稳定性：后台让路不再空等时钟，整理后的向量核对从约 28 秒降到约 7 秒；在线向量服务失败后不再停到重启，只在结果不确定时暂停 5 分钟。
 
-## 数据与隐私
+**0.3.0**：portable 主链首个版本——逐对话授权、原话库、按需查询、后台合批整理、统一向量档位。
 
-记忆、原话库、索引、配置和密钥都在你选的本地目录里，不在仓库里。本地存储不代表推理离线：开启记忆的对话和后台整理会把相关内容发给你选的模型；选用接口向量模型时，被索引的内容也会发给向量服务。详见[隐私说明](docs/install/privacy.md)。
+## 许可
 
-## 仓库说明
-
-本仓库原名 `dsh-basic-memory-bridge`，0.4.0 起不再依赖 Basic Memory 并改名。为了让已安装的 DSH 继续识别它，包名仍是 `@local/dsh-basic-memory-bridge`，接口路径 `/api/basic-memory-*` 和笔记来源字段 `source_plugin` 也保留旧名。
-
-MIT。当前版本 0.6.0，适配 DSH 0.2.1-rc.5。
+本项目代码采用 [MIT](LICENSE)。模型、Python 依赖、llama.cpp 等第三方组件保留各自许可，见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
