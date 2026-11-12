@@ -3,34 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createRecentConversationStore,recentContextFile} from '../lib/recent-context.js';
+import {recentContextFile} from '../lib/recent-context.js';
 import {resolveConfig} from '../lib/config.js';
 import {createBridge} from '../lib/index.js';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {managementDirectory} from '../lib/review.js';
 import {createSessionMemory} from '../lib/session-memory.js';
 import {directUser,fakeAgent,runPreStep} from './helpers.js';
-
-test('closing memory during a queued recent write leaves no disk or in-memory record',async()=>{
-  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'recent-auth-'));
-  const store=createRecentConversationStore({config:resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),recentContext:true}),logger:{warn(){}}});
-  await store.idle();
-  let entered,release,allowed=true;
-  const started=new Promise(resolve=>{entered=resolve;}),held=new Promise(resolve=>{release=resolve;});
-  const writeFile=fs.writeFile;
-  fs.writeFile=async function(file,...args){
-    const result=await writeFile.call(this,file,...args);
-    if(String(file).startsWith(store.file+'.')&&String(file).endsWith('.tmp')){entered();await held;}
-    return result;
-  };
-  try{
-    const writing=store.record({sessionId:'session-fixture',turn:1,authorize:()=>allowed,user:{id:'u1',text:'不能迟到提交的原话',time:new Date().toISOString()}});
-    await started;allowed=false;release();
-    await assert.rejects(writing,{code:'MEMORY_AUTHORIZATION_REVOKED'});
-    await assert.rejects(fs.access(store.file),{code:'ENOENT'});
-    assert.equal((await store.page({maxChars:2000})).items.length,0);
-  }finally{fs.writeFile=writeFile;release();await store.idle();assert.equal(path.dirname(directory),path.resolve(os.tmpdir()));await fs.rm(directory,{recursive:true,force:true});}
-});
 
 async function handoffFixture(t){
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'handoff-sample-'));
@@ -75,11 +54,9 @@ async function handoffFixture(t){
     agent,config,scope,emit,appended,listCalls,statsFile,readStats,runtime};
 }
 
-test('portable handoff samples only its existing first page and leaves the legacy cache and receipts alone',async t=>{
+test('portable handoff samples only its existing first page and never rebuilds the legacy cache',async t=>{
   const f=await handoffFixture(t),id=f.agent.session.id;
-  const oldFile=recentContextFile(f.config),oldCache=createRecentConversationStore({config:f.config});
-  await oldCache.record({sessionId:'session-legacy',turn:1,user:{id:'legacy',time:'2026-10-01T00:00:00Z',text:'LEGACY_BODY'}});
-  const oldBytes=await fs.readFile(oldFile,'utf8');
+  const oldFile=recentContextFile(f.config);
   assert.notEqual(f.statsFile,oldFile);
   assert.equal(f.runtime.recentContext.source,'original-handoff-sample');
   assert.equal((await f.readStats()).sampledAt,null);
@@ -93,8 +70,6 @@ test('portable handoff samples only its existing first page and leaves the legac
   assert.deepEqual(f.listCalls,[]);
   assert.equal((await f.readStats()).sampledAt,null);
   assert.equal(f.raw.messages.projectionWork({...f.scope,consumer:'raw-text-v1'}).length,0);
-  const recentWork=f.raw.messages.projectionWork({...f.scope,consumer:'recent-v1',limit:40});
-  assert.equal(recentWork.length,25,'the original mode neither projects nor marks the legacy consumer complete');
 
   f.emit('turn/start',{turn:2});
   await runPreStep(f.bridge,{agent:f.agent,turn:2});
@@ -110,8 +85,8 @@ test('portable handoff samples only its existing first page and leaves the legac
   assert.ok(Number.isFinite(Date.parse(stats.sampledAt)));
   assert.equal(stats.capacityTokens,null);
   assert.equal(stats.evictedTurns,null);
-  assert.doesNotMatch(JSON.stringify(stats),/FIXTURE_BODY|LEGACY_BODY|session-handoff-sample/);
-  assert.equal(await fs.readFile(oldFile,'utf8'),oldBytes);
+  assert.doesNotMatch(JSON.stringify(stats),/FIXTURE_BODY|session-handoff-sample/);
+  await assert.rejects(fs.access(oldFile),{code:'ENOENT'});
 });
 
 test('portable restart resumes unfinished text work without rebuilding the old recent projection or sampling originals',async t=>{
@@ -126,7 +101,6 @@ test('portable restart resumes unfinished text work without rebuilding the old r
   await f.restart();
   assert.equal(f.bridge.messageSources.status().recovery.restored,1);
   assert.equal(f.raw.messages.projectionWork({...f.scope,consumer:'raw-text-v1'}).length,0);
-  assert.equal(f.raw.messages.projectionWork({...f.scope,consumer:'recent-v1'}).length,1);
   assert.equal(f.raw.messages.get(saved).revision,saved.revision);
   assert.equal(f.raw.messages.changes(f.scope).length,1);
   assert.deepEqual(f.listCalls,[]);

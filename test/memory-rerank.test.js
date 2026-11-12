@@ -320,14 +320,11 @@ test('originals still visible in the conversation are skipped so older lines fil
 test('rerank is skipped when the remaining query budget is under 200 milliseconds',async t=>{
   const f=await queryFixture(t,{config:{rawRecallQueryWaitMs:1000}});
   for(let index=1;index<=4;index++)f.save('no-time-'+index,'虚构剩余预算候选 '+index,index);
-  const original=f.notes.tools.get.bind(f.notes.tools);
-  f.notes.tools.get=(name,agent)=>{
-    const tool=original(name,agent);
-    return name==='mcp__basic_memory__search_notes'?{...tool,async execute(...args){
-      await new Promise(resolve=>setTimeout(resolve,850));
-      return tool.execute(...args);
-    }}:tool;
-  };
+  const forGrant=f.entries.forGrant.bind(f.entries);
+  f.entries.forGrant=(...args)=>{const reader=forGrant(...args);return {...reader,async search(...searchArgs){
+    await new Promise(resolve=>setTimeout(resolve,850));
+    return reader.search(...searchArgs);
+  }};};
   let calls=0;
   const reranker=await fixtureReranker(f,{fetchImpl:async()=>{calls++;return response({results:[]});}});
   const found=await f.answer(reranker).search({query:'虚构剩余预算候选',limit:4});

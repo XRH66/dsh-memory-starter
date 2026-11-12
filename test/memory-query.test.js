@@ -117,8 +117,8 @@ test('recent bypasses vector configuration and later searches share a pending an
   const vectors={getSnapshot(){snapshots++;return pendingProfile;},async query({profile}){profiles.push(profile);return {records:[]};}};
   const f=await fixture(t,{vectors});
   const first=f.save({text:'只有周末有空才整理书架。'});
-  const get=f.notes.tools.get.bind(f.notes.tools);
-  f.notes.tools.get=(name,agent)=>{const tool=get(name,agent);return name.endsWith('search_notes')?{...tool,async execute(...args){entered();return tool.execute(...args);}}:tool;};
+  const forGrant=f.entries.forGrant.bind(f.entries);
+  f.entries.forGrant=(...args)=>{const reader=forGrant(...args);return {...reader,async search(...searchArgs){entered();return reader.search(...searchArgs);}};};
   t.after(()=>release(null));
   t.mock.timers.enable({apis:['setTimeout','Date'],now:10000});
   const recent=await Promise.race([f.answer.recent({}),nextTurn()]);
@@ -332,7 +332,7 @@ test('old-format notes in the Vault bypass Basic Memory search_notes',async t=>{
   assert.equal(found.records[0].text,'养了一只叫阿岑的猫');
 });
 
-test('Basic Memory remains the old-format fallback when Vault memory directories are absent',async t=>{
+test('old-format search reports unavailable without falling back to Basic Memory tools',async t=>{
   const f=await fixture(t);
   assert.equal(await fs.stat(path.join(f.config.vaultPath,'chats/facts')).then(()=>true,()=>false),false);
   await f.notes.tools.get('mcp__basic_memory__write_note',f.agent).execute({project:'main',title:'QA旧偏好',directory:'chats/facts',tags:['dsh-memory'],
@@ -343,34 +343,43 @@ test('Basic Memory remains the old-format fallback when Vault memory directories
     return {...tool,execute:(...args)=>{searches++;return tool.execute(...args);}};};
 
   const found=await f.answer.search({query:'靛蓝'});
-  assert.equal(searches,1);
-  assert.equal(found.channels.legacy.records,1);
-  assert.equal(f.answer.resolve(found.records[0].ref).id,'legacy-note:memory-legacy-qa');
-  assert.equal(found.records[0].text,'QA用户喜欢靛蓝。');
+  assert.equal(searches,0);
+  assert.equal(found.channels.legacy.state,'unavailable');
+  assert.equal(found.channels.legacy.records,0);
 });
 
-test('a migrated personal permalink remains searchable, expandable and available to the organizer at its real path',async t=>{
-  const f=await fixture(t);
-  await f.notes.tools.get('mcp__basic_memory__write_note',f.agent).execute({project:'main',title:'QA旧偏好',directory:'chats/facts',tags:['dsh-memory'],
-    content:'<!-- dsh-fact-memory -->\n# QA旧偏好\n\n- [preference] QA用户喜欢靛蓝。\n- subject: owner\n- attribute: 颜色',
-    metadata:{memory_id:'legacy-qa',memory_kind:'fact',status:'active',subject:'owner',attribute:'颜色',value:'QA用户喜欢靛蓝。',recorded_at:'2026-11-06T00:00:00Z'}},{agent:f.agent});
-  const [key,note]=[...f.notes.notes.entries()][0];
-  f.notes.notes.delete(key);
-  note.permalink=key.replace(/^main\//,'personal/');
-  f.notes.notes.set(note.permalink,note);
+test('a migrated personal permalink remains locally searchable and expandable until its source changes',async t=>{
+  const f=await fixture(t),relative='chats/facts/migrated.md';
+  const content=`---
+title: QA旧偏好
+permalink: personal/chats/facts/QA旧偏好
+memory_id: legacy-qa
+memory_kind: fact
+status: active
+subject: owner
+attribute: 颜色
+value: QA用户喜欢靛蓝。
+recorded_at: '2026-11-06T00:00:00Z'
+tags:
+- dsh-memory
+---
+
+<!-- dsh-fact-memory -->
+# QA旧偏好
+
+- [preference] QA用户喜欢靛蓝。
+`;
+  await fs.mkdir(path.join(f.config.vaultPath,'chats/facts'),{recursive:true});
+  await fs.writeFile(path.join(f.config.vaultPath,relative),content);
   const found=await f.answer.search({query:'靛蓝'}),foundLocation=f.answer.resolve(found.records[0].ref);
   assert.equal(found.channels.legacy.records,1);assert.equal(foundLocation.id,'legacy-note:legacy-qa');
   assert.match(found.records[0].label,/记忆条目 · 事实 · 当前有效/u);
   const opened=await f.answer.expand({ref:found.records[0].ref});assert.equal(opened.records[0].text,'QA用户喜欢靛蓝。');
-  const source=f.save(),writer=f.entries.forBatch(f.agent,[source]);
-  const reference={id:foundLocation.id,revision:foundLocation.revision,legacy:note.permalink};
-  assert.equal((await writer.readLegacy(reference))?.content,'QA用户喜欢靛蓝。');
-  note.frontmatter.memory_excluded='true';
-  assert.equal(await writer.readLegacy(reference),null);
+  await fs.writeFile(path.join(f.config.vaultPath,relative),content.replace('- dsh-memory','- dsh-memory\nmemory_excluded: true'));
   assert.equal((await f.answer.expand({ref:found.records[0].ref})).channels.source.state,'source_changed');
-  delete note.frontmatter.memory_excluded;
-  note.filePath='work/qa-old.md';
-  assert.equal(await writer.readLegacy(reference),null);
+  assert.equal((await f.answer.search({query:'靛蓝'})).records.length,0);
+  await fs.mkdir(path.join(f.config.vaultPath,'work'),{recursive:true});
+  await fs.rename(path.join(f.config.vaultPath,relative),path.join(f.config.vaultPath,'work/qa-old.md'));
   assert.equal((await f.answer.search({query:'靛蓝'})).records.length,0);
 });
 
@@ -397,9 +406,10 @@ test('an excluded structured note is unavailable to text search, an issued ancho
 
 test('an original excluded while another search channel is pending cannot leave in the final result',async t=>{
   const f=await fixture(t);f.save();let enter,release;
-  const entered=new Promise(resolve=>enter=resolve),waiting=new Promise(resolve=>release=resolve),get=f.notes.tools.get.bind(f.notes.tools);
+  const entered=new Promise(resolve=>enter=resolve),waiting=new Promise(resolve=>release=resolve);
   t.after(()=>release());
-  f.notes.tools.get=(name,agent)=>{const tool=get(name,agent);return name.endsWith('search_notes')?{...tool,async execute(...args){enter();await waiting;return tool.execute(...args);}}:tool;};
+  const forGrant=f.entries.forGrant.bind(f.entries);
+  f.entries.forGrant=(...args)=>{const reader=forGrant(...args);return {...reader,async search(...searchArgs){enter();await waiting;return reader.search(...searchArgs);}};};
   const pending=f.answer.search({query:'书架'});await entered;
   f.memory.setControl({scope:'owner',targetType:'message',targetId:'qa-user',excluded:true});release();
   const result=await pending;assert.deepEqual(result.records,[]);assert.equal(result.coverage.complete,false);
@@ -407,9 +417,25 @@ test('an original excluded while another search channel is pending cannot leave 
 
 test('a deliberately located downweighted fact can still be opened by its issued anchor',async t=>{
   const f=await fixture(t);
-  await f.notes.tools.get('mcp__basic_memory__write_note',f.agent).execute({project:'main',title:'青岚山旧行程',directory:'chats/facts',tags:['dsh-memory'],
-    content:'<!-- dsh-fact-memory -->\n# 青岚山旧行程\n\n- [fact] 去过青岚山，需要预约。\n- subject: owner\n- attribute: 行程',
-    metadata:{memory_id:'soft-qa',memory_kind:'fact',status:'active',subject:'owner',attribute:'行程',value:'去过青岚山，需要预约。',base_priority:0.02}},{agent:f.agent});
+  const relative='chats/facts/soft.md',content=`---
+title: 青岚山旧行程
+permalink: main/chats/facts/青岚山旧行程
+memory_id: soft-qa
+memory_kind: fact
+status: active
+subject: owner
+attribute: 行程
+value: 去过青岚山，需要预约。
+base_priority: 0.02
+---
+
+<!-- dsh-fact-memory -->
+# 青岚山旧行程
+
+- [fact] 去过青岚山，需要预约。
+`;
+  await fs.mkdir(path.join(f.config.vaultPath,'chats/facts'),{recursive:true});
+  await fs.writeFile(path.join(f.config.vaultPath,relative),content);
   const found=await f.answer.search({query:'青岚山'});assert.equal(found.records.length,1);
   const opened=await f.answer.expand({ref:found.records[0].ref});assert.equal(opened.records.length,1);assert.ok(opened.records[0].text.includes('需要预约'));
 });
@@ -494,15 +520,6 @@ test('search records carry a readable personal time next to epoch milliseconds',
   assert.match(text,/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} [+-]\d{2}:\d{2}$/u);
   assert.equal(text,'2026-03-22 14:05 +08:00');// personal zone Asia/Shanghai, independent of the host zone
   assert.equal(localTime(undefined),undefined);assert.equal(VECTOR_LANE_LIMIT,10);
-});
-
-test('structured and old-format note lanes share a single Basic Memory search per query',async t=>{
-  const f=await fixture(t);
-  const original=f.notes.tools.get.bind(f.notes.tools);let searches=0;
-  f.notes.tools.get=(name,agent)=>{const tool=original(name,agent);if(name!=='mcp__basic_memory__search_notes'||!tool)return tool;
-    return {...tool,execute:(...args)=>{searches++;return tool.execute(...args);}};};
-  await f.answer.search({query:'靛蓝'});
-  assert.equal(searches,1);
 });
 
 test('records carry a label saying original or entry, speaker, progress and time',async()=>{

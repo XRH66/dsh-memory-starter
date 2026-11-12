@@ -7,7 +7,6 @@ import { buildTurn, RawMemoryStore, splitClauses } from '../lib/raw-rag/store.js
 import { buildCoverage, coverageOf, selectEvidence } from '../lib/raw-rag/select.js';
 import { createRawRecall } from '../lib/raw-rag/index.js';
 import { resolveConfig } from '../lib/config.js';
-import { createRecentConversationStore } from '../lib/recent-context.js';
 import { createBridge } from '../lib/index.js';
 import { fakeAgent, fakeTools, mcpResult, runPreStep } from './helpers.js';
 import { embeddingContract, seedTurnVectors } from './embedding-fixture.js';
@@ -73,30 +72,6 @@ test('coverage requires the same message identity, not just the same string', ()
   assert.equal(coverageOf(linked, 'user', '需要预约。', 'm1'), true);
   assert.equal(coverageOf(linked, 'assistant', '需要预约。', 'm1'), false);
   assert.equal(coverageOf(linked, 'user', '需要预约。', 'm2'), false);
-});
-
-test('recent page exports real message coverage and only suppresses displayed clauses', async (t) => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'recent-coverage-'));
-  const config = resolveConfig({ vaultPath: path.join(dir, 'vault'), project: 'main', recentContext: true });
-  const store = createRecentConversationStore({ config, logger: { warn() {} } });
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
-  const time = new Date(T0).toISOString();
-  await store.record({ sessionId: 's-recent', turn: 1, channel: 'dsh', status: 'completed',
-    user: { id: 'u-recent', text: '围巾款式定了。', time },
-    assistant: { id: 'a-recent', text: '好，记下了。', time } });
-  const page = await store.page({ maxChars: 2000 });
-  const shownUser = page.coverage.find((item) => item.id === 'u-recent');
-  assert.equal(shownUser?.role, 'user');
-  assert.match(shownUser?.text || '', /围巾款式定了/);
-  assert.ok(!page.coverage.some((item) => item.id === 'pseudo'));
-  const turn = { turnId: 't2', completedAt: T0, score: 1, messages: [
-    { id: 'u-recent', role: 'user', text: '围巾款式定了，换一条吧。', ts: T0 },
-  ] };
-  const selected = selectEvidence({ turns: [turn], query: '围巾 换一条', budget: 500,
-    existingMessages: page.coverage });
-  assert.equal(selected.skippedCovered, 1);
-  assert.ok(!selected.text.includes('围巾款式定了'));
-  assert.ok(selected.text.includes('换一条吧'));
 });
 
 test('store is idempotent, model-isolated and scope/asOf filtered', async (t) => {

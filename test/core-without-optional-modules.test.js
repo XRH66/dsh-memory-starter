@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 
-test('ordinary core loads without optional modules and gives a clear error for the unified candidate', async t => {
+test('ordinary core loads without optional modules and rejects removed runtime entry points', async t => {
   const sourceRoot = path.resolve(import.meta.dirname, '..');
   const tempParent = path.join(sourceRoot, '.local');
   await fs.mkdir(tempParent, { recursive: true });
@@ -22,23 +22,8 @@ test('ordinary core loads without optional modules and gives a clear error for t
   }
   const { apply } = await import(pathToFileURL(path.join(target, 'bundle-entry.js')).href);
   assert.throws(() => apply({}, { mode: 'unified' }), /已不支持 unified 模式/);
+  assert.throws(() => apply({}, { mode: 'portable', sessionMemory: false }), /不再支持不用对话开关的运行方式/);
   const { createBridge } = await import(pathToFileURL(path.join(target, 'index.js')).href);
-  const bridge = createBridge({ config: {}, tools: {}, llm: {} });
-  try {
-    assert.equal(typeof bridge.onRequest, 'function');
-    assert.equal(typeof bridge.onSessionEvent, 'function');
-  } finally {
-    await bridge.dispose();
-  }
-  const { createPersonalMemoryRuntime } = await import(pathToFileURL(path.join(target, 'personal-runtime.js')).href);
-  const personal = await createPersonalMemoryRuntime({
-    directory: path.join(root, 'personal'), config: {},
-    llm: {},
-  });
-  try {
-    await personal.recentStore.record({sessionId:'session-fixture',turn:1,user:{id:'fixture-1',text:'测试短期交流',time:'2026-10-31T12:00:00Z'}});
-    const page=await personal.recentStore.page({sessionId:'session-other',turn:2,maxChars:1000});
-    assert.match(page.text,/测试短期交流/);
-    await assert.rejects(personal.recentStore.record({channel:'external',sessionId:'external',turn:1,user:{id:'external-1',text:'未支持',time:'2026-10-31T12:00:00Z'}}),/unsupported recent conversation source/);
-  } finally { await personal.close(); }
+  assert.equal(typeof createBridge, 'function');
+  assert.throws(() => createBridge({ config: {}, tools: {}, llm: {} }), /对话记忆授权未接入/);
 });

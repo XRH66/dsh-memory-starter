@@ -15,21 +15,19 @@ async function fixture(t){
   return {get store(){return store;},restart(){store.close();store=new RawMemoryStore(file,{warn(){}});}};
 }
 
-test('projection receipts are independent, version checked and persisted without copying original bodies',async t=>{
+test('text projection receipts are version checked and persisted without copying original bodies',async t=>{
   const f=await fixture(t),source=f.store.messages.record(input(),allowed).source;
-  const text={...source,consumer:'raw-text-v1'},recent={...source,consumer:'recent-v1'};
+  const text={...source,consumer:'raw-text-v1'};
   assert.equal(f.store.messages.projectionWork(text).length,1);
   assert.equal(f.store.messages.projectionReceipt(text,allowed),true);
   assert.equal(f.store.messages.projectionWork(text).length,0);
-  assert.equal(f.store.messages.projectionReceipt({...recent,error:'cache unavailable'},allowed),true);
-  let pending=f.store.messages.projectionWork(recent);assert.equal(pending.length,1);assert.equal(pending[0].error,'cache unavailable');assert.equal('text' in pending[0],false);
   f.store.messages.completeTurn({...input(),state:'completed'},allowed);
-  assert.equal(f.store.messages.projectionReceipt(recent,allowed),false);
-  f.restart();pending=f.store.messages.projectionWork(recent);assert.equal(pending.length,1);
-  assert.equal(f.store.messages.projectionWork(text).length,1);
-  assert.throws(()=>f.store.messages.projectionReceipt({...pending[0],consumer:'recent-v1'},{authorize:()=>false}));
-  assert.equal(f.store.messages.projectionReceipt({...pending[0],consumer:'recent-v1'},allowed),true);
-  assert.equal(f.store.messages.projectionWork(recent).length,0);
+  f.restart();
+  const [pending]=f.store.messages.projectionWork(text);assert.ok(pending);assert.equal('text' in pending,false);
+  assert.throws(()=>f.store.messages.projectionReceipt({...pending,consumer:'raw-text-v1'},{authorize:()=>false}));
+  assert.equal(f.store.messages.projectionReceipt({...pending,consumer:'raw-text-v1'},allowed),true);
+  assert.equal(f.store.messages.projectionWork(text).length,0);
+  assert.throws(()=>f.store.messages.projectionWork({...source,consumer:'recent-v1'}),/Invalid projection work page/);
 });
 
 test('only original message bodies persist independently of completed turns or embeddings',async t=>{

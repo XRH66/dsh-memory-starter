@@ -46,15 +46,6 @@ test('unresolved agents, missing authorization and service failures never read t
   }
 });
 
-test('positive access supersedes pure mode while old pure-only callers retain their contract',async t=>{
-  const f=await fixture(t),host={id:'session-owner'},pure={check:()=>({suppressed:true})};
-  assert.equal(createPersonaRenderer({...f,pure})(host),'');
-  assert.deepEqual(f.hits,[]);
-  assert.equal(createPersonaRenderer({...f,pure,access:{check:()=>({allowed:false})}})(host),'FIXED_PERSONA {{literal}}');
-  assert.deepEqual(f.hits,[f.basePersona]);
-  assert.match(createPersonaRenderer(f)(host),/PRIVATE_SELF/,'no access option preserves legacy reads');
-});
-
 test('selected persona remains a single literal section and does not reread an existing global source',async t=>{
   const f=await fixture(t),host={id:'session-owner'};
   const render=createPersonaRenderer({...f,access:{check:()=>({allowed:false})}});

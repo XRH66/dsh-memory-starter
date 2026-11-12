@@ -39,11 +39,14 @@ test('schemastery schema accepts an empty config and applies defaults', () => {
   const old = {
     maxRecallNotes: 3, personalRecall: false, maxIndexNotes: 0, maxTimelineEntries: 0,
     recallTimeoutMs: 1500, maxIndexChars: 600, maxTimelineChars: 500,
+    recentContextTokens: 8192, maxAutomaticFailures: 7,
   };
   assert.doesNotThrow(() => Config(old));
   assert.equal(resolveConfig(old).maxRecallNotes, undefined);
   assert.equal(resolveConfig(old).maxIndexChars, undefined);
   assert.equal(resolveConfig(old).maxTimelineChars, undefined);
+  assert.equal(resolveConfig(old).recentContextTokens, undefined);
+  assert.equal(resolveConfig(old).maxAutomaticFailures, undefined);
 });
 
 

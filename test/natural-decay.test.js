@@ -4,10 +4,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { priorityFromMetadata, reinforcePriorityPatch, softenPriorityPatch, adjustedRelevance } from '../lib/priority.js';
-import { createBridge } from '../lib/index.js';
 import { applyMemoryActions, softenMemory } from '../lib/memory.js';
 import { resolveConfig } from '../lib/config.js';
-import { updateIndexBody, AUTO_START, AUTO_END } from '../lib/index-pages.js';
 import { memoryStore } from './fake-memory.js';
 import { fakeAgent, fakeLlm, fakeTools, mcpResult, directUser, runPreStep, turnStart, userMessage, assistantMessage, turnEnd, TARGET_SESSION } from './helpers.js';
 
@@ -41,18 +39,6 @@ test('reaffirmation restores at least 0.9 and doubles the half-life within cap, 
   assert.ok(softened.base_priority < priorityFromMetadata(p,opts(60)).effectivePriority);
   assert.equal(reinforcePriorityPatch(softened,opts(59)),null);
   assert.ok(reinforcePriorityPatch(softened,opts(90)).base_priority < 1);
-});
-
-test('index refresh preserves manual groups before and after the auto region',()=>{
-  const note={title:'沟通偏好',permalink:'personal/chats/facts/style',content:'- [preference] 少用套话'};
-  const manual='# 索引\n\n## 评价与回应\n- [[沟通偏好]] —— 旧内容\n\n## 其他\n保留这段\n';
-  const updated=updateIndexBody(manual,{refresh:[note]});
-  assert.match(updated,/## 评价与回应\n- \[\[沟通偏好\]\].*少用套话/);
-  assert.ok(!updated.includes(AUTO_START));assert.ok(updated.endsWith('## 其他\n保留这段\n'));
-  const withAuto='# 索引\n'+AUTO_START+'\n## 自动整理\n'+AUTO_END+'\n## 手工尾部\n- [[沟通偏好]] —— 旧内容\n';
-  const after=updateIndexBody(withAuto,{refresh:[note]});
-  assert.match(after,/## 手工尾部\n- \[\[沟通偏好\]\].*少用套话/);
-  assert.equal((after.match(/少用套话/g)||[]).length,1);
 });
 
 test('duplicate ADD and factual correction reuse reinforcement; history keeps the old decay anchor',async()=>{
