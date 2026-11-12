@@ -70,7 +70,7 @@ node scripts/install/configure.mjs --out $deploy
 ```powershell
 node --test --test-timeout=60000 test/*.test.js
 npm run links
-npm run privacy
+npm run privacy  # 在按 release-files.json 导出的干净发行目录中运行
 ```
 
 ## 文档
