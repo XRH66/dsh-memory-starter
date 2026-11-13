@@ -377,7 +377,7 @@ tags:
   await fs.writeFile(path.join(f.config.vaultPath,relative),content);
   const found=await f.answer.search({query:'靛蓝'}),foundLocation=f.answer.resolve(found.records[0].ref);
   assert.equal(found.channels.legacy.records,1);assert.equal(foundLocation.id,'legacy-note:legacy-qa');
-  assert.match(found.records[0].label,/记忆条目 · 事实 · 当前有效/u);
+  assert.match(found.records[0].label,/^旧笔记（未迁移） · 事实 · 依据时间 /u);
   const opened=await f.answer.expand({ref:found.records[0].ref});assert.equal(opened.records[0].text,'QA用户喜欢靛蓝。');
   await fs.writeFile(path.join(f.config.vaultPath,relative),content.replace('- dsh-memory','- dsh-memory\nmemory_excluded: true'));
   assert.equal((await f.answer.expand({ref:found.records[0].ref})).channels.source.state,'source_changed');
@@ -531,6 +531,10 @@ test('records carry a label saying original or entry, speaker, progress and time
   const {recordLabel}=await import('../lib/memory-query.js');
   assert.match(recordLabel({kind:'original',role:'user',time:Date.UTC(2026,4,8,6)}),/^原话 · 用户说 · 2026-05-0\d /u);
   assert.equal(recordLabel({kind:'entry',type:'plan',state:{validity:'current',progress:'planned'}}),'记忆条目 · 计划（尚未发生） · 当前有效 · 依据时间 时间未知');
+  assert.equal(recordLabel({id:'legacy-note:old',kind:'entry',type:'fact',state:{validity:'current'}}),
+    '旧笔记（未迁移） · 事实 · 依据时间 时间未知');
+  assert.match(recordLabel({kind:'original',role:'user',text:'我以前的杯子是什么？  ',time:0}),/ · 当时的提问$/u);
+  assert.doesNotMatch(recordLabel({kind:'original',role:'assistant',text:'你想问什么？',time:0}),/当时的提问/u);
 });
 
 test('answer guidance carries the full-turn title, all rules and the do-not-save warning',async t=>{

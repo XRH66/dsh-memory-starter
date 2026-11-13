@@ -128,6 +128,7 @@
   "test/memory-query-lanes.test.js",
   "test/memory-query.test.js",
   "test/memory-prefetch.test.js",
+  "test/prefetch-noise.test.js",
   "test/query-speed.test.js",
   "test/memory-rerank.test.js",
   "test/connection-test.test.js",

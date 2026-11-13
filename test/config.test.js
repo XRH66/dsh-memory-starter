@@ -14,7 +14,24 @@ test('config defaults apply the product limits without a session allowlist', () 
   assert.equal(config.rawRecallQueryWaitMs, 0);
   assert.equal(config.captureFolder, 'chats');
   assert.equal(config.organizerReasoningEffort, 'low');
+  assert.deepEqual([
+    config.prefetchMaxChars, config.prefetchMaxRecords, config.prefetchMinLexical,
+    config.prefetchVectorMargin, config.prefetchMinRerank, config.prefetchRerankCandidates,
+  ], [1000, 3, 0.6, 0.1, 0.35, 16]);
   assert.equal(Config({}).organizerReasoningEffort, 'low');
+});
+
+test('prefetch thresholds validate their bounds and integer fields', () => {
+  for (const [field, value] of [
+    ['prefetchMaxRecords', 0], ['prefetchMaxRecords', 5], ['prefetchMaxRecords', 2.5],
+    ['prefetchMinLexical', -0.1], ['prefetchMinLexical', 1.1],
+    ['prefetchVectorMargin', -0.1], ['prefetchVectorMargin', 0.6],
+    ['prefetchMinRerank', -0.1], ['prefetchMinRerank', 1.1],
+    ['prefetchRerankCandidates', 3], ['prefetchRerankCandidates', 31], ['prefetchRerankCandidates', 8.5],
+  ]) {
+    assert.throws(() => Config({ [field]: value }), undefined, field + '=' + value);
+  }
+  assert.deepEqual(Config({}), Config({ prefetchMaxChars: 1000 }));
 });
 
 test('organizer reasoning effort honors explicit values and empty model defaults', () => {

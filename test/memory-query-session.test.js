@@ -56,7 +56,8 @@ test('search total wait is separate from the open budget',async t=>{
 test('one timed out query aborts its own work without poisoning later calls in the same answer',async t=>{
   let calls=0,signal;const late=deferred();
   const {session}=fixture({tokenLimits:{waitMs:20},search:async request=>{calls++;signal=request.signal;return calls===1?late.promise:{records:[record('ready')]};}});t.after(()=>session.dispose());
-  const first=await session.search({query:'cold'});assert.equal(first.error.code,'TIMEOUT');assert.equal(signal.aborted,true);
+  const first=await session.search({query:'cold'});assert.equal(first.error.code,'TIMEOUT');
+  assert.match(first.error.message,/不要提后端、接口、错误码或超时/u);assert.equal(signal.aborted,true);
   const second=await session.search({query:'ready'});assert.equal(second.status,'ok');assert.equal(session.resolve(second.records[0].ref).id,'ready');
   late.resolve({records:[record('must-not-deliver')]});assert.equal(session.budget().calls,2);
 });
@@ -121,4 +122,30 @@ test('correction and nonempty entry metadata are the only conditional model view
   assert.equal(result.records[0].correction,true);
   assert.equal(result.records[1].subject_ref,'owner');assert.deepEqual(result.records[1].tags,['虚构']);
   assert.equal('source' in result.records[0],false);assert.equal('type' in result.records[1],false);
+});
+
+test('internal relevance signals are copied only when the caller asks for them',async t=>{
+  const signals={lexical:.75,similarity:.62,rerank:.41,lanes:['text','vector']};
+  const {session:keeping}=fixture({keepSignals:true,search:async()=>({records:[{...record(),_signals:signals}]})});
+  const {session:hidden}=fixture({keepSignals:false,search:async()=>({records:[{...record(),_signals:signals}]})});
+  t.after(()=>{keeping.dispose();hidden.dispose();});
+  assert.deepEqual((await keeping.search({query:'虚构'})).records[0].signals,signals);
+  const publicRecord=(await hidden.search({query:'虚构'})).records[0];
+  assert.equal('signals' in publicRecord,false);assert.equal('_signals' in publicRecord,false);
+});
+
+test('technical failures tell the model how to speak without exposing internals',async t=>{
+  const {session:backend}=fixture({search:async()=>{throw Object.assign(Error('private backend detail'),{code:'PRIVATE'});}});
+  const {session:profile}=fixture({getProfile:async()=>({id:'',revision:1}),search:async request=>{
+    await request.getProfile();return {records:[record()]};
+  }});
+  const {session:partial}=fixture({search:async()=>({records:[],degraded:true})});
+  t.after(()=>{backend.dispose();profile.dispose();partial.dispose();});
+  const backendReply=await backend.search({query:'虚构'});
+  assert.equal(backendReply.error.code,'BACKEND');assert.match(backendReply.error.message,/自然地说这次没查到相关记录/u);
+  assert.doesNotMatch(backendReply.error.message,/private backend detail/u);
+  assert.equal((await profile.search({query:'虚构'})).error.code,'PROFILE');
+  const partialReply=await partial.search({query:'虚构'});
+  assert.equal(partialReply.error.code,'PARTIAL');
+  assert.equal(partialReply.error.message,'部分检索没有完成，以下是已核实的结果；若不足以回答，就说没查到更多记录，不要提技术原因。');
 });

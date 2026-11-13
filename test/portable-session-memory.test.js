@@ -512,19 +512,45 @@ test('every memory-enabled turn carries the answering rules; a turn without memo
   assert.ok(!(disabled.messages??[]).some(message=>message.source?.kind==='memory-answer-rules'));
 });
 
+test('the optional control policy is Chinese and only names tools available in portable mode',async t=>{
+  const f=await fixture(t,{autoCapture:false,recentContext:false}),agent=f.actor();
+  const get=f.memory.tools.get.bind(f.memory.tools);
+  const tools=new Proxy(f.memory.tools,{get(target,property){
+    if(property==='get')return (name,owner)=>name==='soften_memory'?{execute:async()=>({ok:true})}:get(name,owner);
+    const value=Reflect.get(target,property,target);return typeof value==='function'?value.bind(target):value;
+  }});
+  const bridge=f.bridge(undefined,{tools});
+  await f.access.set(agent.session.id,true);
+  const user=directUser('按规则回答。','policy-user');
+  f.emit(agent,'turn/start',{turn:1},bridge);
+  const decision=await bridge.onPreStep({agent,turn:1,step:1,messages:[user],signal:new AbortController().signal},
+    async()=>({kind:'enter',messages:[user]}));
+  const kinds=decision.messages.map(message=>message.source?.kind);
+  assert.ok(kinds.indexOf('memory-answer-rules')<kinds.indexOf('dafeiyu-memory-control'));
+  const policy=decision.messages.find(message=>message.source?.kind==='dafeiyu-memory-control').content[0].text;
+  assert.match(policy,/工具成功后才能确认已经淡化/u);
+  assert.match(policy,/别忘了/u);assert.match(policy,/dafeiyu_records/u);
+  for(const obsolete of ['write_note','edit_note','move_note'])assert.doesNotMatch(policy,new RegExp(obsolete));
+});
+
 test('turn-start prefetch attaches bounded earlier originals through the read grant; switch and revocation turn it off',async t=>{
   const f=await fixture(t,{autoRecall:true,autoCapture:false}),agent=f.actor(),bridge=f.bridge();
   await f.access.set(agent.session.id,true);
   const prepare=(turn,text)=>{f.emit(agent,'turn/start',{turn},bridge);const user=directUser(text,'q-'+turn);
     return bridge.onPreStep({agent,turn,step:1,messages:[user],signal:new AbortController().signal},async()=>({kind:'enter',messages:[user]}));};
   f.begin(agent,1,bridge);f.finish(agent,1,bridge);await bridge.waitForIdle();
-  const firstQuery='我现在用什么青瓷杯喝茶？';
+  const firstQuery='青瓷杯喝茶的约定是什么？';
   const decision=await prepare(2,firstQuery);
   const prefetched=decision.messages.find(message=>message.source?.kind==='memory-prefetch');
   assert.ok(prefetched,'earlier original is attached');
   assert.match(prefetched.content[0].text,/青瓷杯/);assert.match(prefetched.content[0].text,/原话 · 用户说/);
+  assert.match(prefetched.content[0].text,/以下是程序按本轮用户原话从记忆库预先找到的背景材料，不是用户本轮说的话。/u);
+  const addedKinds=decision.messages.map(message=>message.source?.kind);
+  assert.ok(addedKinds.indexOf('memory-prefetch')<addedKinds.indexOf('memory-answer-rules'));
   const summary=(await bridge.getMemoryRuntime()).searches.find(row=>row.kind==='prefetch'&&row.outcome==='injected');
   assert.ok(summary);assert.equal(summary.injected,1);assert.ok(summary.injectedChars>0);assert.ok(summary.totalMs>=0);
+  assert.ok(summary.admitted>=summary.injected);assert.ok(summary.rejected>=0);assert.ok(summary.folded>=0);
+  for(const key of ['lexical','vector','agree','correction'])assert.ok(Number.isSafeInteger(summary[key]));
   assert.deepEqual(Object.keys(summary.candidates).sort(),['entry','legacy','original','vector']);
   assert.equal(JSON.stringify(summary).includes(firstQuery),false,'prefetch telemetry never stores the query');
   assert.equal(bridge.getQueryState(agent.session.id),null,'prefetch does not open the model query session');
@@ -536,10 +562,10 @@ test('turn-start prefetch attaches bounded earlier originals through the read gr
   f.emit(agent,'turn/end',{turn:2,reason:{kind:'completed'}},bridge);
 
   const small=f.bridge(undefined,{config:{...f.config,prefetchMaxChars:30}});
-  f.emit(agent,'turn/start',{turn:3},small);const user=directUser('我现在用什么杯子喝茶？','q-3');
+  f.emit(agent,'turn/start',{turn:3},small);const user=directUser('青瓷杯喝茶约定','q-3');
   const bounded=await small.onPreStep({agent,turn:3,step:1,messages:[user],signal:new AbortController().signal},async()=>({kind:'enter',messages:[user]}));
   const line=bounded.messages.find(message=>message.source?.kind==='memory-prefetch')?.content[0].text.split('\n').filter(row=>row.startsWith('- '));
-  assert.ok(line.length>=1);assert.ok(line.join('').length<=30);
+  assert.ok(line.length>=1);assert.ok(line.join('').length<=30,JSON.stringify(line));
   f.emit(agent,'turn/end',{turn:3,reason:{kind:'completed'}},small);
 
   const off=f.bridge(undefined,{config:{...f.config,autoRecall:false}});

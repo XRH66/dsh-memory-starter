@@ -69,6 +69,8 @@ async function nativeContextFixture(t) {
     'basic-memory-navigation',
     'basic-memory-timeline',
     'dafeiyu-memory-control',
+    'memory-prefetch',
+    'memory-answer-rules',
     RECENT_SOURCE,
   ];
   const old = sources.map((kind, index) => {
