@@ -224,3 +224,36 @@ test('portable tool scopes refresh only for the affected family, except on tool 
   assert.equal(viewed.length,agents.size);
   assert.ok([...agents.values()].every(agent=>agent.denied.has('mcp__basic_memory__late_tool')));
 });
+
+test('default owner is shared by session grants and raw memory queries',async t=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'opt-in-default-owner-'));
+  assert.equal(path.dirname(directory),path.resolve(os.tmpdir()));
+  const callbacks=new Map(),services=new Map(),registered=new Map(),effects=[],events=[];
+  const session={id:'session-default-owner',seq:0,snapshotEvents:(from=0,to=events.length)=>events.slice(from,to),deriveMessages:()=>[]};
+  const scope={restrict(){return()=>{};}};
+  const agent={id:session.id,session,status:'idle',ctx:{get:()=>scope}};
+  const ctx={llm:{},logger:{warn(){}},sessions:{get:id=>id===session.id?session:undefined,ensure:async()=>session},
+    agents:{get:id=>id===session.id?agent:undefined,list:()=>[agent],isOwnedBy:()=>false},
+    tools:{register(tool){registered.set(tool.name,tool);return()=>registered.delete(tool.name);},guard(){return()=>{};},view(){return {restrictableNames:new Set(registered.keys())};}},
+    get:key=>services.get(key),provide:(key,value)=>services.set(key,value),effect(fn){effects.push(fn());},
+    on(name,fn){callbacks.set(name,[...(callbacks.get(name)??[]),fn]);}};
+  t.after(async()=>{
+    for(const dispose of effects.reverse())await dispose?.();
+    await fs.rm(directory,{recursive:true,force:true});
+  });
+  const cfg={ownerDirectory:directory,dshSessionIds:[]};
+  const service=await apply(ctx,{directory,sessionIds:[],sessionMemory:true,
+    configurationStaticFingerprint:deploymentStaticFingerprint(cfg),deployment:{async markApplied(){}},
+    memory:{autoCapture:false,autoRecall:false,recentContext:false,rawRecall:false}});
+  assert.equal(service.ownerSubject,'用户');
+  await service.applySessionSelection({...cfg,dshSessionIds:[session.id]},'bind-default',{action:'bind',value:session.id});
+  const event={type:'turn/start',seq:0,time:Date.now(),data:{turn:1}};
+  events.push(event);session.seq=1;
+  for(const fn of callbacks.get('session/event'))fn(session,event);
+  assert.equal(service.sessionMemory.status(session.id).requested,true);
+  const tool=registered.get('memory_recent');
+  assert.ok(tool,'memory_recent should be registered for an enabled session');
+  const result=await tool.execute({limit:1},{agent,signal:new AbortController().signal});
+  assert.equal(result.status,'empty');
+  assert.deepEqual(result.records,[]);
+});
