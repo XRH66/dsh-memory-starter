@@ -11,6 +11,7 @@ import {resolveConfig} from '../lib/config.js';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {MEMORY_HANDOFF_SOURCE} from '../lib/memory-contract.js';
 import {recentContextFile} from '../lib/recent-context.js';
+import {ANSWER_RULES} from '../lib/memory-query.js';
 import {memoryStore} from './fake-memory.js';
 import {fakeAgent,fakeLlm,runPreStep,directUser,toolVaultBackend} from './helpers.js';
 
@@ -552,13 +553,14 @@ test('the foreground memory signal is scoped to its completed authorized turn',a
   assert.ok(bridge.pipeline.status().jobs.filter(job=>job.turn>=3).every(job=>!job.changeKind));
 });
 
-test('every memory-enabled turn carries the answering rules; a turn without memory does not',async t=>{
+test('a memory-enabled turn without material carries only the short clock',async t=>{
   const f=await fixture(t,{recentContext:true,autoCapture:false}),on=f.actor(),off=f.actor('session-answer-rules-off'),bridge=f.bridge();
   const prepare=(agent,turn,user)=>bridge.onPreStep({agent,turn,step:1,messages:[user.data],signal:new AbortController().signal},async()=>({kind:'enter',messages:[user.data]}));
   await f.access.set(on.session.id,true);
   const enabled=await prepare(on,1,f.begin(on,1,bridge));
-  const rules=enabled.messages.find(message=>message.source?.kind==='memory-answer-rules');
-  assert.ok(rules);assert.match(rules.content[0].text,/计划、打算、约定在没有后续确认前，不能说成已经发生/);
+  const clock=enabled.messages.find(message=>message.source?.kind==='memory-answer-rules');
+  assert.ok(clock);assert.match(clock.content[0].text,/^<memory_clock>当前本地时间：.+<\/memory_clock>$/u);
+  for(const rule of ANSWER_RULES)assert.equal(clock.content[0].text.includes(rule),false,rule);
   const disabled=await prepare(off,1,f.begin(off,1,bridge));
   assert.ok(!(disabled.messages??[]).some(message=>message.source?.kind==='memory-answer-rules'));
 });
@@ -594,8 +596,12 @@ test('turn-start prefetch attaches bounded earlier originals through the read gr
   const decision=await prepare(2,firstQuery);
   const prefetched=decision.messages.find(message=>message.source?.kind==='memory-prefetch');
   assert.ok(prefetched,'earlier original is attached');
-  assert.match(prefetched.content[0].text,/青瓷杯/);assert.match(prefetched.content[0].text,/原话 · 用户说/);
-  assert.match(prefetched.content[0].text,/以下是程序按本轮用户原话从记忆库预先找到的背景材料，不是用户本轮说的话。/u);
+  const prefetchText=prefetched.content[0].text;
+  assert.match(prefetchText,/青瓷杯/);assert.match(prefetchText,/原话 · 用户说/);
+  assert.match(prefetchText,/以下是程序按本轮用户原话从记忆库预先找到的背景材料，不是用户本轮说的话。/u);
+  assert.ok(prefetchText.indexOf(ANSWER_RULES[0])>prefetchText.indexOf('- ['));
+  assert.ok(prefetchText.indexOf(ANSWER_RULES[0])<prefetchText.indexOf('</memory_prefetch>'));
+  assert.equal(prefetchText.split(ANSWER_RULES[0]).length-1,1);
   const addedKinds=decision.messages.map(message=>message.source?.kind);
   assert.ok(addedKinds.indexOf('memory-prefetch')<addedKinds.indexOf('memory-answer-rules'));
   const summary=(await bridge.getMemoryRuntime()).searches.find(row=>row.kind==='prefetch'&&row.outcome==='injected');
@@ -615,7 +621,8 @@ test('turn-start prefetch attaches bounded earlier originals through the read gr
   const small=f.bridge(undefined,{config:{...f.config,prefetchMaxChars:30}});
   f.emit(agent,'turn/start',{turn:3},small);const user=directUser('青瓷杯喝茶约定','q-3');
   const bounded=await small.onPreStep({agent,turn:3,step:1,messages:[user],signal:new AbortController().signal},async()=>({kind:'enter',messages:[user]}));
-  const line=bounded.messages.find(message=>message.source?.kind==='memory-prefetch')?.content[0].text.split('\n').filter(row=>row.startsWith('- '));
+  const materials=bounded.messages.find(message=>message.source?.kind==='memory-prefetch')?.content[0].text.split('使用以上材料时：')[0];
+  const line=materials.split('\n').filter(row=>row.startsWith('- '));
   assert.ok(line.length>=1);assert.ok(line.join('').length<=30,JSON.stringify(line));
   f.emit(agent,'turn/end',{turn:3,reason:{kind:'completed'}},small);
 
@@ -632,4 +639,31 @@ test('turn-start prefetch attaches bounded earlier originals through the read gr
   f.emit(agent,'turn/start',{turn:5},bridge);const closed=directUser('我现在用什么杯子喝茶？','q-5');
   const revoked=await bridge.onPreStep({agent,turn:5,step:1,messages:[closed],signal:new AbortController().signal},async()=>({kind:'enter',messages:[closed]}));
   assert.ok(!(revoked.messages??[]).some(message=>message.source?.kind==='memory-prefetch'));
+});
+
+test('prefetch and handoff carry one copy of the rules in their own material block',async t=>{
+  const f=await fixture(t,{autoRecall:true,recentContext:true,autoCapture:false});
+  const source=f.actor('session-rules-source'),target=f.actor('session-rules-target'),bridge=f.bridge();
+  attachSurface(f,bridge,target);
+  await f.access.set(source.session.id,true);await f.access.set(target.session.id,true);
+  f.begin(source,1,bridge,'另一个对话约定下周带蓝色雨伞。','rules-source-user');
+  f.finish(source,1,bridge,'记得带蓝色雨伞。');
+  f.begin(target,1,bridge,USER,'rules-target-history');
+  f.finish(target,1,bridge,'记得青瓷杯的约定。');await bridge.waitForIdle();
+
+  const user=f.begin(target,2,bridge,'青瓷杯喝茶的约定是什么？','rules-target-user');
+  const decision=await bridge.onPreStep({agent:target,turn:2,step:1,messages:[user.data],
+    signal:new AbortController().signal},async()=>({kind:'enter',messages:[user.data]}));
+  const prefetched=decision.messages.find(message=>message.source?.kind==='memory-prefetch');
+  assert.ok(prefetched);
+  assert.equal(prefetched.content[0].text.split(ANSWER_RULES[0]).length-1,1);
+
+  f.emit(target,'step/start',{turn:2,step:1},bridge);
+  await bridge.onRequest({agent:target,turn:2,step:1,signal:new AbortController().signal},
+    async()=>({provider:'fixture',model:'fixture'}));
+  const handoff=target.session.deriveMessages().find(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE);
+  assert.ok(handoff);
+  assert.equal(handoff.content[0].text.split(ANSWER_RULES[0]).length-1,1);
+  assert.ok(handoff.content[0].text.indexOf(ANSWER_RULES[0])>handoff.content[0].text.indexOf('[用户'));
+  f.finish(target,2,bridge);await bridge.waitForIdle();
 });

@@ -11,6 +11,7 @@ import {createBridge} from '../lib/index.js';
 import {createUnifiedProfiles} from '../lib/unified/profiles.js';
 import {resolveConfig} from '../lib/config.js';
 import {personalTimeZone,setPersonalTimeZone} from '../lib/personal-namespace.js';
+import {estimateTokens} from '../lib/token-estimate.js';
 import {memoryStore} from './fake-memory.js';
 import {directUser,fakeAgent,fakeLlm,runPreStep} from './helpers.js';
 
@@ -537,7 +538,7 @@ test('records carry a label saying original or entry, speaker, progress and time
   assert.doesNotMatch(recordLabel({kind:'original',role:'assistant',text:'你想问什么？',time:0}),/当时的提问/u);
 });
 
-test('answer guidance carries the full-turn title, all rules and the do-not-save warning',async t=>{
+test('a memory-enabled turn without material carries only the short clock',async t=>{
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'answer-guidance-')),agent=fakeAgent('guidance-session');
   const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecallDbPath:path.join(directory,'raw.sqlite'),
     autoRecall:false,autoCapture:false,personalRecall:false,recentContext:false,rawRecall:false});
@@ -553,8 +554,19 @@ test('answer guidance carries the full-turn title, all rules and the do-not-save
   const user=directUser('按规则回答。','guidance-user');
   bridge.onSessionEvent(agent.session,user);
   const decision=await runPreStep(bridge,{agent,turn:1,messages:[user.data]});
-  const text=decision.messages.flatMap(message=>message.content??[]).filter(part=>part.type==='text').map(part=>part.text).join('\n');
-  assert.match(text,/本轮整个回答（包括闲聊、建议和续写）都要遵守：/u);
-  for(const rule of ANSWER_RULES)assert.ok(text.includes('- '+rule+'。'),rule);
-  assert.ok(text.includes('这些规则不是用户记忆，不得保存为事实。'));
+  const clock=decision.messages.find(message=>message.source?.kind==='memory-answer-rules');
+  assert.ok(clock);assert.match(clock.content[0].text,/^<memory_clock>当前本地时间：.+<\/memory_clock>$/u);
+  for(const rule of ANSWER_RULES)assert.equal(clock.content[0].text.includes(rule),false,rule);
+});
+
+test('memory_search description is compact and does not repeat the material rules',()=>{
+  const [search]=createMemoryQueryTools({answer:()=>({})});
+  assert.match(search.description,/只把结果里实际写到的内容当事实；本轮如附有记忆使用规则，照规则回答。/u);
+  assert.match(search.description,/原话还是记忆条目、谁说的、何时说的/u);
+  assert.match(search.description,/memory_open/u);
+  assert.match(search.description,/correction/u);
+  assert.match(search.description,/1K tokens/u);
+  assert.ok(estimateTokens(search.description)<=200,String(estimateTokens(search.description)));
+  for(const rule of ANSWER_RULES)assert.equal(search.description.includes(rule),false,rule);
+  assert.doesNotMatch(ANSWER_RULES.join('\n'),/包括闲聊|说明这是建议/u);
 });

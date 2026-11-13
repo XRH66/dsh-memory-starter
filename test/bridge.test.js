@@ -6,6 +6,7 @@ import path from 'node:path';
 import {createBridge} from '../lib/index.js';
 import {expireMemoryContext} from '../lib/context.js';
 import {RECENT_SOURCE} from '../lib/recent-context.js';
+import {ANSWER_RULES} from '../lib/memory-query.js';
 import {directUser, fakeAgent} from './helpers.js';
 
 const applyRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'dafeiyu-apply-test-'));
@@ -75,8 +76,11 @@ async function nativeContextFixture(t) {
   ];
   const old = sources.map((kind, index) => {
     if (index === 2) session.append('user/message', directUser('previous human', 'human-1'), {surfaceOp: 'append'});
+    const text=kind==='memory-prefetch'
+      ?['<memory_prefetch>','- 虚构过去材料','使用以上材料时：',...ANSWER_RULES.map(rule=>'- '+rule+'。'),'</memory_prefetch>'].join('\n')
+      :kind==='memory-answer-rules'?'<memory_clock>当前本地时间：2026-11-13 12:00 +08:00</memory_clock>':'old '+kind;
     return session.append('user/message', {
-      ...directUser('old ' + kind, 'old-' + index),
+      ...directUser(text, 'old-' + index),
       source: {kind},
     }, {surfaceOp: 'append'});
   });
@@ -158,6 +162,8 @@ test('native context expiry clears at request boundary and survives strict repla
   const status = (await f.bridge.getMemoryStatus(f.session.id)).jobs.at(-1).recall;
   assert.deepEqual(status.expired, expected);
   assert.deepEqual(decision.messages.slice(1).map(message => message.source.kind), ['memory-answer-rules']);
+  assert.match(decision.messages.at(-1).content[0].text,/^<memory_clock>/u);
+  assert.ok(!f.session.deriveMessages().some(message=>message.id.startsWith('old-')));
   assert.deepEqual(f.session.deriveMessages().map(m => m.id), ['system', 'human-1', 'other-context', 'answer-1']);
   for (const message of decision.messages) f.session.append('user/message', message, {surfaceOp: 'append'});
   const admitted = structuredClone(f.session.deriveMessages());

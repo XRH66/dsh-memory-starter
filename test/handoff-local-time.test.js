@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {selectHandoff} from '../lib/handoff.js';
+import {ANSWER_RULES} from '../lib/memory-query.js';
 import {personalTimeZone,setPersonalTimeZone} from '../lib/personal-namespace.js';
 
 test('handoff labels its guidance and message times as local wall time',t=>{
@@ -16,8 +17,11 @@ test('handoff labels its guidance and message times as local wall time',t=>{
   const [opening,guidance]=result.text.split('\n');
 
   assert.equal(opening,'<memory_handoff>');
-  assert.match(guidance,/时间均为本地时间/);
-  assert.match(guidance,/计划、打算不等于已经发生/);
+  assert.match(guidance,/以下是已保存的近期对话原文，用于接续。/);
+  assert.doesNotMatch(result.text,/计划、打算不等于已经发生/u);
+  assert.ok(result.text.indexOf(ANSWER_RULES[0])>result.text.indexOf('[用户'));
+  assert.ok(result.text.indexOf(ANSWER_RULES[0])<result.text.indexOf('</memory_handoff>'));
+  assert.equal(result.text.split(ANSWER_RULES[0]).length-1,1);
 
   // Shown in the personal time zone (Asia/Shanghai), whatever the host's zone is.
   const expected=new Date(time+8*3600_000).toISOString().replace('T',' ').slice(0,16)+' +08:00';

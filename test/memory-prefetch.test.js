@@ -44,7 +44,7 @@ test('applied rerank gates on absolute scores and keeps the correction exception
     candidate('high','重排高分的虚构长记录',{lexical:0,rerank:.9,lanes:['vector']}),
     candidate('low','重排低分的虚构长记录',{lexical:1,rerank:.2}),
     candidate('missing','没有进入重排结果的虚构记录',{lexical:1,rerank:null}),
-    candidate('corrected','用户更正且重排稍低的长记录',{lexical:0,rerank:.25},{source:{changeKind:'correction'}}),
+    candidate('corrected','用户更正且重排稍低的长记录',{lexical:0,rerank:.3},{source:{changeKind:'correction'}}),
     candidate('historical','重排高分但已过时的长记录',{lexical:0,rerank:1},{state:{validity:'historical'}}),
   ];
   const {lines,stats}=selectPrefetch({records,minSimilarity:.45,options:{minRerank:.35,rerankApplied:true}});

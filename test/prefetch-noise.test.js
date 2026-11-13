@@ -16,6 +16,59 @@ import {memoryStore} from './fake-memory.js';
 import {directUser,fakeAgent,fakeLlm} from './helpers.js';
 
 const LEGACY_ID='legacy-noise-current';
+const rerankCandidate=(id,rerank,patch={})=>({
+  id,revision:1,kind:'entry',text:'rerank candidate '+id,label:'虚构重排标签',
+  signals:{lexical:0,similarity:null,rerank,lanes:['vector']},
+  state:{validity:'current',progress:null},...patch,
+});
+
+test('relative rerank admission keeps the top half and enforces the absolute floor',()=>{
+  const records=[.9,.5,.3,.01].map((score,index)=>rerankCandidate('score-'+index,score));
+  const selected=selectPrefetch({records,options:{minRerank:.02,rerankRatio:.5,rerankApplied:true,maxRecords:4}});
+  assert.deepEqual(selected.lines.map(line=>line.split(' ').at(-1)),['score-0','score-1']);
+  const low=[.04,.03,.015].map((score,index)=>rerankCandidate('low-'+index,score));
+  const lowSelected=selectPrefetch({records:low,options:{minRerank:.02,rerankRatio:.5,rerankApplied:true,maxRecords:4}});
+  assert.deepEqual(lowSelected.lines.map(line=>line.split(' ').at(-1)),['low-0','low-1']);
+});
+
+test('correction discounts both rerank floors',()=>{
+  const floorSelected=selectPrefetch({records:[
+    rerankCandidate('ordinary-floor',.3),
+    rerankCandidate('corrected-floor',.3,{source:{changeKind:'correction'}}),
+  ],options:{minRerank:.4,rerankRatio:.5,rerankApplied:true,maxRecords:4}});
+  assert.deepEqual(floorSelected.lines.map(line=>line.split(' ').at(-1)),['corrected-floor']);
+  assert.equal(floorSelected.stats.correction,1);
+
+  const ratioSelected=selectPrefetch({records:[
+    rerankCandidate('top',1),
+    rerankCandidate('ordinary-ratio',.35),
+    rerankCandidate('corrected-ratio',.35,{source:{changeKind:'correction'}}),
+  ],options:{minRerank:.02,rerankRatio:.5,rerankApplied:true,maxRecords:4}});
+  assert.deepEqual(ratioSelected.lines.map(line=>line.split(' ').at(-1)),['top','corrected-ratio']);
+  assert.equal(ratioSelected.stats.correction,1);
+});
+
+test('historical and disputed rerank scores do not set the relative top',()=>{
+  const records=[
+    rerankCandidate('historical-top',1,{state:{validity:'historical'}}),
+    rerankCandidate('disputed-top',1,{state:{validity:'disputed'}}),
+    rerankCandidate('active-top',.6),
+    rerankCandidate('active-edge',.3),
+  ];
+  const selected=selectPrefetch({records,options:{minRerank:.02,rerankRatio:.5,rerankApplied:true,maxRecords:4}});
+  assert.deepEqual(selected.lines.map(line=>line.split(' ').at(-1)),['active-top','active-edge']);
+});
+
+test('invalid rerank ratio configuration falls back to the default',()=>{
+  for(const value of [-0.1,1.1,'invalid',NaN]){
+    assert.equal(resolveConfig({prefetchRerankRatio:value}).prefetchRerankRatio,.5);
+  }
+  assert.equal(resolveConfig({prefetchRerankRatio:0}).prefetchRerankRatio,0);
+  assert.equal(resolveConfig({prefetchRerankRatio:.7}).prefetchRerankRatio,.7);
+  const records=[rerankCandidate('top',.9),rerankCandidate('edge',.3)];
+  const selected=selectPrefetch({records,options:{minRerank:.02,rerankRatio:-1,rerankApplied:true,maxRecords:4}});
+  assert.deepEqual(selected.lines.map(line=>line.split(' ').at(-1)),['top']);
+});
 
 async function queryFixture(t,overrides={}){
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'prefetch-noise-'));

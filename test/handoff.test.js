@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {createHandoffController,selectHandoff} from '../lib/handoff.js';
 import {estimateRecentTokens} from '../lib/recent-context.js';
+import {ANSWER_RULES} from '../lib/memory-query.js';
 
 const allowed={authorize:()=>true};
 const request=(sessionId='session-a',turn=1,connection='route-one')=>({sessionId,turn,provider:'fixture',model:'fixture',connection});
@@ -70,6 +71,7 @@ test('token selection includes both original roles, preserves references, escape
   for(const [result,limit] of [[small,4096],[large,8192],[custom,700],[max,16384]]){
     assert.ok(result.tokens<=limit);assert.equal(result.tokens,estimateRecentTokens(result.text));assert.equal(result.counting,'estimated');
     assert.ok(result.items.length);assert.equal((result.text.match(/<\/memory_handoff>/g)||[]).length,1);
+    assert.equal(result.text.split(ANSWER_RULES[0]).length-1,1);
     assert.ok(result.text.includes('revision=1'));
     assert.deepEqual(result.items.map(item=>item.sequence),result.items.map(item=>item.sequence).toSorted((a,b)=>a-b));
   }

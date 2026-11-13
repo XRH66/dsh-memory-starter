@@ -16,8 +16,9 @@ test('config defaults apply the product limits without a session allowlist', () 
   assert.equal(config.organizerReasoningEffort, 'low');
   assert.deepEqual([
     config.prefetchMaxChars, config.prefetchMaxRecords, config.prefetchMinLexical,
-    config.prefetchVectorMargin, config.prefetchMinRerank, config.prefetchRerankCandidates,
-  ], [1000, 3, 0.6, 0.1, 0.35, 16]);
+    config.prefetchVectorMargin, config.prefetchMinRerank, config.prefetchRerankRatio,
+    config.prefetchRerankCandidates,
+  ], [1000, 3, 0.6, 0.1, 0.02, 0.5, 16]);
   assert.equal(Config({}).organizerReasoningEffort, 'low');
 });
 
@@ -27,6 +28,7 @@ test('prefetch thresholds validate their bounds and integer fields', () => {
     ['prefetchMinLexical', -0.1], ['prefetchMinLexical', 1.1],
     ['prefetchVectorMargin', -0.1], ['prefetchVectorMargin', 0.6],
     ['prefetchMinRerank', -0.1], ['prefetchMinRerank', 1.1],
+    ['prefetchRerankRatio', -0.1], ['prefetchRerankRatio', 1.1],
     ['prefetchRerankCandidates', 3], ['prefetchRerankCandidates', 31], ['prefetchRerankCandidates', 8.5],
   ]) {
     assert.throws(() => Config({ [field]: value }), undefined, field + '=' + value);
