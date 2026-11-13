@@ -107,12 +107,14 @@
     "lib/worker.js",
     "scripts/embedding-model.mjs",
     "scripts/unpack-embedding.ps1",
+    "scripts/install/",
     "cordis.patch.yml",
     "README.md",
+    "NOTICE.md",
     "MODEL-SETUP.zh-CN.md",
     "LICENSE",
     "THIRD-PARTY-NOTICES.md",
-    "vendor/suzu-memory/LICENSE"
+    "third-party/"
   ],
   "engines": {
     "node": "^22.19 || >=24"
@@ -121,6 +123,7 @@
     "test": "node --test --test-timeout=120000 test/*.test.js",
     "test:install": "node --test test/install-deployment.test.js",
     "check": "npm test && npm run links",
+    "release:check": "node scripts/check-release-export.mjs",
     "privacy": "node scripts/check-release.mjs",
     "links": "node scripts/check-links.mjs",
     "install:configure": "node scripts/install/configure.mjs",

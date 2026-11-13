@@ -5,7 +5,7 @@
 ## 参考与改写：Suzu Memory
 
 - 上游：[eryucheng/suzu-memory](https://github.com/eryucheng/suzu-memory)。固定提交：[`645c862470b1a207c9904e614083f8b77a8f15bf`](https://github.com/eryucheng/suzu-memory/tree/645c862470b1a207c9904e614083f8b77a8f15bf)。
-- Copyright 2026 儿玉诚也；**Apache-2.0**，完整原文随包保留在 [vendor/suzu-memory/LICENSE](vendor/suzu-memory/LICENSE)。固定上游树没有 NOTICE 文件，本文件是接入项目自行编写的来源说明。
+- Copyright 2026 儿玉诚也；**Apache-2.0**，完整原文随包保留在 [third-party/suzu-memory.LICENSE](third-party/suzu-memory.LICENSE)。固定上游树没有 NOTICE 文件，本文件是接入项目自行编写的来源说明。
 - 发行包不含 Suzu 上游源码，只随包保留其 LICENSE。运行代码不导入上游文件；改写自上游思路的文件见下节，并在文件内保留 Apache-2.0 来源声明。
 - 开发时曾在本地 `vendor/suzu-memory/` 下放过固定提交的副本作对照，它不入库，也不进入发行包。
 

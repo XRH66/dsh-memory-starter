@@ -42,7 +42,7 @@
 | `eventsource` | 3.0.7 | 传递依赖 | [EventSource/eventsource](https://github.com/EventSource/eventsource) | MIT |
 | `eventsource-parser` | 3.1.1 | 传递依赖 | [rexxars/eventsource-parser](https://github.com/rexxars/eventsource-parser) | MIT |
 | `isexe` | 2.0.0 | 传递依赖 | [isaacs/isexe](https://github.com/isaacs/isexe) | ISC |
-| `jose` | 6.2.13 | 传递依赖 | [panva/jose](https://github.com/panva/jose) | MIT |
+| `jose` | 6.2.17 | 传递依赖 | [panva/jose](https://github.com/panva/jose) | MIT |
 | `path-key` | 3.1.1 | 传递依赖 | [sindresorhus/path-key](https://github.com/sindresorhus/path-key) | MIT |
 | `pkce-challenge` | 5.0.1 | 传递依赖 | [crouchcd/pkce-challenge](https://github.com/crouchcd/pkce-challenge) | MIT |
 | `shebang-command` | 2.0.0 | 传递依赖 | [kevva/shebang-command](https://github.com/kevva/shebang-command) | MIT |
@@ -50,9 +50,12 @@
 | `smol-toml` | 1.9.1 | 直接依赖：解析Codex TOML配置 | [squirrelchat/smol-toml](https://github.com/squirrelchat/smol-toml) | BSD-3-Clause |
 | `which` | 2.0.2 | 传递依赖 | [isaacs/node-which](https://github.com/isaacs/node-which) | ISC |
 | `yaml` | 2.9.1 | 开发依赖：测试中解析YAML | [eemeli/yaml](https://github.com/eemeli/yaml) | ISC |
-| `zod` | 4.6.7 | 传递依赖 | [colinhacks/zod](https://github.com/colinhacks/zod) | MIT |
+| `zod` | 4.6.6 | 顶层传递依赖：MCP TypeScript SDK 与 DSH rc.5 的 `dsh-typert-protocol` 共用 | [colinhacks/zod](https://github.com/colinhacks/zod) | MIT |
+| `zod`（DSH 0.2.1-rc.5 嵌套） | 4.4.3 | DSH rc.5 的 `dsh-llm`、`dsh-commands` 和 `dsh-session-projection` 固定使用 | [colinhacks/zod](https://github.com/colinhacks/zod) | MIT |
 
 其中MCP TypeScript SDK的安装包作者字段为Anthropic, PBC，项目由modelcontextprotocol组织维护；2.4.0的client/core包使用Apache-2.0，不应沿用其他版本的许可印象。
+
+`zod` 的 `4.6.6` 与 DSH rc.5 嵌套的 `4.4.3` 属于不同依赖层级，版本差异由当前锁文件实际解析结果决定。`4.4.3` 低于上游针对超大受限集合校验内存耗尽问题的修复版本；npm 审计会沿 DSH 依赖链重复报出该传递风险（[GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5)）。本阶段只对齐第三方声明，不强制覆盖 DSH rc.5 内嵌依赖，也不改变现有运行依赖版本；后续随兼容的新版 DSH 一并升级并重新验收。
 
 ## 安装工具与可选客户端
 
