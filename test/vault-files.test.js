@@ -128,6 +128,46 @@ test('atomic writes leave the previous target intact when rename fails',async t=
   assert.deepEqual(await fs.readdir(path.join(vault,'chats','facts')),['Atomic.md']);
 });
 
+test('atomic writes retry transient Windows rename contention and remove the temporary file',async t=>{
+  const {vault,backend}=await fixture(t),originalRename=fs.rename;
+  let attempts=0;
+  fs.rename=async(...args)=>{
+    attempts++;
+    if(attempts<=2){
+      const error=Error('simulated Windows rename contention');
+      error.code=attempts===1?'EPERM':'EBUSY';
+      throw error;
+    }
+    return originalRename(...args);
+  };
+  try{
+    await backend.write({title:'Retried',directory:'chats/facts',content:'after retries',tags:[]});
+  }finally{
+    fs.rename=originalRename;
+  }
+  assert.equal(attempts,3);
+  assert.equal((await backend.read('chats/facts/Retried.md')).content,'after retries');
+  assert.equal((await fs.readdir(path.join(vault,'chats','facts'))).some(name=>name.endsWith('.tmp')),false);
+});
+
+test('an exhausted atomic rename retry reports the error and leaves no temporary file',async t=>{
+  const {vault,backend}=await fixture(t),originalRename=fs.rename;
+  let attempts=0;
+  fs.rename=async()=>{
+    attempts++;
+    const error=Error('simulated persistent rename contention');
+    error.code='EACCES';
+    throw error;
+  };
+  try{
+    await assert.rejects(()=>backend.write({title:'Blocked',directory:'chats/facts',content:'not committed',tags:[]}),{code:'EACCES'});
+  }finally{
+    fs.rename=originalRename;
+  }
+  assert.equal(attempts,6);
+  assert.deepEqual(await fs.readdir(path.join(vault,'chats','facts')),[]);
+});
+
 test('find_replace and append merge metadata and reject stale or inexact edits',async t=>{
   const {backend}=await fixture(t);
   const written=await backend.write({
@@ -238,6 +278,43 @@ body
 `);
   await assert.rejects(()=>backend.read('chats/facts/Nested.md'),{code:'MEMORY_FRONTMATTER_UNSUPPORTED'});
   await assert.rejects(()=>backend.read('Nested'),{code:'MEMORY_FRONTMATTER_UNSUPPORTED'});
+});
+
+test('listing and search skip one malformed Vault file and log only its relative path',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'vault-frontmatter-isolation-')),vault=path.join(root,'vault');
+  await fs.mkdir(path.join(vault,'chats','facts'),{recursive:true});
+  const warnings=[],backend=createVaultBackend({vaultPath:vault,project:'personal',logger:{warn:message=>warnings.push(message)}});
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  await backend.write({title:'Usable fact',directory:'chats/facts',content:'FICTIONAL_SEARCHABLE_BODY',tags:['fixture']});
+  const body='MALFORMED_BODY_MUST_NOT_BE_LOGGED';
+  await fs.writeFile(path.join(vault,'chats','facts','Malformed.md'),`---
+title: Malformed
+metadata:
+  nested: value
+---
+
+${body}
+`);
+
+  const listed=await backend.list('chats/facts');
+  assert.deepEqual(listed.map(node=>node.file_path),['chats/facts/Usable fact.md']);
+  const searched=await backend.search({query:'FICTIONAL_SEARCHABLE_BODY'});
+  assert.deepEqual(searched.map(result=>result.file_path),['chats/facts/Usable fact.md']);
+  assert.equal(warnings.length,2);
+  assert.ok(warnings.every(message=>message.includes('chats/facts/Malformed.md')));
+  assert.ok(warnings.every(message=>!message.includes(body)));
+
+  const originalReadFile=fs.readFile;
+  fs.readFile=async(file,...args)=>{
+    if(String(file).endsWith('Unreadable.md'))throw Object.assign(Error('simulated unreadable file'),{code:'EACCES'});
+    return originalReadFile(file,...args);
+  };
+  await fs.writeFile(path.join(vault,'chats','facts','Unreadable.md'),'---\ntitle: Unreadable\n---\n');
+  try{
+    await assert.rejects(()=>backend.list('chats/facts'),{code:'EACCES'});
+  }finally{
+    fs.readFile=originalReadFile;
+  }
 });
 
 test('known file path reads a matching permalink once without changing the result',async t=>{

@@ -467,6 +467,22 @@ test('runtime HTTP reports missing integration and retains connection-layer auth
   assert.equal((await blocked('GET')).statusCode,403);
 });
 
+test('settings POST bodies reject non-object JSON before any branch dereferences them',async t=>{
+  const handler=createSettingsHandler({},'/fictional-unused-memory-config.json',undefined,undefined,{});t.after(()=>handler.dispose());
+  const post=async value=>{
+    const req=Readable.from([Buffer.from(JSON.stringify(value))]);
+    Object.assign(req,{method:'POST',url:BASE+'/libraries',socket:{remoteAddress:'127.0.0.1'},
+      headers:{host:'127.0.0.1:15680','content-type':'application/json','x-basic-memory-settings':'1'}});
+    const res={headers:{},setHeader(key,value){this.headers[key]=value;},end(text){this.body=JSON.parse(text);}};
+    await handler(req,res);return res;
+  };
+  for(const value of [null,[],0,true,'fixture']){
+    const result=await post(value);
+    assert.equal(result.statusCode,400);
+    assert.equal(result.body.error,'请求内容必须是对象');
+  }
+});
+
 test('started operations poll read-only receipts, disable competing actions and permit cancellation',async t=>{
   const value=runtime();value.operation={state:'idle'};
   const env=environment((url,body)=>{
@@ -775,6 +791,29 @@ test('a missing local model can download files but cannot save or write model se
   assert.equal(writes(env).filter(call=>call.path===BASE+'/model').length,0);
 });
 
+test('a model preparation plan response uses its own callback and never a sibling state setter',async t=>{
+  const info=snapshot(),plans=[];
+  const env=environment((url,body)=>{
+    if(url===BASE+'/model-install'){
+      if(body?.action==='inventory')return inventoryResponse([
+        {id:MODEL,installed:true,source:'current',issues:[],downloadBytes:0,settings:{}},
+        {id:OTHER_LOCAL,installed:false,source:null,issues:['missing'],downloadBytes:613527631,settings:null}]);
+      if(body?.action==='start')return {ok:true,plan:{model:OTHER_LOCAL,revision:'r1'},
+        job:{id:'plan-download',model:OTHER_LOCAL,state:'running',step:'fixture'}};
+      if(!body)return {ok:true,job:null};
+    }
+    return info;
+  });t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  select(picker.tree,'检索模型').props.onChange({target:{value:OTHER_LOCAL}});await picker.flush();
+  const node=component(picker.tree,'ModelPreparation');
+  const preparation=env.component({...node,props:{...node.props,onPlan:value=>plans.push(value)}});await preparation.flush();
+  await button(preparation.tree,'下载').props.onClick();await preparation.flush();
+  assert.deepEqual(plans,[{model:OTHER_LOCAL,revision:'r1'}]);
+  assert.doesNotMatch(text(preparation.tree),/setPlan|ReferenceError/);
+});
+
 test('a completed download refreshes inventory and saves the installed paths',async t=>{
   const info=snapshot();let completed=false,downloaded=false,job=null;
   const installedSettings={rawRecallPython:'/fixture/python.exe',rawRecallOnnxModel:'/fixture/downloaded.onnx',
@@ -825,6 +864,26 @@ test('an installed local model offers save without a download button',async t=>{
   assert.equal(nodes(picker.tree,node=>node.type==='button'&&text(node)==='下载').length,0);
   assert.match(text(picker.tree),/已安装。点「保存」后启用。/);
   assert.equal(button(picker.tree,'保存').props.disabled,false);
+});
+
+test('an API archive only reuses a saved service with the same endpoint, model and dimensions',async t=>{
+  const info=snapshot();
+  info.embeddingServices=[{id:'service-1024',name:'虚构默认服务',apiBase:'https://fictional-api.example/v1',
+    apiModel:'fictional-embed',dimensions:0,effectiveDimensions:1024,sendDimensions:false,hasKey:true,inUse:false}];
+  const archives=[
+    {profileId:'archive-default',revision:1,name:'虚构默认档案',engine:'api',apiBase:'https://fictional-api.example/v1',
+      apiModel:'fictional-embed',dimensions:1024,indexed:true,documents:3,active:false,selected:false},
+    {profileId:'archive-other',revision:1,name:'虚构其他维数档案',engine:'api',apiBase:'https://fictional-api.example/v1',
+      apiModel:'fictional-embed',dimensions:2048,indexed:true,documents:4,active:false,selected:false}];
+  const env=environment((url,body)=>{
+    if(url===BASE+'/runtime')return {ok:true,vectors:{archives}};
+    if(url===BASE+'/model-install'&&body?.action==='inventory')return inventoryResponse([]);
+    return info;
+  });t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  assert.equal(nodes(picker.tree,node=>node.type==='button'&&text(node)==='切换到此档案').length,1);
+  assert.equal((text(picker.tree).match(/需要先在上面重新添加这个服务/g)||[]).length,1);
 });
 
 test('inventory failure leaves the page usable and does not block save',async t=>{

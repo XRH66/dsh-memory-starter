@@ -335,6 +335,57 @@ test('handoff replacement failure is logged and still appends the new delivery',
   assert.ok(warnings.some(message=>message.startsWith('[memory-handoff] replace:')));
 });
 
+test('three consecutive deferred handoffs warn once per session and reset after a successful delivery',async t=>{
+  const f=await fixture(t,{recentContext:true,autoCapture:false});
+  const source=f.actor('session-deferral-source'),target=f.actor('session-deferral-target'),warnings=[];
+  let connection='fixture';
+  const dsh=f.bridge(undefined,{logger:{warn:message=>warnings.push(message)},resolveChatConnection:()=>({connection})});
+  await f.access.set(source.session.id,true);await f.access.set(target.session.id,true);
+  f.begin(source,1,dsh,'DEFERRAL_PRIVATE_ORIGINAL','deferral-source-user');f.finish(source,1,dsh,'DEFERRAL_PRIVATE_ANSWER');
+  await dsh.waitForIdle();
+  assert.ok(dsh.messageSources.forAgent(source).list({}).sources.some(source=>source.text==='DEFERRAL_PRIVATE_ORIGINAL'));
+  const signal=new AbortController().signal;
+  const states=[];
+  const requestTurn=async turn=>{
+    f.emit(target,'turn/start',{turn},dsh);
+    const user=directUser('目标会话第 '+turn+' 轮','deferral-target-'+turn);
+    await runPreStep(dsh,{agent:target,turn,step:1,messages:[user],signal},async()=>({kind:'enter',messages:[user]}));
+    f.emit(target,'step/start',{turn,step:1},dsh);
+    await dsh.onRequest({agent:target,turn,step:1,signal},async()=>({provider:'fixture',model:'fixture'}));
+    const status=await dsh.getMemoryStatus(target.session.id);
+    states.push({turn,handoff:status.jobs.at(-1)?.handoff});
+  };
+  const finishTurn=async turn=>{
+    f.emit(target,'assistant/message',{turn,message:{id:'deferral-assistant-'+turn,role:'assistant',
+      source:{kind:'model',provider:'fixture',model:'fixture'},content:[{type:'text',text:'fixture answer'}]}},dsh,{surfaceOp:undefined});
+    f.emit(target,'turn/end',{turn,reason:{kind:'completed'}},dsh);await dsh.waitForIdle();
+  };
+  for(const turn of [1,2,3]){await requestTurn(turn);await finishTurn(turn);}
+  await requestTurn(4);
+  const deferredWarnings=()=>warnings.filter(message=>message.startsWith('[memory-handoff] deferred'));
+  assert.equal(deferredWarnings().length,1);
+  assert.match(deferredWarnings()[0],/session-deferral-target/);
+  assert.match(deferredWarnings()[0],/consecutive=3/);
+  assert.doesNotMatch(deferredWarnings()[0],/DEFERRAL_PRIVATE/);
+
+  target.session.append=(type,data,options={})=>f.emit(target,type,data,dsh,{surfaceOp:options.surfaceOp??'append'});
+  seedSystemHead(f,target);
+  target.session.deriveMessages=()=>target.session.surface.nodes.map(seq=>target.session.log[seq])
+    .filter(Boolean).map(target.session.deriveEventMessage).filter(Boolean);
+  assert.equal(target.session.log[target.session.surface.nodes[0]].type,'system/message');
+  await dsh.onRequest({agent:target,turn:4,step:1,signal},async()=>({provider:'fixture',model:'fixture'}));
+  assert.equal(target.session.deriveMessages().filter(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE).length,1);
+  await finishTurn(4);
+
+  connection='fixture-two';
+  f.begin(source,2,dsh,'DEFERRAL_PRIVATE_SECOND','deferral-source-next');f.finish(source,2,dsh,'DEFERRAL_PRIVATE_SECOND_ANSWER');
+  await dsh.waitForIdle();
+  Object.defineProperty(target.session,'surface',{configurable:true,get:()=>({nodes:[]})});
+  for(const turn of [5,6,7]){await requestTurn(turn);await finishTurn(turn);}
+  assert.equal(deferredWarnings().length,2,JSON.stringify(states));
+  assert.match(deferredWarnings()[1],/consecutive=3/);
+});
+
 test('child-agent requests neither inject handoffs nor change the root conversation baseline',async t=>{
   const rootId='session-primary',childId='session-child';
   const f=await fixture(t,{recentContext:true,autoCapture:false,isOwnedBy:(id,other)=>id===childId&&other.session.id===rootId});

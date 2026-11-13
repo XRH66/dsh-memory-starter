@@ -10,7 +10,7 @@ import {createRawRecall} from '../lib/raw-rag/index.js';
 import {createMemoryEntryAccess} from '../lib/memory-entry-access.js';
 import {createMemoryEntryService} from '../lib/memory-entry-service.js';
 import {normalizeSemanticEntry,readMemoryEntry} from '../lib/memory-entry.js';
-import {createLegacyImport,legacyImportFingerprints,legacyImportStateFile} from '../lib/legacy-import.js';
+import {createLegacyImport,legacyImportFingerprints,legacyImportStateFile,readLegacyImportState} from '../lib/legacy-import.js';
 import {memoryDirectory} from '../lib/memory.js';
 import {resolveConfig} from '../lib/config.js';
 import {createMemoryQueryAnswer} from '../lib/memory-query.js';
@@ -189,6 +189,60 @@ test('uncertain and contradictory classifications wait for explicit decisions',a
   await f.importer.handle({action:'decide',id:pending[1].id,decision:'skip'});
   status=await f.importer.handle({action:'status'});assert.equal(status.pending,0);assert.equal(status.migrated,1);
   const migrated=(await f.importer.handle({action:'migrated'})).items;assert.equal(migrated[0].type,'preference');
+});
+
+test('concurrent confirmation of one pending id only reaches the entry writer once',async t=>{
+  const llm=classifier(input=>input.notes.map(note=>({id:note.id,type:'fact',validity:'unverified',
+    progress:'unknown',importance:'unknown',confident:false,reason:'待确认'})));
+  const f=await fixture(t,{notes:[{id:'concurrent-decide',value:'并发确认只写一次'}],llm});
+  await f.importer.handle({action:'start'});await settled(f.importer);
+  const pending=(await f.importer.handle({action:'pending'})).items[0];
+  let release,enteredResolve,calls=0;
+  const entered=new Promise(resolve=>{enteredResolve=resolve;}),hold=new Promise(resolve=>{release=resolve;});
+  const original=f.entries.importLegacy;
+  f.entries.importLegacy=async input=>{calls++;enteredResolve();await hold;return original(input);};
+  const input={action:'decide',id:pending.id,decision:'write',changes:{type:'preference',validity:'current',progress:'unknown',importance:'normal'}};
+  const first=f.importer.handle(input);
+  await entered;
+  const second=f.importer.handle(input);
+  await new Promise(resolve=>setImmediate(resolve));
+  release();
+  const results=await Promise.all([first,second]);
+  assert.equal(calls,1);
+  assert.equal(results.flatMap(result=>result.results).filter(result=>result.state==='committed').length,1);
+  const state=await readLegacyImportState(f.config);
+  assert.equal(state.records[pending.id].status,'committed');
+  assert.equal((await f.importer.handle({action:'status'})).migrated,1);
+});
+
+test('restart recovers committing records by checking the imported target and otherwise returning them to pending',async t=>{
+  const llm=classifier(input=>input.notes.map(note=>({id:note.id,type:'fact',validity:'unverified',
+    progress:'unknown',importance:'unknown',confident:false,reason:'待确认'})));
+  const f=await fixture(t,{notes:[{id:'commit-written',value:'已经写入但未记账'},{id:'commit-missing',value:'尚未写入'}],llm});
+  await f.importer.handle({action:'start'});await settled(f.importer);
+  const pending=(await f.importer.handle({action:'pending'})).items;
+  const written=pending.find(item=>item.id==='commit-written'),missing=pending.find(item=>item.id==='commit-missing');
+  let state=await readLegacyImportState(f.config);
+  const result=await f.importer.importCandidate(state.records[written.id].candidate,
+    {...state.records[written.id].classification,confident:true},f.entries,null);
+  state.records[written.id]={...state.records[written.id],status:'committing'};
+  state.records[missing.id]={...state.records[missing.id],status:'committing'};
+  const file=legacyImportStateFile(f.config);
+  await fs.writeFile(file,JSON.stringify(state,null,2),'utf8');
+
+  const second=createLegacyImport({config:f.config,llm,getEntries:()=>f.entries,agent:()=>fakeAgent('session-legacy-import'),
+    target:()=>({provider:'fake-provider',model:'fake-model'}),canRun:()=>true,notifyChanged(){},logger:{warn(){},info(){}},
+    sleep:()=>new Promise(resolve=>setImmediate(resolve))});
+  await second.resumeOnStart();
+  const status=await second.handle({action:'status'});
+  state=await readLegacyImportState(f.config);
+  assert.equal(state.records[written.id].status,'committed');
+  assert.equal(state.records[written.id].entryId,result.id);
+  assert.equal(state.records[missing.id].status,'pending');
+  assert.equal(status.migrated,1);
+  assert.equal(status.pending,1);
+  assert.equal((await f.service.list({tag:'legacy-import',limit:10},{check(){}})).entries.length,1);
+  await second.close();
 });
 
 test('a failed batch retries twice, adopts the third result, and a fully failed batch uses conservative values',async t=>{

@@ -36,6 +36,15 @@ test('one semantic result creates a real editable note and metadata projection w
   assert.equal(f.raw.entries.list({...f.scope,ownerSubject:'另一个用户'}).entries.length,0);
 });
 
+test('structured search uses the same integer page limit contract as list',async t=>{
+  const f=await fixture(t),service=f.make();
+  await service.commit(f.input('create-search-page'),f.context);
+  for(const limit of [0,101,-1,1.5,'2']){
+    await assert.rejects(()=>service.search('QA 虚构计划',{limit},f.context),/Invalid entry page/);
+  }
+  assert.equal((await service.search('QA 虚构计划',{limit:1},f.context)).length,1);
+});
+
 test('new entries add sanitized topic links and create topic pages without tags producing a line',async t=>{
   const f=await fixture(t),service=f.make();
   const saved=await service.commit(f.input('topic-create',{proposed:proposed({tags:['工作/夜班','夜班','工作:夜班']})}),f.context);

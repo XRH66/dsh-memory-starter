@@ -4,12 +4,16 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {Readable} from 'node:stream';
+import {spawn} from 'node:child_process';
 import {
   deploymentFingerprint,
   deploymentStaticFingerprint,
   manageEmbeddingServices,
   readDeploymentSettings,
+  stageDeploymentHandoff,
   stageDeploymentRawModel,
+  stageDeploymentSessionDefault,
+  stageDeploymentTimeZone,
 } from '../lib/deployment-config.js';
 import {createSettingsHandler} from '../lib/settings-host.js';
 
@@ -237,4 +241,50 @@ test('asking the service for a size is a per-service option carried into the mod
   const off=(await f.manage({action:'save',id:created.id,name:created.name,apiBase:created.apiBase,apiModel:created.apiModel,
     dimensions:768,sendDimensions:false})).embeddingServices[0];
   assert.equal(off.sendDimensions,false);
+});
+
+test('all deployment writers turn a recent lock into the same Chinese concurrency error',async t=>{
+  const f=await fixture(t),lock=f.file+'.lock';
+  const operations=[
+    revision=>stageDeploymentSessionDefault(f.file,true,revision),
+    revision=>stageDeploymentTimeZone(f.file,'Asia/Shanghai',revision),
+    revision=>stageDeploymentHandoff(f.file,1200,revision),
+  ];
+  for(const operation of operations){
+    const revision=await f.revision();
+    await fs.writeFile(lock,JSON.stringify({pid:process.pid,at:Date.now()}));
+    await assert.rejects(()=>operation(revision),error=>{
+      assert.match(error.message,/配置正在被另一操作使用/);
+      return true;
+    });
+    await fs.rm(lock,{force:true});
+  }
+});
+
+test('stale deployment locks recover for old unreadable, dead-owner and ten-minute cases',async t=>{
+  const f=await fixture(t),lock=f.file+'.lock';
+  const writeLock=async(value,{mtimeAgeMs=0}={})=>{
+    await fs.writeFile(lock,value);
+    if(mtimeAgeMs){
+      const at=new Date(Date.now()-mtimeAgeMs);
+      await fs.utimes(lock,at,at);
+    }
+  };
+  const assertReleased=()=>assert.rejects(fs.access(lock),{code:'ENOENT'});
+
+  await writeLock('',{mtimeAgeMs:31_000});
+  await stageDeploymentSessionDefault(f.file,true,await f.revision());
+  await assertReleased();
+
+  const child=spawn(process.execPath,['-e',''],{stdio:'ignore',windowsHide:true});
+  const deadPid=child.pid;
+  await new Promise((resolve,reject)=>{child.once('exit',resolve);child.once('error',reject);});
+  await writeLock(JSON.stringify({pid:deadPid,at:Date.now()-31_000}));
+  await stageDeploymentSessionDefault(f.file,false,await f.revision());
+  await assertReleased();
+
+  await writeLock(JSON.stringify({pid:process.pid,at:Date.now()-601_000}));
+  await stageDeploymentSessionDefault(f.file,true,await f.revision());
+  await assertReleased();
+  assert.equal((await f.read()).autoEnableNewSessions,true);
 });

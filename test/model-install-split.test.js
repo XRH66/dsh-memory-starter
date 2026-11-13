@@ -51,8 +51,8 @@ async function fakeIsolatedPython(root,label){
   return {file:executable,sitePackages,packages};
 }
 
-async function writeBgeReceipt(root,name,{at,model=BGE,python,label}){
-  const cache=path.join(root,'embedding-cache-'+label),modelDirectory=path.join(cache,'models--Qdrant--bge-small-zh-v1.5','snapshots',label);
+async function writeBgeReceipt(root,name,{at,model=BGE,python,label,mode='pinned-artifacts',base=path.join(root,RECEIPT_DIRECTORY),extra={}}){
+  const cache=path.join(base,'embedding-cache-'+label),modelDirectory=path.join(cache,'models--Qdrant--bge-small-zh-v1.5','snapshots',label);
   await fs.mkdir(modelDirectory,{recursive:true});
   const assets=[['model_optimized.onnx','fixture weights'],['tokenizer.json','{}'],['config.json','{}']];
   for(const [file,content] of assets)await fs.writeFile(path.join(modelDirectory,file),content);
@@ -63,9 +63,9 @@ async function writeBgeReceipt(root,name,{at,model=BGE,python,label}){
   }
   const settings={rawRecallModel:BGE,rawRecallDimensions:512,rawRecallPython:python.file,
     rawRecallCacheDir:cache,rawRecallBgeModelDir:modelDirectory,rawRecallInstallReceipt:'',
-    rawRecallApiKeyFile:path.join(root,'fictional-receipt.key'),rawRecallApiKeyEnv:'FICTIONAL_RECEIPT_KEY'};
+    rawRecallApiKeyFile:path.join(root,'fictional-receipt.key'),rawRecallApiKeyEnv:'FICTIONAL_RECEIPT_KEY',...extra};
   const receipt={schema:1,model,revision:label,at,scope:'raw-conversation-embedding',source:null,expectedSource:null,
-    runtimeRevision:null,mode:'pinned-artifacts',settings,files,packages:python.packages,tested:false};
+    runtimeRevision:null,mode,settings,files,packages:python.packages,tested:false};
   const directory=path.join(root,RECEIPT_DIRECTORY),file=path.join(directory,name);
   await fs.mkdir(directory,{recursive:true});
   await fs.writeFile(file,JSON.stringify(receipt));
@@ -106,6 +106,28 @@ test('inventory rediscovers a verified receipt with an isolated Python and expos
   assert.deepEqual(Object.keys(bge.settings).sort(),
     ['rawRecallBgeModelDir','rawRecallCacheDir','rawRecallInstallReceipt','rawRecallPython']);
   assert.equal(Object.keys(bge.settings).some(name=>/key|credential|secret/i.test(name)),false);
+});
+
+test('pinned receipts must keep installer-owned artifacts inside the install root; fastembed caches and user-supplied paths may live elsewhere',async t=>{
+  const f=await fixture(t),python=await fakeIsolatedPython(f.root,'bounded-python'),outsideBase=path.join(f.root,'outside-install');
+  await writeBgeReceipt(f.root,'inside.json',{at:'2026-11-13T01:00:00.000Z',python,label:'inside'});
+  // The installer's own fastembed layout keeps the cache under <owner>/embedding-cache, outside the install root.
+  const cacheLayout=await writeBgeReceipt(f.root,'cache-layout.json',{at:'2026-11-13T02:00:00.000Z',python,label:'cache-layout',
+    base:path.join(f.root,'embedding-cache-layout')});
+  let inventory=await f.installer.inventory({revision:'r1'}),bge=inventory.models.find(model=>model.id===BGE);
+  assert.equal(bge.installed,true);
+  assert.equal(bge.settings.rawRecallInstallReceipt,cacheLayout.file);
+
+  const strayServer=path.join(outsideBase,'llama-server.exe');
+  await writeBgeReceipt(f.root,'outside.json',{at:'2026-11-13T03:00:00.000Z',python,label:'outside',extra:{rawRecallLlamaServer:strayServer}});
+  inventory=await f.installer.inventory({revision:'r1'});bge=inventory.models.find(model=>model.id===BGE);
+  assert.equal(bge.settings.rawRecallInstallReceipt,cacheLayout.file);
+
+  const supplied=await writeBgeReceipt(f.root,'supplied.json',{at:'2026-11-13T04:00:00.000Z',python,label:'supplied',
+    base:outsideBase,mode:'user-supplied-files',extra:{rawRecallLlamaServer:strayServer}});
+  inventory=await f.installer.inventory({revision:'r1'});bge=inventory.models.find(model=>model.id===BGE);
+  assert.equal(bge.installed,true);
+  assert.equal(bge.settings.rawRecallInstallReceipt,supplied.file);
 });
 
 test('inventory prefers the latest verifiable receipt and skips damaged or mismatched candidates',async t=>{
