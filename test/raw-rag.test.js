@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { buildTurn, RawMemoryStore, splitClauses } from '../lib/raw-rag/store.js';
+import { buildTurn, rawTurnId, RawMemoryStore, splitClauses } from '../lib/raw-rag/store.js';
 import { createRawRecall } from '../lib/raw-rag/index.js';
 import { resolveConfig } from '../lib/config.js';
 import { embeddingContract, seedTurnVectors } from './embedding-fixture.js';
@@ -82,6 +82,43 @@ test('store is idempotent, model-isolated and scope/asOf filtered', async (t) =>
   assert.equal(unindexed.indexedWindows, 0);
   assert.equal(unindexed.pendingWindows, pending.length);
   assert.equal(unindexed.pendingSources, 0);
+});
+
+test('legacy NUL turn ids migrate with controls, messages and reviewed views intact', async (t) => {
+  const { dir, db } = await tempDb();
+  let store = new RawMemoryStore(db);
+  t.after(async () => {
+    store.close();
+    assert.equal(path.dirname(dir), path.resolve(os.tmpdir()));
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  const scope = 'owner:a';
+  const turn = buildTurn({ scope, sessionId: 's1', turn: 1, completedAt: T0, messages: [
+    { id: 'u1', role: 'user', text: '旧版标识仍应保留。' },
+  ] });
+  assert.equal(turn.turnId, rawTurnId(scope, 's1', 1));
+  assert.doesNotMatch(turn.turnId, /\u0000/);
+  store.archiveTurn(turn);
+  const key = { scope, turnId: turn.turnId };
+  store.setLegacyScopeView({ ...key, turnRevision: store.getLegacyScopeView(key).turnRevision,
+    messages: [{ messageId: 'u1', ranges: [[0, turn.messages[0].text.length]] }] });
+  store.setControl({ scope, targetType: 'turn', targetId: turn.turnId, weight: 0.4 });
+
+  for (const table of ['turns', 'windows', 'vectors', 'turn_messages', 'turn_visibility',
+    'legacy_scope_views', 'embedding_chunks', 'embedding_chunk_sources', 'import_members']) {
+    store.db.exec(`UPDATE ${table} SET turn_id=replace(turn_id,char(31),char(0))`);
+  }
+  store.db.exec("UPDATE raw_controls SET target_id=replace(target_id,char(31),char(0)) WHERE target_type='turn'");
+  store.db.exec(`UPDATE legacy_scope_views SET turn_revision=replace(
+    turn_revision,char(92)||'u001f',char(92)||'u0000')`);
+  store.db.prepare('DELETE FROM raw_schema WHERE key=?').run('turn-id-v2');
+  store.close();
+
+  store = new RawMemoryStore(db);
+  assert.deepEqual(store.storedTurn(scope, turn.turnId), turn.messages);
+  assert.equal(store.getControl({ scope, targetType: 'turn', targetId: turn.turnId }).weight, 0.4);
+  assert.equal(store.getLegacyScopeView(key).state, 'reviewed');
+  assert.equal(store.db.prepare('SELECT COUNT(*) n FROM turns WHERE instr(turn_id,char(0))>0').get().n, 0);
 });
 
 test('dispose drains queued turns before closing the store', async (t) => {

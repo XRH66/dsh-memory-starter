@@ -5,7 +5,7 @@ import path from 'node:path';
 import {parseArgs} from 'node:util';
 import {DatabaseSync} from 'node:sqlite';
 import {resolveConfig} from '../lib/config.js';
-import {RawMemoryStore,rawMaintenanceRevision} from '../lib/raw-rag/store.js';
+import {RawMemoryStore,rawMaintenanceRevision,rawTurnId} from '../lib/raw-rag/store.js';
 import {managementDirectory} from '../lib/review.js';
 import {createRawRecall} from '../lib/raw-rag/index.js';
 import {rawModelSpec} from '../lib/raw-rag/models.js';
@@ -109,7 +109,7 @@ try{
           let targetType=values.message?'message':'session',targetId=values.message||values.session;
           if(values.turn!==undefined){
             if(!values.session||!/^\d+$/.test(values.turn))throw Error('--turn needs a session and nonnegative integer');
-            targetType='turn';targetId=[scope,values.session,Number(values.turn)].join('\0');
+            targetType='turn';targetId=rawTurnId(scope,values.session,Number(values.turn));
           }
           const weight=values.weight===undefined?1:Number(values.weight);
           result={ok:true,backup,...store.setControl({scope,targetType,targetId,weight,excluded:Boolean(values.exclude),reason:values.reason||'explicit local operator control'})};
