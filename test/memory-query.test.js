@@ -111,14 +111,14 @@ test('actual original reader and native tools share the answer ledger without mo
 });
 
 test('recent bypasses vector configuration and later searches share a pending answer snapshot',async t=>{
-  let release,entered,snapshots=0;
+  let release,entered,textEntered=false,snapshots=0;
   const pendingProfile=new Promise(resolve=>release=resolve),textStarted=new Promise(resolve=>entered=resolve);
   const profiles=[];
   const vectors={getSnapshot(){snapshots++;return pendingProfile;},async query({profile}){profiles.push(profile);return {records:[]};}};
   const f=await fixture(t,{vectors});
   const first=f.save({text:'只有周末有空才整理书架。'});
   const forGrant=f.entries.forGrant.bind(f.entries);
-  f.entries.forGrant=(...args)=>{const reader=forGrant(...args);return {...reader,async search(...searchArgs){entered();return reader.search(...searchArgs);}};};
+  f.entries.forGrant=(...args)=>{const reader=forGrant(...args);return {...reader,async search(...searchArgs){textEntered=true;entered();return reader.search(...searchArgs);}};};
   t.after(()=>release(null));
   t.mock.timers.enable({apis:['setTimeout','Date'],now:10000});
   const recent=await Promise.race([f.answer.recent({}),nextTurn()]);
@@ -126,8 +126,8 @@ test('recent bypasses vector configuration and later searches share a pending an
 
   const second=f.save({messageId:'second',sequence:2,text:'明天整理桌面。'});
   const waiting=f.answer.search({query:'桌面'});
-  assert.equal(await Promise.race([textStarted.then(()=>true),nextTurn()]),true);
-  await nextTurn();
+  for(let index=0;index<6&&!textEntered;index++)await nextTurn();
+  assert.equal(textEntered,true,'text lanes continue while the vector profile is pending');
   t.mock.timers.tick(2450);
   const partial=await Promise.race([waiting,nextTurn()]);
   assert.equal(partial?.channels.vector.state,'timeout');assert.deepEqual(resultIds(f.answer,partial),[second.id]);
@@ -153,6 +153,19 @@ test('a rejected profile is isolated to the vector channel',async t=>{
   assert.equal((await f.answer.recent({})).status,'empty');assert.equal(queries,0);
 });
 
+test('vector query encoding dispatches before synchronous text lanes',async t=>{
+  const order=[];
+  const vectors={async getSnapshot(){return {id:'fixture',revision:1};},async query(){order.push('vector');return {records:[]};}};
+  const f=await fixture(t,{vectors});f.save();
+  const queryReader=f.raw.queryReader.bind(f.raw);
+  f.raw.queryReader=(...args)=>{const reader=queryReader(...args);return {...reader,search(input){order.push('originals');return reader.search(input);}};};
+  const forGrant=f.entries.forGrant.bind(f.entries);
+  f.entries.forGrant=(...args)=>{const reader=forGrant(...args);return {...reader,async search(...searchArgs){order.push('structured');return reader.search(...searchArgs);}};};
+  await f.answer.search({query:'书架'});
+  assert.ok(order.indexOf('vector')>=0);assert.ok(order.indexOf('originals')>order.indexOf('vector'));
+  assert.ok(order.indexOf('structured')>order.indexOf('vector'));
+});
+
 test('revocation cancels the shared profile load and prevents late vector work',async t=>{
   let entered,release,profileSignal,queries=0;
   const started=new Promise(resolve=>entered=resolve),profile=new Promise(resolve=>release=resolve);
@@ -163,40 +176,31 @@ test('revocation cancels the shared profile load and prevents late vector work',
   release({id:'late',revision:1});await nextTurn();assert.equal(queries,0);
 });
 
-test('slow final vector review releases checked text and avoids reading lower ranked vectors',async t=>{
-  let entered,release,rows;
-  const reviewStarted=new Promise(resolve=>entered=resolve),late=new Promise(resolve=>release=resolve),reads=[];
-  const vectors={async getSnapshot(){return {id:'fixture',revision:1};},async query(){return {records:rows};},
-    async resolveDocument({id,signal}){reads.push({id,signal});if(id==='vector-ready')return rows[1];entered();return late;}};
-  const f=await fixture(t,{vectors}),source=f.save();
-  const row=(id,revision=1)=>({id,revision,kind:'document',text:'未经最终复核的向量文本',anchor:{id,revision,ref:{storage:'document',id}}});
-  rows=[row(source.id,source.revision),row('vector-ready'),...Array.from({length:20},(_,i)=>row(`vector-${i}`))];
-  t.after(()=>release(rows[0]));
-  t.mock.timers.enable({apis:['setTimeout','Date'],now:10000});
-  const waiting=f.answer.search({query:'书架',limit:2});
-  await reviewStarted;await nextTurn();
-  t.mock.timers.tick(500);
-  const found=await Promise.race([waiting,nextTurn()]);
-  assert.equal(found?.status,'partial');assert.equal(found.channels.vectorValidation.state,'timeout');
-  assert.deepEqual(found.records.map(item=>[f.answer.resolve(item.ref)?.id,item.text]),[[source.id,source.text],['vector-ready',rows[1].text]]);
-  assert.deepEqual(reads.map(read=>read.id),[source.id,'vector-ready']);assert.equal(reads[0].signal.aborted,true);
-  release(rows[0]);await nextTurn();assert.equal(found.records[0].text,source.text);
+test('vectors.query results are treated as already verified without another resolve pass',async t=>{
+  let resolves=0;
+  const row={id:'vector-only',revision:'one',kind:'entry',text:'虚构向量候选',state:{validity:'current',progress:null},
+    sourceStatus:{eligible:true,manualBody:true},anchor:{id:'vector-only',revision:'one',ref:{storage:'entry',id:'vector-only'}}};
+  const vectors={async getSnapshot(){return {id:'fixture',revision:1};},async query(){return {records:[row]};},
+    async resolveDocument(){resolves++;return row;}};
+  const f=await fixture(t,{vectors});
+  const found=await f.answer.search({query:'虚构',limit:2});
+  assert.deepEqual(resultIds(f.answer,found),['vector-only']);
+  assert.equal(resolves,0);assert.equal(Object.hasOwn(found.channels,'vectorValidation'),false);
 });
 
-test('a failed duplicate loses its vector score but keeps its independent text rank',async t=>{
-  let rows;
-  const reads=[];
-  const vectors={async getSnapshot(){return {id:'fixture',revision:1};},async query(){return {records:rows};},
-    async resolveDocument({id}){reads.push(id);throw Error('private document path');}};
+test('final delivery source validation still falls back when a vector source becomes stale',async t=>{
+  let resolves=0,row;
+  const vectors={async getSnapshot(){return {id:'fixture',revision:1};},async query(){return {records:[row]};},
+    async resolveDocument(){resolves++;return row;}};
   const f=await fixture(t,{vectors});
-  f.save();f.save({messageId:'other',sequence:2,time:2000,text:'书架旁边有一盏灯。'});
-  const {sources:[first,duplicate]}=f.raw.queryReader({ownerSubject:'owner',project:'main'},{authorize:()=>true}).search({query:'书架',limit:40});
-  rows=[{id:duplicate.id,revision:duplicate.revision,kind:'document',text:'无法复核的向量文本',
-    anchor:{id:duplicate.id,revision:duplicate.revision,ref:{storage:'document',id:duplicate.id}}}];
+  const source=f.save();row={...source,kind:'entry',text:'不应交付的向量旧正文',_vector:true,
+    sourceStatus:{eligible:true,manualBody:false},source_refs:[{id:source.id,revision:source.revision,role:'assistant'}],
+    anchor:{id:source.id,revision:source.revision,ref:{storage:'document',id:source.id}}};
   const found=await f.answer.search({query:'书架',limit:2});
-  assert.equal(found.status,'partial');assert.equal(found.channels.vectorValidation.state,'failed');
-  assert.deepEqual(reads,[duplicate.id]);assert.deepEqual(found.records.map(row=>[f.answer.resolve(row.ref)?.id,row.text]),[[first.id,first.text],[duplicate.id,duplicate.text]]);
-  assert.doesNotMatch(JSON.stringify(found),/private document path/);
+  assert.equal(resolves,0);assert.equal(found.status,'partial');
+  assert.equal(Object.hasOwn(found.channels,'vectorValidation'),false);
+  assert.deepEqual(resultIds(f.answer,found),[source.id]);assert.equal(found.records[0].text,source.text);
+  assert.equal(found.channels.sourceValidation.state,'source_changed');assert.equal(found.channels.sourceValidation.fallbacks,1);
 });
 
 test('vector similarity is ranked once and final merge applies weight once',async t=>{
@@ -472,14 +476,15 @@ test('portable vectors pin the answer profile, resolve issued anchors and revali
       state:{validity:'current',progress:'planned'},time:source.time,tags:['收纳'],sourceStatus:{eligible:true,manualBody:false},
       source_refs:[{id:source.id,revision:source.revision,role}],anchor:{id,revision:'note-v1',ref:{storage:'entry',id}}};
   }
-  for(const id of ['vector-one','vector-two','withdrawn'])documents.set(id,document(id));
+  for(const id of ['vector-one','vector-two'])documents.set(id,document(id));
+  documents.set('withdrawn',document('withdrawn','assistant'));
   documents.set('wrong-role',document('wrong-role','assistant'));
   const tools=createMemoryQueryTools({answer:()=>f.answer}),exec={agent:f.agent,signal:new AbortController().signal};
   assert.equal(snapshots,0);
   const found=await tools[0].execute({query:'搬运箱子',type:'plan'},exec);
   assert.deepEqual(resultIds(f.answer,found),['vector-one']);assert.equal(found.channels.vector.state,'ready');
-  assert.equal(found.channels.sourceValidation.removed,1);assert.equal(found.coverage.complete,false);
-  assert.deepEqual(calls.filter(call=>call.kind==='resolve').map(call=>call.id).sort(),['vector-one','withdrawn','wrong-role']);
+  assert.equal(found.channels.sourceValidation.removed,2);assert.equal(found.coverage.complete,false);
+  assert.deepEqual(calls.filter(call=>call.kind==='resolve'),[]);
 
   // Changing the active service profile cannot replace the encoding snapshot
   // already pinned to this answer, including an edit to the original object.

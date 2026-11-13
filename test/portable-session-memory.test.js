@@ -518,10 +518,15 @@ test('turn-start prefetch attaches bounded earlier originals through the read gr
   const prepare=(turn,text)=>{f.emit(agent,'turn/start',{turn},bridge);const user=directUser(text,'q-'+turn);
     return bridge.onPreStep({agent,turn,step:1,messages:[user],signal:new AbortController().signal},async()=>({kind:'enter',messages:[user]}));};
   f.begin(agent,1,bridge);f.finish(agent,1,bridge);await bridge.waitForIdle();
-  const decision=await prepare(2,'我现在用什么杯子喝茶？');
+  const firstQuery='我现在用什么青瓷杯喝茶？';
+  const decision=await prepare(2,firstQuery);
   const prefetched=decision.messages.find(message=>message.source?.kind==='memory-prefetch');
   assert.ok(prefetched,'earlier original is attached');
   assert.match(prefetched.content[0].text,/青瓷杯/);assert.match(prefetched.content[0].text,/原话 · 用户说/);
+  const summary=(await bridge.getMemoryRuntime()).searches.find(row=>row.kind==='prefetch'&&row.outcome==='injected');
+  assert.ok(summary);assert.equal(summary.injected,1);assert.ok(summary.injectedChars>0);assert.ok(summary.totalMs>=0);
+  assert.deepEqual(Object.keys(summary.candidates).sort(),['entry','legacy','original','vector']);
+  assert.equal(JSON.stringify(summary).includes(firstQuery),false,'prefetch telemetry never stores the query');
   assert.equal(bridge.getQueryState(agent.session.id),null,'prefetch does not open the model query session');
   // The model sees who said it and when, with the relative day computed by the program.
   const searched=await bridge.queryTools.find(tool=>tool.name==='memory_search').execute({query:'青瓷杯'},{agent,signal:new AbortController().signal});
@@ -542,6 +547,8 @@ test('turn-start prefetch attaches bounded earlier originals through the read gr
   const disabled=await off.onPreStep({agent,turn:4,step:1,messages:[again],signal:new AbortController().signal},async()=>({kind:'enter',messages:[again]}));
   assert.ok(!disabled.messages.some(message=>message.source?.kind==='memory-prefetch'));
   assert.ok(disabled.messages.some(message=>message.source?.kind==='memory-answer-rules'));
+  const disabledSummary=(await off.getMemoryRuntime()).searches.find(row=>row.kind==='prefetch'&&row.outcome==='skipped');
+  assert.equal(disabledSummary?.reason,'disabled');assert.equal(JSON.stringify(disabledSummary).includes('我现在用什么杯子喝茶'),false);
   f.emit(agent,'turn/end',{turn:4,reason:{kind:'completed'}},off);
 
   await f.access.set(agent.session.id,false);

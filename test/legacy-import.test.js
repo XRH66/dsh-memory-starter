@@ -286,6 +286,30 @@ test('legacy search hides an unchanged migrated note but returns it after the ol
   const changed=await answer.search({query:'蓝色花盆'});assert.equal(changed.channels.legacy.records,1);
 });
 
+test('legacy import fingerprints reuse unchanged state and invalidate after migration writes',async t=>{
+  const f=await fixture(t,{notes:[{id:'fingerprint-cache',value:'第一版指纹内容'}]});
+  await f.importer.handle({action:'start'});await settled(f.importer);
+  const relative=memoryDirectory(f.config,'fact')+'/fingerprint-cache.md',file=path.join(f.vault,relative);
+  const stateFile=legacyImportStateFile(f.config);
+  const firstChecksum=createHash('sha256').update(await fs.readFile(file)).digest('hex');
+  const first=await legacyImportFingerprints(f.config);
+  assert.equal(first.get('fingerprint-cache'),firstChecksum);
+
+  const originalRead=fs.readFile;
+  fs.readFile=async function(...args){
+    if(path.resolve(String(args[0]))===path.resolve(stateFile))throw Error('fingerprint cache unexpectedly reread state');
+    return originalRead.apply(this,args);
+  };
+  try{assert.equal((await legacyImportFingerprints(f.config)).get('fingerprint-cache'),firstChecksum);}
+  finally{fs.readFile=originalRead;}
+
+  await fs.writeFile(file,legacyNote({id:'fingerprint-cache',value:'第二版指纹内容'}),'utf8');
+  await f.importer.handle({action:'start'});await settled(f.importer);
+  const secondChecksum=createHash('sha256').update(await fs.readFile(file)).digest('hex');
+  const second=await legacyImportFingerprints(f.config);
+  assert.notEqual(secondChecksum,firstChecksum);assert.equal(second.get('fingerprint-cache'),secondChecksum);
+});
+
 test('legacy import settings routes validate write access and forward all actions',async()=>{
   const calls=[],handler=createSettingsHandler({},'unused.json',undefined,undefined,{manageLegacyImport:async(input,check)=>{
     check();calls.push(input);return input.action==='start'?{started:true,task:{state:'running'}}:{status:'ok'};}});

@@ -441,6 +441,66 @@ test('cold query has a shared deadline and never enumerates or repairs the libra
   reader.close();manager.cancel();
 });
 
+test('query embedding cache shares an in-flight request and reuses successful vectors after reauthorization',async t=>{
+  const f=await fixture(t);f.messages.set('m1',f.source('m1',0));await f.prepare();
+  const reader=f.api.forAgent(f.agent),profile=await reader.getSnapshot({});
+  let enteredResolve,releaseResolve,queryCalls=0;
+  const entered=new Promise(resolve=>{enteredResolve=resolve;});
+  const release=new Promise(resolve=>{releaseResolve=resolve;});
+  t.after(()=>releaseResolve?.());
+  f.hooks.embed=async(_texts,options)=>{if(options.kind==='query'){queryCalls++;enteredResolve();await release;}};
+  const first=reader.query({query:'shared-cache-query',profile,deadline:Date.now()+2000});
+  await entered;
+  const second=reader.query({query:'shared-cache-query',profile,deadline:Date.now()+2000});
+  await delay(10);assert.equal(queryCalls,1);
+  releaseResolve();
+  const [one,two]=await Promise.all([first,second]);
+  assert.equal(one.records.length,1);assert.equal(two.records.length,1);assert.equal(queryCalls,1);
+  await reader.query({query:'shared-cache-query',profile,deadline:Date.now()+2000});
+  assert.equal(queryCalls,1);
+
+  reader.close();
+  assert.throws(()=>reader.query({query:'shared-cache-query',profile,deadline:Date.now()+2000}),{code:'MEMORY_NOT_AUTHORIZED'});
+  const reopened=f.api.forAgent(f.agent);
+  const cached=await reopened.query({query:'shared-cache-query',profile,deadline:Date.now()+2000});
+  assert.equal(cached.records.length,1);assert.equal(queryCalls,1);
+  reopened.close();
+});
+
+test('failed query encoding is removed from the query cache and can be retried',async t=>{
+  const f=await fixture(t);f.messages.set('m1',f.source('m1',0));await f.prepare();
+  const reader=f.api.forAgent(f.agent),profile=await reader.getSnapshot({});
+  let attempts=0;
+  f.hooks.embed=async(_texts,options)=>{if(options.kind==='query'&&++attempts===1)throw Error('fictional query failure');};
+  const failed=await reader.query({query:'retry-cache-query',profile,deadline:Date.now()+2000});
+  assert.equal(failed.state,'unavailable');
+  const retried=await reader.query({query:'retry-cache-query',profile,deadline:Date.now()+2000});
+  assert.equal(retried.records.length,1);assert.equal(attempts,2);
+  await reader.query({query:'retry-cache-query',profile,deadline:Date.now()+2000});
+  assert.equal(attempts,2);
+  reader.close();
+});
+
+test('revoking a query in flight aborts and removes its shared cache entry',async t=>{
+  const f=await fixture(t);f.messages.set('m1',f.source('m1',0));await f.prepare();
+  const reader=f.api.forAgent(f.agent),profile=await reader.getSnapshot({});
+  let enteredResolve,queryCalls=0;
+  const entered=new Promise(resolve=>{enteredResolve=resolve;});
+  f.hooks.embed=(texts,options)=>{
+    if(options.kind!=='query')return;
+    queryCalls++;enteredResolve();
+    if(queryCalls>1)return;
+    return new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}));
+  };
+  const pending=reader.query({query:'revoked-cache-query',profile,deadline:Date.now()+2000});
+  await entered;reader.close();
+  await assert.rejects(pending,{code:'MEMORY_NOT_AUTHORIZED'});
+  const reopened=f.api.forAgent(f.agent);
+  const retried=await reopened.query({query:'revoked-cache-query',profile,deadline:Date.now()+2000});
+  assert.equal(retried.records.length,1);assert.equal(queryCalls,2);
+  reopened.close();
+});
+
 test('pending vector work survives restart and reuses the active space without a model at ready',async t=>{
   const f=await fixture(t);f.messages.set('m1',f.source('m1',0));await f.prepare();
   await f.api.notifyChanged({kind:'message',id:'m1',revision:2,ownerSubject:f.access.ownerSubject,project:'main'});

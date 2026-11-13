@@ -42,3 +42,27 @@ test('old-format notes are read from the Vault with the Basic Memory checksum an
   assert.equal(reader.search('小周的绿萝').length, 0);
   assert.equal(parseLegacyNote('no frontmatter'), null);
 });
+
+test('legacy note cache is shared across readers and invalidates edits and deletions',async t=>{
+  const vault=await fs.mkdtemp(path.join(os.tmpdir(),'legacy-shared-cache-'));
+  t.after(()=>fs.rm(vault,{recursive:true,force:true}));
+  await fs.mkdir(path.join(vault,'chats/facts'),{recursive:true});
+  const file=path.join(vault,'chats/facts/pet.md');
+  await fs.writeFile(file,NOTE);
+  const directories=['chats/facts','chats/events'];
+  const firstReader=createLegacyNoteReader({vaultPath:vault,directories});
+  const [first]=firstReader.notes();
+  assert.equal(firstReader.search('阿岑').length,1);
+  const secondReader=createLegacyNoteReader({vaultPath:vault,directories});
+  const [shared]=secondReader.notes();
+  assert.equal(shared,first,'a second reader reuses the cached note object and term set');
+
+  const changed=NOTE.replaceAll('养了一只叫阿岑的猫','后来养了一只叫阿岑的白猫');
+  await fs.writeFile(file,changed);
+  const [updated]=secondReader.notes();
+  assert.notEqual(updated,first);assert.match(updated.content,/后来养了一只叫阿岑的白猫/u);
+  assert.equal(secondReader.search('后来').length,1);
+
+  await fs.rm(file);
+  assert.deepEqual(secondReader.notes(),[]);assert.deepEqual(secondReader.search('阿岑'),[]);
+});
