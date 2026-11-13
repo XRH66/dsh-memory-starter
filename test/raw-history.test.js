@@ -109,6 +109,44 @@ test('import resumes missing vectors, preserves user-only policy, edits only cha
   await recall.dispose();
 });
 
+test('reimporting the same history after NUL id migration creates no duplicates',async t=>{
+  const dir=await temp(t),home=path.join(dir,'home'),owner=path.join(dir,'owner');await fs.mkdir(owner,{recursive:true});
+  const id='session-fixture-migrated-reimport',f=await nativeFixture(home,id,['第一轮旧原文。','第二轮旧原文。']);
+  const deployment=path.join(dir,'deployment.json');await fs.writeFile(deployment,JSON.stringify({
+    ownerDirectory:owner,ownerSubject:'owner:a',dshHome:home,dshSessionIds:[id],memory:{rawRecall:true},
+  }));
+  const plan=await previewHistory(deployment,{normalDefaultConfirmed:true});
+  const native=completedHistoryTurns((await readSessionHistory(f.file)).artifact,'owner:a').turns;
+  const file=path.join(dir,'raw.sqlite');
+  let store=new RawMemoryStore(file),recall;
+  try{
+    for(const turn of native)store.archiveTurn(turn);
+    for(const table of ['turns','windows','vectors','turn_messages','turn_visibility',
+      'legacy_scope_views','embedding_chunks','embedding_chunk_sources','import_members'])
+      store.db.exec(`UPDATE ${table} SET turn_id=replace(turn_id,char(31),char(0))`);
+    store.db.exec(`UPDATE legacy_scope_views SET turn_revision=replace(
+      turn_revision,char(92)||'u001f',char(92)||'u0000')`);
+    store.db.prepare('DELETE FROM raw_schema WHERE key=?').run('turn-id-v2');
+    store.close();
+
+    store=new RawMemoryStore(file);
+    const embedder=embedding('fixture:migrated-reimport');
+    recall=createRawRecall({config:config(dir),store,embedder,ownerSubject:'owner:a'});
+    const before=Number(store.db.prepare('SELECT COUNT(*) n FROM turns').get().n);
+    const first=await applyHistory(plan,{store,recall});
+    assert.equal(first.complete,true);
+    assert.equal(Number(store.db.prepare('SELECT COUNT(*) n FROM turns').get().n),before);
+    const calls=embedder.calls;
+    const second=await applyHistory(plan,{store,recall});
+    assert.equal(second.complete,true);
+    assert.equal(Number(store.db.prepare('SELECT COUNT(*) n FROM turns').get().n),before);
+    assert.equal(embedder.calls,calls);
+  }finally{
+    await recall?.dispose();
+    store?.close();
+  }
+});
+
 test('pure and legacy sessions are absent from the reviewed import plan',async t=>{
   const dir=await temp(t),home=path.join(dir,'home');await nativeFixture(home,'session-fixture-private',['私密细节。']);
   await fs.mkdir(path.join(home,'storages'),{recursive:true});await fs.writeFile(path.join(home,'storages','pure_mode.json'),JSON.stringify({unit:{name:'pure_mode',version:1},tables:{sessions:{'session-fixture-private':{enabled:false,historyUserOnly:true}}}}));

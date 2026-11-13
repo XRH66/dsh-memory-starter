@@ -62,6 +62,10 @@ test('legacy pages cover older turns with a stable cursor and omit originals alr
   const f=await fixture(t);
   for(let n=0;n<5;n++)f.memory.archiveTurn(buildTurn({scope:scope.ownerSubject,namespace:'default',sessionId:'old-session-'+n,turn:1,completedAt:1000+n,
     messages:[{id:'old-'+n,role:'user',text:'虚构历史 '+n,ts:1000+n,seq:1}]}));
+  const cursorPage=f.reader.legacyPage({limit:2}),legacyCursor=cursorPage.nextAfter.replaceAll('\u001f','\u0000');
+  const afterLegacyCursor=f.reader.legacyPage({after:legacyCursor,limit:1});
+  assert.equal(afterLegacyCursor.sources.length,1);
+  assert.equal(new Set(cursorPage.sources.map(row=>row.messageId)).has(afterLegacyCursor.sources[0].messageId),false);
   const all=[];let after='';
   do{const page=f.reader.legacyPage({after,limit:2});all.push(...page.sources);after=page.nextAfter;}while(after);
   assert.equal(all.length,5);assert.equal(new Set(all.map(row=>row.id)).size,5);
