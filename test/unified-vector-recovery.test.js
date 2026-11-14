@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createVectorQueue } from '../lib/unified/vector-queue.js';
-import { createUnifiedProfiles } from '../lib/unified/profiles.js';
+import { createVectorQueue } from '../lib/storage/vector-queue.js';
+import { createUnifiedProfiles } from '../lib/storage/profiles.js';
 
 const defer = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const error = code => Object.assign(new Error(code), { code });

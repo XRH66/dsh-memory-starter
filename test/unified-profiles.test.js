@@ -6,7 +6,7 @@ import path from 'node:path';
 import nativeFs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
-import { createUnifiedProfiles, profileFromLegacy } from '../lib/unified/profiles.js';
+import { createUnifiedProfiles, profileFromLegacy } from '../lib/storage/profiles.js';
 import { identifyAssets } from '../lib/raw-rag/assets.js';
 import { requestEmbeddingService } from '../lib/raw-rag/embedding-http.js';
 import { EmbeddingBackend } from '../lib/raw-rag/backend.js';

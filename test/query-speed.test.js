@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createVectorIndex} from '../lib/unified/vector-index.js';
+import {createVectorIndex} from '../lib/storage/vector-index.js';
 
 test('Float32Array ranking matches the prior per-element LE dot product',async t=>{
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'vector-rank-'));

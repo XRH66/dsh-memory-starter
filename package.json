@@ -95,13 +95,13 @@
     "lib/text.js",
     "lib/token-estimate.js",
     "lib/tool-schema.js",
-    "lib/unified/contract.js",
-    "lib/unified/profiles-usage.js",
-    "lib/unified/profiles.js",
-    "lib/unified/state-store.js",
-    "lib/unified/switch-estimate.js",
-    "lib/unified/vector-index.js",
-    "lib/unified/vector-queue.js",
+    "lib/storage/contract.js",
+    "lib/storage/profiles-usage.js",
+    "lib/storage/profiles.js",
+    "lib/storage/state-store.js",
+    "lib/storage/switch-estimate.js",
+    "lib/storage/vector-index.js",
+    "lib/storage/vector-queue.js",
     "lib/usage.js",
     "lib/vault-files.js",
     "lib/worker.js",
@@ -114,7 +114,8 @@
     "MODEL-SETUP.zh-CN.md",
     "LICENSE",
     "THIRD-PARTY-NOTICES.md",
-    "third-party/"
+    "third-party/",
+    "lib/atomic-file.js"
   ],
   "engines": {
     "node": "^22.19 || >=24"

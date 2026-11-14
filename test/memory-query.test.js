@@ -8,7 +8,7 @@ import {createRawRecall} from '../lib/raw-rag/index.js';
 import {createMemoryEntryAccess} from '../lib/memory-entry-access.js';
 import {ANSWER_RULES,createMemoryQueryAnswer,createMemoryQueryTools,createMemoryReferenceLoader,vectorQueryText} from '../lib/memory-query.js';
 import {createBridge} from '../lib/index.js';
-import {createUnifiedProfiles} from '../lib/unified/profiles.js';
+import {createUnifiedProfiles} from '../lib/storage/profiles.js';
 import {resolveConfig} from '../lib/config.js';
 import {personalTimeZone,setPersonalTimeZone} from '../lib/personal-namespace.js';
 import {estimateTokens} from '../lib/token-estimate.js';

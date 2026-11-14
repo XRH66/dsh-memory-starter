@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {rawModelSpec,modelContract} from '../lib/raw-rag/models.js';
 import {requestEmbeddingService} from '../lib/raw-rag/embedding-http.js';
-import {profileFromLegacy} from '../lib/unified/profiles.js';
+import {profileFromLegacy} from '../lib/storage/profiles.js';
 import {resolveConfig} from '../lib/config.js';
 
 const custom={rawRecallModel:'custom-api',rawRecallApiBase:'https://fictional-dim.example/v1',rawRecallApiModel:'fictional-embed',rawRecallDimensions:0};

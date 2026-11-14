@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createUnifiedProfiles } from '../lib/unified/profiles.js';
+import { createUnifiedProfiles } from '../lib/storage/profiles.js';
 import { scratchDirectory } from './helpers.js';
-import { CJK } from '../lib/unified/switch-estimate.js';
+import { CJK } from '../lib/storage/switch-estimate.js';
 
 // Synthetic profiles/documents and a fake backend only: no real model, no
 // network, no user database. Shared by the vector model switching tests.

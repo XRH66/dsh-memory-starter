@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {createMemoryDocuments} from '../lib/memory-documents.js';
-import {createUnifiedStateStore} from '../lib/unified/state-store.js';
+import {createUnifiedStateStore} from '../lib/storage/state-store.js';
 import {vaultMemoryStore} from './vault-memory.js';
 
 function yamlValue(value){
@@ -109,6 +109,28 @@ test('migration is limited to main, permitted vault paths and explicit selection
   await other.add('personal/chats/facts/legacy','chats/facts/Legacy.md');
   assert.deepEqual(await other.list(),[]);
   assert.equal(other.store.calls.some(call=>call.name==='read'),false);
+});
+
+test('the production document factory forwards logger warnings without file bodies',async t=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'memory-documents-logger-')),vault=path.join(directory,'vault');
+  const malformed=path.join(vault,'chats','facts','Malformed.md');
+  const body='FICTIONAL_MALFORMED_BODY_MUST_NOT_BE_LOGGED',warnings=[];
+  await fs.mkdir(path.dirname(malformed),{recursive:true});
+  await fs.writeFile(malformed,`---\ntitle: Malformed\nmetadata:\n  nested: value\n---\n\n${body}`);
+  const raw={
+    messageReader:()=>({list:()=>({sources:[]})}),
+    queryReader:()=>({legacyPage:()=>({sources:[]})}),
+  };
+  const documents=createMemoryDocuments({directory,tools:{},raw,
+    config:{captureFolder:'chats',vaultPath:vault},authorize:()=>true,agentForGrant:()=>null,
+    logger:{warn:message=>warnings.push(String(message))}});
+  t.after(async()=>{await documents.close();await fs.rm(directory,{recursive:true,force:true});});
+  const rows=[];
+  for await(const row of documents.listDocuments({grant:{kind:'management',project:'main',ownerSubject:'fictional-owner'}}))rows.push(row);
+  assert.deepEqual(rows,[]);
+  assert.equal(warnings.length,1);
+  assert.match(warnings[0],/chats\/facts\/Malformed\.md/u);
+  assert.equal(warnings[0].includes(body),false);
 });
 
 test('selected metadata reads wait for committed changes and do not expose mutable store objects',async t=>{

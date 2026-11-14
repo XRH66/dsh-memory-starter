@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { switchFixture, profile, doc } from './unified-switch-fixture.js';
-import { estimateTokens } from '../lib/unified/switch-estimate.js';
+import { estimateTokens } from '../lib/storage/switch-estimate.js';
 
 const constructs = f => f.calls.filter(row => row.op === 'construct').length;
 const pick = (plan, keys) => Object.fromEntries(keys.map(key => [key, plan[key]]));

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {archiveIdentity, profileFromLegacy} from '../lib/unified/profiles.js';
+import {archiveIdentity, profileFromLegacy} from '../lib/storage/profiles.js';
 import {doc, switchFixture} from './unified-switch-fixture.js';
 
 const cloud = ({id = 'custom-api', apiBase = 'https://api-a.example/v1', apiModel = 'embed-a', keyFile = ''} = {}) =>
