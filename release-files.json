@@ -163,6 +163,7 @@
   "test/raw-device.test.js",
   "test/portable-memory-runtime-ui.test.js",
   "test/portable-session-memory.test.js",
+  "test/session-read-only.test.js",
   "lib/unified/contract.js",
   "lib/unified/state-store.js",
   "lib/suzu/search-session.js",
