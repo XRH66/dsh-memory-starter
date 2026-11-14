@@ -47,6 +47,7 @@
     "lib/legacy-notes.js",
     "lib/legacy-import.js",
     "lib/local-time.js",
+    "lib/monotonic.js",
     "lib/memory-query.js",
     "lib/memory-rerank.js",
     "lib/connection-test.js",

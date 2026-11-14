@@ -37,14 +37,14 @@ test('search and open share four calls and 4K estimated tokens while keeping onl
 });
 
 test('2-second waiting budget is fresh for each request rather than shared active time for the whole answer',async t=>{
-  let clock=0,n=0;const {session}=fixture({now:()=>clock,search:async request=>{assert.equal(request.deadline,clock+2000);clock+=1500;return {records:[record('r'+(++n))]};}});t.after(()=>session.dispose());
+  let clock=0,n=0;const {session}=fixture({now:()=>clock,elapsed:()=>clock,search:async request=>{assert.equal(request.deadline,clock+2000);clock+=1500;return {records:[record('r'+(++n))]};}});t.after(()=>session.dispose());
   assert.equal((await session.search({query:'first'})).status,'ok');
   clock+=100000;assert.equal((await session.search({query:'second'})).status,'ok');assert.equal(session.budget().remainingMs,2000);
 });
 
 test('search total wait is separate from the open budget',async t=>{
   let clock=0;const deadlines=[];
-  const {session}=fixture({tokenLimits:{waitMs:20},searchWaitMs:50,now:()=>clock,
+  const {session}=fixture({tokenLimits:{waitMs:20},searchWaitMs:50,now:()=>clock,elapsed:()=>clock,
     search:async()=>({records:[record()]}),expand:async()=>({records:[record()]})});t.after(()=>session.dispose());
   const found=await session.search({query:'first'});
   deadlines.push(found.budget.remainingMs);
@@ -63,11 +63,47 @@ test('one timed out query aborts its own work without poisoning later calls in t
 });
 
 test('queue delay belongs to the same absolute per-call deadline',async t=>{
-  let clock=0,calls=0;const entered=deferred(),release=deferred();
-  const {session}=fixture({tokenLimits:{waitMs:50},now:()=>clock,search:async()=>{calls++;if(calls===1){entered.resolve();await release.promise;clock=100;}return {records:[record('r'+calls)]};}});t.after(()=>session.dispose());
+  let wall=0,time=0,calls=0;const entered=deferred(),release=deferred();
+  const {session}=fixture({tokenLimits:{waitMs:50},now:()=>wall,elapsed:()=>time,search:async()=>{calls++;if(calls===1){entered.resolve();await release.promise;time=100;}return {records:[record('r'+calls)]};}});t.after(()=>session.dispose());
   const first=session.search({query:'first'});await entered.promise;const queued=session.search({query:'queued'});release.resolve();await first;
   assert.equal((await queued).error.code,'TIMEOUT');assert.equal(calls,1);assert.equal(session.budget().calls,2);
   assert.equal((await session.search({query:'fresh'})).status,'ok');assert.equal(calls,2);
+});
+
+test('an offered result survives the outer timeout as partial and is charged and remembered',async t=>{
+  let time=0,calls=0,validations=0,secondSawRecord;
+  const {session}=fixture({tokenLimits:{waitMs:100},now:()=>-86400000,elapsed:()=>time,
+    search:async request=>{
+      calls++;
+      if(calls===1){
+        request.offer({records:[record('offered')]});
+        time=100;
+        return {records:[record('offered')]};
+      }
+      secondSawRecord=request.hasSeen(record('offered'));
+      return {records:secondSawRecord?[]:[record('offered')],degraded:true};
+    },
+    validateResult:result=>{validations++;return result;},
+  });t.after(()=>session.dispose());
+  const first=await session.search({query:'first'});
+  assert.equal(first.status,'partial');assert.equal(first.error.code,'PARTIAL');
+  assert.equal(first.fallback,true);
+  assert.equal(first.records[0].ref,'m1');
+  assert.deepEqual(first.records.map(item=>session.resolve(item.ref).id),['offered']);
+  assert.equal(validations,2);
+  const charged=session.budget();
+  assert.ok(charged.tokens>0);assert.ok(charged.remainingTokens<4096);
+  const second=await session.search({query:'second'});
+  assert.equal(secondSawRecord,true);assert.deepEqual(second.records,[]);
+  assert.equal(session.budget().calls,2);
+});
+
+test('a request that reaches its timeout without a usable offer still returns TIMEOUT',async t=>{
+  let time=0;
+  const {session}=fixture({tokenLimits:{waitMs:100},now:()=>0,elapsed:()=>time,
+    search:async()=>{time=100;return {records:[]};}});t.after(()=>session.dispose());
+  const result=await session.search({query:'empty'});
+  assert.equal(result.status,'timeout');assert.equal(result.error.code,'TIMEOUT');assert.deepEqual(result.records,[]);
 });
 
 test('filters reach the backend while owner, profile and invented types never come from model parameters',async t=>{

@@ -37,7 +37,7 @@ test('a failed or unavailable channel cannot erase other ready results or expose
 test('a channel completing past the cutoff cannot publish before the timer callback',async()=>{
   let clock=0,lateSignal;
   const ready=deferred();
-  const result=await runMemoryQueryLanes({deadline:1000,now:()=>clock,reserveMs:0,lanes:{
+  const result=await runMemoryQueryLanes({deadline:1000,now:()=>clock,elapsed:()=>clock,reserveMs:0,lanes:{
     text:async()=>({records:[row('kept')]}),
     vector:async({signal})=>{lateSignal=signal;setImmediate(ready.resolve);await ready.promise;clock=1000;return {records:[row('late')]};},
   }});

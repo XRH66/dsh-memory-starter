@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import {performance} from 'node:perf_hooks';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {createRawRecall} from '../lib/raw-rag/index.js';
 import {createMemoryEntryAccess} from '../lib/memory-entry-access.js';
-import {ANSWER_RULES,createMemoryQueryAnswer,createMemoryQueryTools,createMemoryReferenceLoader,vectorQueryText} from '../lib/memory-query.js';
+import {ANSWER_RULES,createMemoryQueryAnswer,createMemoryQueryTools,createMemoryReferenceLoader,selectPrefetch,vectorQueryText} from '../lib/memory-query.js';
 import {createBridge} from '../lib/index.js';
 import {createUnifiedProfiles} from '../lib/storage/profiles.js';
 import {resolveConfig} from '../lib/config.js';
@@ -40,7 +41,8 @@ tags:
 
 async function fixture(t,options={}){
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'portable-query-')),memory=new RawMemoryStore(path.join(directory,'existing.sqlite'),{warn(){}});
-  const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecall:false}),notes=memoryStore({project:'main'}),agent=fakeAgent('session-query');
+  const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecall:false,...options.config}),
+    notes=memoryStore({project:'main'}),agent=fakeAgent('session-query');
   let enabled=true,grants=0;const controllers=[];
   const access={ownerSubject:'owner',grant(){grants++;const controller=new AbortController();controllers.push(controller);return {kind:'read',ownerSubject:'owner',project:'main',sessionId:agent.session.id,rootSessionId:agent.session.id,epoch:'one',signal:controller.signal,cancel:()=>controller.abort()};},
     validate:grant=>enabled&&!grant.signal?.aborted,validateMessage:()=>enabled,assertCurrent(){if(!enabled)throw Error('closed');},withGrant:(_grant,work)=>work()};
@@ -141,6 +143,128 @@ test('recent bypasses vector configuration and later searches share a pending an
   await f.answer.search({query:'另一个问法'});
   assert.equal(snapshots,1);assert.equal(profiles.length,2);assert.equal(profiles[0],profiles[1]);
   assert.equal(profiles[1].nested.version,1);assert.equal(Object.isFrozen(profiles[1].nested),true);
+});
+
+test('a slow vector lane keeps literal results as partial under frozen and backward wall clocks',async t=>{
+  for(const [label,wallClock] of [['frozen',()=>0],['backward-one-day',()=>-86400000]]){
+    await t.test(label,async st=>{
+      let monotonic=0;const reports=[];
+      const vectors={
+        async getSnapshot(){return {id:'fixture',revision:1};},
+        async query(){
+          await new Promise(resolve=>setTimeout(resolve,5));
+          monotonic=1000;
+          return {records:[],state:'ready'};
+        },
+      };
+      const f=await fixture(st,{vectors,searchWaitMs:1300,now:wallClock,elapsed:()=>monotonic,onSearch:row=>reports.push(row)});
+      const source=f.save();
+      const started=performance.now(),found=await f.answer.search({query:'书架'});
+      assert.equal(found.status,'partial');assert.deepEqual(resultIds(f.answer,found),[source.id]);
+      assert.ok(performance.now()-started<1300);assert.ok(monotonic>=1000);
+      assert.equal(reports.length,1);assert.equal(reports[0].fallback,false);assert.equal(reports[0].vector.state,'timeout');
+    });
+  }
+});
+
+test('prefetch still admits a lexical result when the vector lane is slow',async t=>{
+  let monotonic=0;
+  const vectors={
+    async getSnapshot(){return {id:'fixture',revision:1};},
+    async query(){
+      await new Promise(resolve=>setTimeout(resolve,5));
+      monotonic=1000;
+      return {records:[],state:'ready'};
+    },
+  };
+  const f=await fixture(t,{vectors,searchWaitMs:1300,searchKind:'prefetch',keepSignals:true,now:()=>0,elapsed:()=>monotonic});
+  f.save();
+  const found=await f.answer.search({query:'书架',limit:4});
+  assert.equal(found.status,'partial');assert.equal(found.records.length,1);
+  const selected=selectPrefetch({records:found.records,minSimilarity:.45,options:{maxRecords:4}});
+  assert.equal(selected.lines.length,1);assert.match(selected.lines[0],/书架/u);
+});
+
+test('a stalled rerank keeps fused order with a real timeout duration under a frozen wall clock',async t=>{
+  const reports=[];
+  const reranker={enabled:()=>true,status:()=>({enabled:true,state:'ready'}),
+    rerank:({signal})=>new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}))};
+  const f=await fixture(t,{reranker,config:{memoryRerankTimeoutMs:250},searchWaitMs:1300,now:()=>0,onSearch:row=>reports.push(row)});
+  for(let index=1;index<=4;index++)f.save({messageId:'timeout-'+index,sequence:index,text:'虚构超时候选 '+index});
+  const scope={ownerSubject:'owner',project:'main'},expected=f.raw.queryReader(scope,{authorize:()=>true}).search({query:'虚构超时候选',limit:40}).sources.map(source=>source.id);
+  const started=performance.now(),found=await f.answer.search({query:'虚构超时候选',limit:4});
+  assert.deepEqual(resultIds(f.answer,found),expected);
+  assert.equal(found.channels.rerank.state,'timeout');assert.ok(performance.now()-started<1000);
+  assert.equal(reports.length,1);assert.equal(reports[0].rerank.state,'timeout');assert.ok(reports[0].timings.rerankMs>=200);
+});
+
+test('all timed-out lanes without a record still return TIMEOUT',async t=>{
+  let monotonic=0;const reports=[];
+  const vectors={
+    async getSnapshot(){return {id:'fixture',revision:1};},
+    async query(){
+      await new Promise(resolve=>setTimeout(resolve,5));
+      monotonic=1000;
+      return {records:[],state:'ready'};
+    },
+  };
+  const f=await fixture(t,{vectors,searchWaitMs:1300,now:()=>0,elapsed:()=>monotonic,onSearch:row=>reports.push(row)});
+  const found=await f.answer.search({query:'没有结果'});
+  assert.equal(found.status,'timeout');assert.equal(found.error.code,'TIMEOUT');assert.deepEqual(found.records,[]);
+  assert.equal(reports.length,1);assert.equal(reports[0].state,'timeout');assert.equal(reports[0].fallback,false);
+  assert.ok(Number.isFinite(reports[0].timings.totalMs));
+});
+
+test('slow final validation falls back through the same visibility, withdrawal, auth and budget path',async t=>{
+  const reports=[];let delayed=false;
+  const f=await fixture(t,{searchWaitMs:500,now:()=>0,visibleMessageIds:new Set(['visible-message']),onSearch:row=>reports.push(row)});
+  const kept=f.save({messageId:'kept-message',sequence:2,text:'书架计划：周末先量尺寸。'});
+  f.save({messageId:'excluded-message',sequence:3,text:'书架计划：这条已经被撤回。'});
+  f.save({messageId:'visible-message',sequence:4,text:'书架计划：这条已经在眼前。'});
+  f.memory.setControl({scope:'owner',targetType:'message',targetId:'excluded-message',excluded:true});
+  const baseReader=f.raw.queryReader.bind(f.raw);
+  f.raw.queryReader=(...args)=>{
+    const reader=baseReader(...args),wrapped=Object.create(reader);
+    wrapped.get=ref=>{
+      if(!delayed){
+        delayed=true;
+        const until=performance.now()+520;
+        while(performance.now()<until){}
+      }
+      return reader.get(ref);
+    };
+    return wrapped;
+  };
+  const found=await f.answer.search({query:'书架'});
+  assert.equal(found.status,'partial');assert.equal(found.error.code,'PARTIAL');
+  assert.deepEqual(resultIds(f.answer,found),[kept.id]);assert.equal(found.records[0].text.includes('撤回'),false);
+  assert.equal(reports.length,1);assert.equal(reports[0].fallback,true);
+  const charged=f.answer.budget();
+  assert.ok(charged.tokens>0);
+  const again=await f.answer.search({query:'书架'});
+  assert.equal(again.records.some(record=>f.answer.resolve(record.ref)?.id===kept.id),false);
+  assert.ok(f.answer.budget().tokens>=charged.tokens);
+});
+
+test('a revoked grant cannot use the timeout fallback to deliver an offered result',async t=>{
+  const f=await fixture(t,{searchWaitMs:500,now:()=>0});
+  f.save();
+  const baseReader=f.raw.queryReader.bind(f.raw);let revoked=false;
+  f.raw.queryReader=(...args)=>{
+    const reader=baseReader(...args),wrapped=Object.create(reader);
+    wrapped.get=ref=>{
+      if(!revoked){
+        revoked=true;
+        const until=performance.now()+520;
+        while(performance.now()<until){}
+        f.revoke();
+      }
+      return reader.get(ref);
+    };
+    return wrapped;
+  };
+  const found=await f.answer.search({query:'书架'});
+  assert.equal(found.status,'denied');assert.deepEqual(found.records,[]);
 });
 
 test('a rejected profile is isolated to the vector channel',async t=>{

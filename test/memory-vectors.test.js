@@ -441,6 +441,19 @@ test('cold query has a shared deadline and never enumerates or repairs the libra
   reader.close();manager.cancel();
 });
 
+test('vector queries report real encoding and search milliseconds',async t=>{
+  const f=await fixture(t);f.messages.set('m1',f.source('m1',0));await f.prepare();
+  f.hooks.embed=async(_texts,options)=>{if(options.kind==='query')await delay(20);};
+  const reader=f.api.forAgent(f.agent),started=Date.now();
+  const result=await reader.query({query:'timed fictional query',limit:1,deadline:Date.now()+2000});
+  assert.equal(result.records.length,1);
+  assert.ok(result.timings.totalMs>=20);assert.ok(result.timings.encodeMs>=15);
+  assert.ok(result.timings.totalMs>=result.timings.encodeMs);
+  assert.ok(result.timings.searchMs>=0);
+  assert.ok(Date.now()-started<1000);
+  reader.close();
+});
+
 test('query embedding cache shares an in-flight request and reuses successful vectors after reauthorization',async t=>{
   const f=await fixture(t);f.messages.set('m1',f.source('m1',0));await f.prepare();
   const reader=f.api.forAgent(f.agent),profile=await reader.getSnapshot({});

@@ -267,7 +267,8 @@ test('each search reports its kind, time, count and rerank time, never its text'
   assert.equal(reports.length,1);
   const [row]=reports;
   assert.equal(row.kind,'prefetch');assert.ok(['ok','partial'].includes(row.state));assert.equal(row.records,3);assert.equal(row.skippedVisible,1);
-  assert.equal(row.cold,false);assert.ok(Number.isFinite(row.totalMs));assert.ok(Number.isFinite(row.text.ms));
+  assert.equal(row.cold,false);assert.equal(row.fallback,false);assert.ok(Number.isFinite(row.totalMs));assert.ok(Number.isFinite(row.text.ms));
+  assert.ok(Number.isFinite(row.timings.totalMs));assert.ok(Number.isFinite(row.timings.rerankMs));
   assert.equal(row.rerank.state,'applied');assert.ok(Number.isFinite(row.rerank.ms));
   assert.doesNotMatch(JSON.stringify(row),/虚构计时候选/);
 });
