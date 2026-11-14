@@ -23,3 +23,6 @@ Thumbs.db
 # Local-only working material (not part of the release allowlist)
 AGENTS.md
 .archify/
+
+# 本地第三方源码，不随仓库发布
+vendor/
