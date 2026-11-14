@@ -70,8 +70,8 @@ async function fixture(t,overrides={}){
       source:{kind:'model',provider:'fixture',model:'fixture'},content:[{type:'text',text}]}},bridge);
     return emit(agent,'turn/end',{turn,reason:{kind:'completed'}},bridge);
   }
-  function attachSurface(agent,bridge){
-    emit(agent,'system/message',{turn:1,step:1,message:{id:'system-'+agent.session.id,role:'system',
+  function attachSurface(agent,bridge,{system=true}={}){
+    if(system)emit(agent,'system/message',{turn:1,step:1,message:{id:'system-'+agent.session.id,role:'system',
       content:[{type:'text',text:'system prompt'}],source:{kind:'system-prompt'}}},undefined,{surfaceOp:'append'});
     const surface=()=>{
       let active=[];
@@ -185,7 +185,7 @@ test('read-only keeps prefetch, memory_search and first-turn handoff while suppr
   const source=f.actor('session-read-source'),reader=f.actor('session-read-only-reader');
   const raw=new RawMemoryStore(f.config.rawRecallDbPath,logger),bridge=f.bridge({raw});
   f.attachSurface(source,bridge);
-  f.attachSurface(reader,bridge);
+  f.attachSurface(reader,bridge,{system:false});
   await f.access.set(source.session.id,true);
   f.begin(source,1,bridge,'茶具使用的普通会话约定标记是 ORYX_TEA。','source-user');
   f.finish(source,1,bridge,'ORDINARY_SESSION_ANSWER');
@@ -193,9 +193,13 @@ test('read-only keeps prefetch, memory_search and first-turn handoff while suppr
 
   await f.access.set(reader.session.id,true);
   await f.access.setReadOnly(reader.session.id,true);
-  const user=f.begin(reader,1,bridge,'茶具使用什么约定？','reader-user');
-  const decision=await bridge.onPreStep({agent:reader,turn:1,step:1,messages:[user.data],
-    signal:new AbortController().signal},async()=>({kind:'enter',messages:[user.data]}));
+  f.emit(reader,'turn/start',{turn:1},bridge);
+  const user=directUser('茶具使用什么约定？','reader-user');
+  const decision=await bridge.onPreStep({agent:reader,turn:1,step:1,messages:[user],
+    signal:new AbortController().signal},async()=>({kind:'enter',messages:[user]}));
+  assert.equal(decision.messages[0].source?.kind,MEMORY_HANDOFF_SOURCE);
+  assert.match(decision.messages[0].content[0].text,/ORYX_TEA/);
+  assert.match(decision.messages[1].content[0].text,/茶具使用什么约定/);
   const prefetched=decision.messages.find(message=>message.source?.kind==='memory-prefetch');
   assert.ok(prefetched,JSON.stringify((await bridge.getMemoryRuntime()).searches));
   assert.match(prefetched.content[0].text,/ORYX_TEA/);
@@ -208,19 +212,26 @@ test('read-only keeps prefetch, memory_search and first-turn handoff while suppr
   f.emit(reader,'step/start',{turn:1,step:1},bridge);
   await bridge.onRequest({agent:reader,turn:1,step:1,signal:new AbortController().signal},
     async()=>({provider:'fixture',model:'fixture'}));
+  f.emit(reader,'system/message',{turn:1,step:1,message:{id:'system-'+reader.session.id,role:'system',
+    content:[{type:'text',text:'system prompt'}],source:{kind:'system-prompt'}}},bridge);
+  for(const message of decision.messages)f.emit(reader,'user/message',message,bridge);
   const handoffs=handoffMessages(reader);
   assert.equal(handoffs.length,1);
   assert.match(handoffs[0].content[0].text,/ORYX_TEA/);
+  assert.deepEqual(reader.session.deriveMessages().slice(0,3).map(message=>message.source?.kind),
+    ['system-prompt',MEMORY_HANDOFF_SOURCE,'user']);
   assert.deepEqual(await bridge.handoff.status(),handoffBefore);
   f.finish(reader,1,bridge,'READ_ONLY_READER_ANSWER');
   await bridge.waitForIdle();
   assert.equal(raw.messages.list(scope).sources.filter(item=>item.sessionId===reader.session.id).length,0);
 
   const second=f.begin(reader,2,bridge,'第二回合仍只读。','reader-user-2');
-  await bridge.onPreStep({agent:reader,turn:2,step:1,messages:[second.data],
+  const secondDecision=await bridge.onPreStep({agent:reader,turn:2,step:1,messages:[second.data],
     signal:new AbortController().signal},async()=>({kind:'enter',messages:[second.data]}));
+  f.emit(reader,'step/start',{turn:2,step:1},bridge);
   await bridge.onRequest({agent:reader,turn:2,step:1,signal:new AbortController().signal},
     async()=>({provider:'fixture',model:'fixture'}));
+  for(const message of secondDecision.messages)f.emit(reader,'user/message',message,bridge);
   assert.equal(handoffMessages(reader).length,1);
   f.finish(reader,2,bridge,'READ_ONLY_READER_ANSWER_2');
   await bridge.waitForIdle();

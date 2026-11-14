@@ -13,11 +13,11 @@ import {resolveConfig} from '../lib/config.js';
 import {MEMORY_HANDOFF_SOURCE} from '../lib/memory-contract.js';
 import {directUser, fakeAgent} from './helpers.js';
 
-const logger={warn(){}};
-
-async function fixture(t){
+async function fixture(t,{config:overrides={}}={}){
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'handoff-head-replay-'));
   const ctx=new Context(),store=new SessionStore(ctx),actors=new Map(),sessions=new Map();
+  const warnings=[];
+  const logger={warn(message){warnings.push(String(message));}};
   const agents={get:id=>actors.get(id),list:()=>[...actors.values()],isOwnedBy:()=>false};
   const actor=id=>{
     const session=store.prepare(id,{meta:{delegationDepth:0}});
@@ -36,6 +36,7 @@ async function fixture(t){
     rawRecall:false,
     maxTimelineEntries:0,
     maxIndexNotes:0,
+    ...overrides,
   });
   await fs.mkdir(config.vaultPath,{recursive:true});
   const bridge=createBridge({
@@ -63,7 +64,7 @@ async function fixture(t){
     bridge.onSessionEvent(agent.session,event);
     return event;
   };
-  return {directory,source,target,access,bridge,within,append};
+  return {directory,source,target,access,bridge,within,append,warnings};
 }
 
 function systemEvent(agent,turn,step){
@@ -107,57 +108,94 @@ async function strictReplay(directory,session){
   return Session.fromRestore(session.id,artifact.events,artifact.header,artifact.inheritedEventCount,'detached');
 }
 
-test('first-turn handoff defers until a protected system head exists and strict v4 replay succeeds',async t=>{
-  const f=await fixture(t);
+async function replayTurn(f,agent,{turn=1,text='目标对话',answer='回答',model='fixture',system=false}={}){
   const signal=new AbortController().signal;
-  await f.access.set(f.source.session.id,true);
-  await f.within(f.source.session,async()=>{
-    f.append(f.source,'turn/start',{turn:1});
-    const user=directUser('只存在于另一个对话的原文','source-user');
-    const decision=await f.bridge.onPreStep({agent:f.source,messages:[user],turn:1,step:1,signal},async()=>({kind:'enter',messages:[user]}));
-    f.append(f.source,'step/start',{turn:1,step:1});
-    f.append(f.source,'system/message',systemEvent(f.source,1,1),{surfaceOp:'append'});
-    for(const message of decision.messages)f.append(f.source,'user/message',message,{surfaceOp:'append'});
-    f.append(f.source,'assistant/message',assistantEvent(f.source,1,'另一个对话的回答'),{surfaceOp:'append'});
-    f.append(f.source,'step/end',{turn:1,step:1});
-    f.append(f.source,'turn/end',{turn:1,reason:{kind:'completed'}});
+  let decision;
+  await f.within(agent.session,async()=>{
+    f.append(agent,'turn/start',{turn});
+    const user=directUser(text+'-'+turn,agent.session.id+'-user-'+turn);
+    decision=await f.bridge.onPreStep({agent,messages:[user],turn,step:1,signal},async()=>({kind:'enter',messages:[user]}));
+    f.append(agent,'step/start',{turn,step:1});
+    await f.bridge.onRequest({agent,turn,step:1,signal},async()=>({provider:'fixture',model}));
+    if(system)f.append(agent,'system/message',systemEvent(agent,turn,1),{surfaceOp:'append'});
+    for(const message of decision.messages)f.append(agent,'user/message',message,{surfaceOp:'append'});
+    f.append(agent,'assistant/message',assistantEvent(agent,turn,answer),{surfaceOp:'append'});
+    f.append(agent,'step/end',{turn,step:1});
+    f.append(agent,'turn/end',{turn,reason:{kind:'completed'}});
   });
   await f.bridge.waitForIdle();
+  return decision;
+}
+
+const handoffMessages=agent=>agent.session.deriveMessages().filter(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE);
+
+test('first-turn handoff is delivered after the protected system head and never repeats',async t=>{
+  const f=await fixture(t);
+  await f.access.set(f.source.session.id,true);
+  await replayTurn(f,f.source,{text:'只存在于另一个对话的原文',answer:'另一个对话的回答',system:true});
 
   await f.access.set(f.target.session.id,true);
-  await f.within(f.target.session,async()=>{
-    f.append(f.target,'turn/start',{turn:1});
-    const user=directUser('目标对话第一轮','target-user-1');
-    const decision=await f.bridge.onPreStep({agent:f.target,messages:[user],turn:1,step:1,signal},async()=>({kind:'enter',messages:[user]}));
-    f.append(f.target,'step/start',{turn:1,step:1});
-    await f.bridge.onRequest({agent:f.target,turn:1,step:1,signal},async()=>({provider:'fixture',model:'fixture'}));
-    f.append(f.target,'system/message',systemEvent(f.target,1,1),{surfaceOp:'append'});
-    for(const message of decision.messages)f.append(f.target,'user/message',message,{surfaceOp:'append'});
-    f.append(f.target,'assistant/message',assistantEvent(f.target,1,'第一轮回答'),{surfaceOp:'append'});
-    f.append(f.target,'step/end',{turn:1,step:1});
-    f.append(f.target,'turn/end',{turn:1,reason:{kind:'completed'}});
-  });
+  const first=await replayTurn(f,f.target,{text:'目标对话第一轮',answer:'第一轮回答',system:true});
+  const firstTurnHandoffCount=handoffMessages(f.target).length;
+  assert.equal(first.messages.filter(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE).length,1);
+  assert.equal(handoffMessages(f.target)[0].source.form,'handoff');
+  assert.equal(f.target.session.deriveMessages()[0].source.kind,'system-prompt');
+  assert.equal(f.target.session.deriveMessages()[1].source.kind,MEMORY_HANDOFF_SOURCE);
 
-  const firstTurnHandoffCount=f.target.session.deriveMessages().filter(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE).length;
+  const second=await replayTurn(f,f.target,{turn:2,text:'目标对话第二轮',answer:'第二轮回答',model:'fixture-next'});
+  assert.equal(second.messages.some(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE),false);
+  assert.equal(handoffMessages(f.target).length,1);
+  const third=await replayTurn(f,f.target,{turn:3,text:'目标对话第三轮',answer:'第三轮回答',model:'fixture-next'});
+  assert.equal(third.messages.some(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE),false);
 
-  await f.within(f.target.session,async()=>{
-    f.append(f.target,'turn/start',{turn:2});
-    const user=directUser('目标对话第二轮','target-user-2');
-    const decision=await f.bridge.onPreStep({agent:f.target,messages:[user],turn:2,step:1,signal},async()=>({kind:'enter',messages:[user]}));
-    f.append(f.target,'step/start',{turn:2,step:1});
-    await f.bridge.onRequest({agent:f.target,turn:2,step:1,signal},async()=>({provider:'fixture',model:'fixture'}));
-    for(const message of decision.messages)f.append(f.target,'user/message',message,{surfaceOp:'append'});
-    f.append(f.target,'assistant/message',assistantEvent(f.target,2,'第二轮回答'),{surfaceOp:'append'});
-    f.append(f.target,'step/end',{turn:2,step:1});
-    f.append(f.target,'turn/end',{turn:2,reason:{kind:'completed'}});
-  });
-  await f.bridge.waitForIdle();
-
-  const handoffs=f.target.session.deriveMessages().filter(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE);
+  const handoffs=handoffMessages(f.target);
   assert.equal(handoffs.length,1);
   assert.match(handoffs[0].content[0].text,/只存在于另一个对话的原文/);
   const restored=await strictReplay(f.directory,f.target.session);
-  assert.equal(firstTurnHandoffCount,0);
+  assert.equal(firstTurnHandoffCount,1);
   assert.equal(restored.deriveMessages()[0].source.kind,'system-prompt');
+  assert.equal(restored.deriveMessages()[1].source.kind,MEMORY_HANDOFF_SOURCE);
   assert.equal(restored.deriveMessages().filter(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE).length,1);
+  assert.equal(f.warnings.some(message=>message.includes('[memory-handoff] deferred:')),false);
+});
+
+test('first turn without any other conversation source stays empty without deferring',async t=>{
+  const f=await fixture(t);
+  await f.access.set(f.target.session.id,true);
+  const decision=await replayTurn(f,f.target,{text:'没有历史材料的目标对话',answer:'空接续回答',system:true});
+
+  assert.equal(decision.messages.some(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE),false);
+  assert.equal(handoffMessages(f.target).length,0);
+  const attempt=(await f.bridge.handoff.status()).sessions[f.target.session.id].attempt;
+  assert.equal(attempt.ready,true);
+  assert.equal(attempt.delivered,true);
+  assert.equal(attempt.completed,true);
+  assert.equal(f.warnings.some(message=>message.includes('[memory-handoff] deferred:')),false);
+});
+
+test('first-turn handoff honors memory, authorization, recent-context and root-agent gates',async t=>{
+  const disabled=await fixture(t);
+  await disabled.access.set(disabled.target.session.id,false);
+  const disabledDecision=await replayTurn(disabled,disabled.target,{text:'记忆关闭',answer:'不应接续',system:true});
+  assert.equal(disabledDecision.messages.some(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE),false);
+
+  const unauthorized=await fixture(t);
+  await unauthorized.access.set(unauthorized.target.session.id,true);
+  unauthorized.access.validate=()=>false;
+  const unauthorizedDecision=await replayTurn(unauthorized,unauthorized.target,{text:'授权已撤销',answer:'不应接续',system:true});
+  assert.equal(unauthorizedDecision.messages.some(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE),false);
+
+  const noRecent=await fixture(t,{config:{recentContext:false}});
+  await noRecent.access.set(noRecent.target.session.id,true);
+  const noRecentDecision=await replayTurn(noRecent,noRecent.target,{text:'关闭近期接续',answer:'不应接续',system:true});
+  assert.equal(noRecentDecision.messages.some(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE),false);
+
+  const child=await fixture(t);
+  await child.access.set(child.source.session.id,true);
+  await replayTurn(child,child.source,{text:'父会话材料',answer:'父会话回答',system:true});
+  await child.access.set(child.target.session.id,true);
+  child.access.isRootAgent=agent=>agent===child.source;
+  assert.equal(child.access.isRootAgent(child.target),false);
+  const childDecision=await replayTurn(child,child.target,{text:'子智能体首轮',answer:'子智能体回答',system:true});
+  assert.equal(childDecision.messages.some(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE),false);
 });
