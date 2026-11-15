@@ -523,6 +523,18 @@ test('vector queries report real encoding and search milliseconds',async t=>{
   reader.close();
 });
 
+test('a wall-clock jump past the deadline does not expire a query whose own budget remains',async t=>{
+  // After a host stall the wall clock has moved on, but the caller's monotonic budget has not.
+  let now=Date.now();
+  const f=await fixture(t,{now:()=>now});f.messages.set('m1',f.source('m1',0));await f.prepare();
+  f.hooks.embed=async(_texts,options)=>{if(options.kind==='query')now+=5000;};
+  const reader=f.api.forAgent(f.agent);
+  const result=await reader.query({query:'stalled fictional query',limit:1,remainingMs:2000});
+  assert.equal(result.state,undefined);
+  assert.equal(result.records.length,1);
+  reader.close();
+});
+
 test('query embedding cache shares an in-flight request and reuses successful vectors after reauthorization',async t=>{
   const f=await fixture(t);f.messages.set('m1',f.source('m1',0));await f.prepare();
   const reader=f.api.forAgent(f.agent),profile=await reader.getSnapshot({});
@@ -635,9 +647,9 @@ test('device compatibility mismatch leaves preserved vectors unavailable rather 
   assert.equal(result.reason,'EMBEDDING_IDENTITY_MISMATCH');assert.deepEqual(result.records,[]);grant.cancel();
 });
 
-test('indexed CPU work observes the absolute clock deadline without waiting for a timer callback',async t=>{
+test('indexed CPU work observes the query deadline without waiting for a timer callback',async t=>{
   const f=await fixture(t);for(let i=0;i<20;i++)f.messages.set('m'+i,f.source('m'+i,i));await f.prepare();
-  let clock=1000;f.options.now=()=>clock++;
+  let clock=1000;f.options.now=()=>clock++;f.options.elapsed=()=>clock++;
   await f.restart();const reader=f.api.forAgent(f.agent),start=Date.now();
   const result=await reader.query({query:'fictional',deadline:clock+80});
   assert.equal(result.reason,'MEMORY_SEARCH_TIMEOUT');assert.equal(result.records.length,0);
