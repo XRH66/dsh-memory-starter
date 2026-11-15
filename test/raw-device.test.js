@@ -9,9 +9,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { resolveConfig } from '../lib/config.js';
 import { rawModelSpec, modelContract, modelIdentity, llamaRuntimeSettings } from '../lib/raw-rag/models.js';
 import { normalizeRawModelSettings, publicRawModel } from '../lib/raw-rag/settings.js';
-import { LlamaEmbeddingTransport } from '../lib/raw-rag/local-backends.js';
+import { LlamaEmbeddingTransport } from '../lib/raw-rag/local/local-backends.js';
 import { EmbeddingBackend } from '../lib/raw-rag/backend.js';
-import { identifyDeviceSpace } from '../lib/raw-rag/assets.js';
+import { identifyDeviceSpace } from '../lib/raw-rag/local/assets.js';
 
 const MODEL = 'Qwen/Qwen3-Embedding-4B';
 const settings = extra => resolveConfig({ rawRecallModel: MODEL, rawRecallLlamaCpuServer: path.resolve('cpu-server'),

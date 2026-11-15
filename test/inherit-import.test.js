@@ -38,7 +38,8 @@ async function fixture(t) {
   await fs.mkdir(path.join(directory,'vault'),{recursive:true});
   const dbFile=path.join(directory,'raw.sqlite');
   const store=new RawMemoryStore(dbFile,{warn(){}});
-  const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecall:true,rawRecallDbPath:dbFile});
+  const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecall:true,
+    rawRecallModel:'BAAI/bge-small-zh-v1.5',rawRecallDbPath:dbFile});
   const embedder=fakeEmbedder();
   const recall=createRawRecall({config,ownerSubject:scope,store,embedder,logger:{warn(){}}});
   const observer=new RawMemoryStore(dbFile,{warn(){}});

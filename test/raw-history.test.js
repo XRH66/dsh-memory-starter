@@ -22,7 +22,8 @@ async function temp(t){
 function embedding(modelKey='fixture:m1'){
   return {...embeddingContract(modelKey,2),calls:0,async embed(texts){this.calls+=texts.length;return texts.map(s=>String(s).includes('老物件')?[1,0]:[0,1]);},dispose(){}};
 }
-function config(dir){return resolveConfig({vaultPath:path.join(dir,'vault'),rawRecall:true,rawRecallMinScore:0.8});}
+function config(dir){return resolveConfig({vaultPath:path.join(dir,'vault'),rawRecall:true,
+  rawRecallModel:'BAAI/bge-small-zh-v1.5',rawRecallMinScore:0.8});}
 async function archive(store,embedder,input){
   const turn=buildTurn(input);store.archiveTurn(turn);
   await seedTurnVectors(store,embedder,turn,text=>text.includes('老物件')?[1,0]:[0,1]);
@@ -89,7 +90,7 @@ test('native multi-frame history excludes injected context and aborted turns',as
 test('import resumes missing vectors, preserves user-only policy, edits only changed turns, and stays idempotent',async t=>{
   const dir=await temp(t),home=path.join(dir,'home'),owner=path.join(dir,'owner');await fs.mkdir(owner,{recursive:true});
   const id='session-fixture-import',f=await nativeFixture(home,id,['第一轮老物件。','第二轮。','第三轮。']);
-  const deployment=path.join(dir,'deployment.json');await fs.writeFile(deployment,JSON.stringify({ownerDirectory:owner,ownerSubject:'owner:a',dshHome:home,dshSessionIds:[id],memory:{rawRecall:true}}));
+  const deployment=path.join(dir,'deployment.json');await fs.writeFile(deployment,JSON.stringify({ownerDirectory:owner,ownerSubject:'owner:a',dshHome:home,dshSessionIds:[id],memory:{rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5'}}));
   const plan=await previewHistory(deployment,{normalDefaultConfirmed:true});assert.equal(plan.summary.turns,3);
   const store=new RawMemoryStore(path.join(dir,'raw.sqlite')),embedder=embedding(),recall=createRawRecall({config:config(dir),store,embedder,ownerSubject:'owner:a'});
   const native=completedHistoryTurns((await readSessionHistory(f.file)).artifact,'owner:a').turns;
@@ -104,7 +105,7 @@ test('import resumes missing vectors, preserves user-only policy, edits only cha
   const changed=await previewHistory(deployment,{normalDefaultConfirmed:true}),before=embedder.calls;
   const third=await applyHistory(changed,{store,recall});assert.equal(third.updated,1);assert.equal(embedder.calls,before+1);
   assert.match(store.storedTurn('owner:a',native[1].turnId)[0].text,/改过/);
-  await fs.writeFile(deployment,JSON.stringify({ownerDirectory:owner,ownerSubject:'owner:a',dshHome:home,dshSessionIds:[],memory:{rawRecall:true}}));
+  await fs.writeFile(deployment,JSON.stringify({ownerDirectory:owner,ownerSubject:'owner:a',dshHome:home,dshSessionIds:[],memory:{rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5'}}));
   await assert.rejects(applyHistory(changed,{store,recall}),/no-longer-authorized/);
   await recall.dispose();
 });
@@ -113,7 +114,7 @@ test('reimporting the same history after NUL id migration creates no duplicates'
   const dir=await temp(t),home=path.join(dir,'home'),owner=path.join(dir,'owner');await fs.mkdir(owner,{recursive:true});
   const id='session-fixture-migrated-reimport',f=await nativeFixture(home,id,['第一轮旧原文。','第二轮旧原文。']);
   const deployment=path.join(dir,'deployment.json');await fs.writeFile(deployment,JSON.stringify({
-    ownerDirectory:owner,ownerSubject:'owner:a',dshHome:home,dshSessionIds:[id],memory:{rawRecall:true},
+    ownerDirectory:owner,ownerSubject:'owner:a',dshHome:home,dshSessionIds:[id],memory:{rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5'},
   }));
   const plan=await previewHistory(deployment,{normalDefaultConfirmed:true});
   const native=completedHistoryTurns((await readSessionHistory(f.file)).artifact,'owner:a').turns;
@@ -150,14 +151,14 @@ test('reimporting the same history after NUL id migration creates no duplicates'
 test('pure and legacy sessions are absent from the reviewed import plan',async t=>{
   const dir=await temp(t),home=path.join(dir,'home');await nativeFixture(home,'session-fixture-private',['私密细节。']);
   await fs.mkdir(path.join(home,'storages'),{recursive:true});await fs.writeFile(path.join(home,'storages','pure_mode.json'),JSON.stringify({unit:{name:'pure_mode',version:1},tables:{sessions:{'session-fixture-private':{enabled:false,historyUserOnly:true}}}}));
-  const deployment=path.join(dir,'deployment.json');await fs.writeFile(deployment,JSON.stringify({ownerDirectory:path.join(dir,'owner'),ownerSubject:'owner:a',dshHome:home,dshSessionIds:['session-fixture-private'],memory:{rawRecall:true}}));
+  const deployment=path.join(dir,'deployment.json');await fs.writeFile(deployment,JSON.stringify({ownerDirectory:path.join(dir,'owner'),ownerSubject:'owner:a',dshHome:home,dshSessionIds:['session-fixture-private'],memory:{rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5'}}));
   const plan=await previewHistory(deployment,{normalDefaultConfirmed:true});assert.equal(plan.summary.turns,0);assert.equal(plan.sources[0].reason,'pure-or-mixed-history');
 });
 
 test('switching mode after preview aborts import before any history is written',async t=>{
   const dir=await temp(t),home=path.join(dir,'home'),id='session-fixture-mode-change';
   await nativeFixture(home,id,['老物件。']);
-  const file=path.join(dir,'deployment.json');await fs.writeFile(file,JSON.stringify({ownerDirectory:dir,ownerSubject:'owner:a',dshHome:home,dshSessionIds:[id],memory:{rawRecall:true}}));
+  const file=path.join(dir,'deployment.json');await fs.writeFile(file,JSON.stringify({ownerDirectory:dir,ownerSubject:'owner:a',dshHome:home,dshSessionIds:[id],memory:{rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5'}}));
   const plan=await previewHistory(file,{normalDefaultConfirmed:true});
   await fs.mkdir(path.join(home,'storages'),{recursive:true});await fs.writeFile(path.join(home,'storages','pure_mode.json'),JSON.stringify({unit:{name:'pure_mode',version:1},tables:{sessions:{[id]:{enabled:true,historyUserOnly:true}}}}));
   const store=new RawMemoryStore(path.join(dir,'raw.sqlite')),embedder=embedding(),recall=createRawRecall({config:config(dir),store,embedder,ownerSubject:'owner:a'});

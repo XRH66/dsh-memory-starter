@@ -42,7 +42,8 @@ tags:
 
 async function fixture(t,options={}){
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'portable-query-')),memory=new RawMemoryStore(path.join(directory,'existing.sqlite'),{warn(){}});
-  const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecall:false,...options.config}),
+  const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),
+    rawRecallModel:'BAAI/bge-small-zh-v1.5',rawRecall:false,...options.config}),
     notes=memoryStore({project:'main'}),agent=fakeAgent('session-query');
   let enabled=true,grants=0;const controllers=[];
   const access={ownerSubject:'owner',grant(){grants++;const controller=new AbortController();controllers.push(controller);return {kind:'read',ownerSubject:'owner',project:'main',sessionId:agent.session.id,rootSessionId:agent.session.id,epoch:'one',signal:controller.signal,cancel:()=>controller.abort()};},

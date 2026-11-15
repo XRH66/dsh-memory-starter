@@ -17,7 +17,7 @@ async function fixture(t){
   let store;
   const make=()=>{
     store=new RawMemoryStore(file);
-    return createRawRecall({config:resolveConfig({project:'main',rawRecall:true,rawRecallDbPath:file}),ownerSubject:()=>owner,store,logger:{warn(){}}});
+    return createRawRecall({config:resolveConfig({project:'main',rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5',rawRecallDbPath:file}),ownerSubject:()=>owner,store,logger:{warn(){}}});
   };
   let raw=make();
   t.after(async()=>{await raw.dispose?.();await fs.rm(directory,{recursive:true,force:true});});
@@ -44,7 +44,7 @@ test('withdrawing a message removes its words from the full-text index',async t=
 test('purge removes projections left by earlier withdrawals and is idempotent',async t=>{
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'raw-withdraw-purge-'));
   const store=new RawMemoryStore(path.join(directory,'raw.sqlite'),{warn(){}});
-  const raw=createRawRecall({config:resolveConfig({project:'main',rawRecall:true,rawRecallDbPath:path.join(directory,'raw.sqlite')}),ownerSubject:()=>owner,store,logger:{warn(){}}});
+  const raw=createRawRecall({config:resolveConfig({project:'main',rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5',rawRecallDbPath:path.join(directory,'raw.sqlite')}),ownerSubject:()=>owner,store,logger:{warn(){}}});
   t.after(async()=>{await raw.dispose?.();await fs.rm(directory,{recursive:true,force:true});});
   const saved=raw.recordMessage(input(),allowed).source;raw.projectMessage(saved,allowed);
   // An older build only marked the source withdrawn and left its text projection.

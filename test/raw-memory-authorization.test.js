@@ -13,7 +13,7 @@ test('revoked raw indexing cannot commit a vector returned after closing memory'
   let started,release,allowed=true;
   const entered=new Promise(resolve=>{started=resolve;}),pending=new Promise(resolve=>{release=resolve;});
   const embedder={...embeddingContract('authorization-fixture:4',4),async embed(texts){started();await pending;return texts.map(()=>[1,0,0,0]);},dispose(){}};
-  const recall=createRawRecall({config:resolveConfig({rawRecall:true,rawRecallDbPath:db}),ownerSubject:()=> 'fixture-owner',embedder,logger:{warn(){}}});
+  const recall=createRawRecall({config:resolveConfig({rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5',rawRecallDbPath:db}),ownerSubject:()=> 'fixture-owner',embedder,logger:{warn(){}}});
   try{
     const archived=await recall.archiveTurn({sessionId:'session-fixture',turn:1,completedAt:Date.now(),authorize:()=>allowed,
       messages:[{id:'authorized-user',role:'user',text:'获准回合的原话。'}]});

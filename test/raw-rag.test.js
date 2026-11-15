@@ -310,7 +310,7 @@ test('twenty thousand old turn ids migrate within a measured reopen window',{tim
 test('legacy vector anchors survive migration without rewriting or re-encoding documents',{timeout:60000},async t=>{
   const {dir,db}=await tempDb();
   const scope='owner:vector-migration',vectorDirectory=path.join(dir,'vectors');
-  const config={rawRecall:true,rawRecallDbPath:db,vaultPath:path.join(dir,'vault'),project:'main',
+  const config={rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5',rawRecallDbPath:db,vaultPath:path.join(dir,'vault'),project:'main',
     rawRecallModel:'Qwen/Qwen3-Embedding-4B',rawRecallGgufModel:'fictional-Q4.gguf',rawRecallDevice:'auto',
     rawRecallCpuThreads:6,rawRecallGpuThreads:4,rawRecallIdleMs:120000};
   await fs.mkdir(config.vaultPath);
@@ -383,7 +383,7 @@ test('dispose drains queued turns before closing the store', async (t) => {
   const embedder = fakeEmbedder();
   const original = embedder.embed;
   embedder.embed = async function (...args) { await new Promise((resolve) => setTimeout(resolve, 15)); return original.apply(this, args); };
-  const recall = createRawRecall({ config: resolveConfig({ rawRecall: true, rawRecallDbPath: db }),
+  const recall = createRawRecall({ config: resolveConfig({ rawRecall: true, rawRecallModel: 'BAAI/bge-small-zh-v1.5', rawRecallDbPath: db }),
     ownerSubject: () => 'owner:a', embedder, logger: { warn() {} } });
   for (let turn = 1; turn <= 3; turn += 1) {
     await recall.archiveTurn({ sessionId: 's1', turn, completedAt: T0 + turn,
@@ -409,7 +409,7 @@ test('invalid db path is deferred and never breaks construction', async (t) => {
   });
   const blocker = path.join(dir, 'blocked');
   await fs.writeFile(blocker, 'not a directory');
-  const recall = createRawRecall({ config: resolveConfig({ rawRecall: true, rawRecallDbPath: path.join(blocker, 'raw.sqlite') }),
+  const recall = createRawRecall({ config: resolveConfig({ rawRecall: true, rawRecallModel: 'BAAI/bge-small-zh-v1.5', rawRecallDbPath: path.join(blocker, 'raw.sqlite') }),
     ownerSubject: () => 'owner:a', embedder: fakeEmbedder(), logger: { warn() {} } });
   t.after(() => recall.dispose());
   assert.equal(recall.status().stats, null);
