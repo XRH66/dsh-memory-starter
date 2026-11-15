@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {createMemoryDocuments} from '../lib/memory-documents.js';
+import {recordLabel} from '../lib/memory-query.js';
 import {createUnifiedStateStore} from '../lib/storage/state-store.js';
 import {sourceBodyHash} from '../lib/source-lineage.js';
 import {vaultMemoryStore} from './vault-memory.js';
@@ -80,6 +81,10 @@ test('personal notes and explicit ordinary files are indexed while 0.3 memory_id
   assert.ok(rows.every(row=>!row.id.startsWith('legacy-note:')));
   for(const row of rows)assert.equal((await f.resolve(row)).source.permalink,row.anchor.ref.identifier);
   assert.equal((await f.resolve(rows[0])).text,'Fictional note');
+  // The frontmatter title (Chosen) differs from the permalink stem (chosen); the label names the title.
+  const chosenRecord=await f.resolve(rows[2]);
+  assert.equal(chosenRecord.title,'Chosen');
+  assert.match(recordLabel(chosenRecord),/^检索资料 · Chosen( · 写于 .+)?$/u);
   const reads=f.store.calls.filter(call=>call.name==='read').map(call=>call.identifier);
   assert.ok(reads.includes(legacyChosen.file_path));
   assert.equal(reads.some(identifier=>['chats/facts/Fact.md','chats/events/Event.md','chats/history/History.md'].includes(identifier)),false);

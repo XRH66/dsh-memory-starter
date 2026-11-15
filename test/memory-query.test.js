@@ -310,7 +310,7 @@ test('revocation cancels the shared profile load and prevents late vector work',
 
 test('vectors.query results are treated as already verified without another resolve pass',async t=>{
   let resolves=0;
-  const row={id:'vector-only',revision:'one',kind:'document',domain:'document',text:'虚构向量候选',
+  const row={id:'vector-only',revision:'one',kind:'document',domain:'document',title:'虚构手选资料',text:'虚构向量候选',
     anchor:{id:'vector-only',revision:'one',ref:{storage:'document',id:'vector-only'}}};
   const oldEntry={id:'old-entry',revision:'entry-v1',kind:'entry',domain:'entry',text:'旧条目向量',
     anchor:{id:'old-entry',revision:'entry-v1',ref:{storage:'entry',id:'old-entry'}}};
@@ -481,13 +481,13 @@ test('portable vectors pin the answer profile, resolve issued anchors and revali
       assert.deepEqual(input.profile,{id:'Qwen/Qwen3-Embedding-4B',revision:1,modelKey:'fixture-vector-space-one'});
       assert.equal(Object.isFrozen(input.profile),true);assert.notEqual(input.profile,activeProfile);
       assert.equal(input.limit,10);assert.ok(Number.isFinite(input.deadline));assert.equal(input.signal.aborted,false);
-      return {records:[{id:'vector-document',revision:staleRevision?'old-revision':'document-v1',kind:'document',domain:'document',
+      return {records:[{id:'vector-document',revision:staleRevision?'old-revision':'document-v1',kind:'document',domain:'document',title:'虚构搬运资料',
         text:staleRevision?'虚构旧正文':source.text,sourceStatus:{eligible:true,manualBody:true},
         anchor:{id:'vector-document',revision:staleRevision?'old-revision':'document-v1',ref:{storage:'document',id:'vector-document'}},similarity:1}]};
     },
     async resolveDocument(input){
       if(staleRevision)return null;
-      return {id:'vector-document',revision:'document-v1',kind:'document',domain:'document',text:source.text,
+      return {id:'vector-document',revision:'document-v1',kind:'document',domain:'document',title:'虚构搬运资料',text:source.text,
         sourceStatus:{eligible:true,manualBody:true},anchor:{id:'vector-document',revision:'document-v1',ref:{storage:'document',id:'vector-document'}}};
     },
   };
@@ -502,7 +502,7 @@ test('portable vectors pin the answer profile, resolve issued anchors and revali
   firstProfile.revision=99;
   activeProfile={id:'Qwen/Qwen3-Embedding-0.6B',revision:2,modelKey:'fixture-vector-space-two'};
   const opened=await tools[1].execute({ref:found.records[0].ref},exec);
-  assert.match(opened.records[0].label,/记忆条目/u);assert.equal(opened.records[0].text,source.text);
+  assert.match(opened.records[0].label,/^检索资料 · 虚构搬运资料/u);assert.equal(opened.records[0].text,source.text);
   staleRevision=true;
   const next=await tools[0].execute({query:'换一组线索'},exec);
   assert.deepEqual(resultIds(f.answer,next),['vector-document']);
@@ -529,12 +529,40 @@ test('search records carry a readable personal time next to epoch milliseconds',
   assert.equal(localTime(undefined),undefined);assert.equal(VECTOR_LANE_LIMIT,10);
 });
 
-test('records carry a label saying original or entry, speaker, progress and time',async()=>{
+test('records label originals and persona documents without legacy-entry wording',async()=>{
   const {recordLabel}=await import('../lib/memory-query.js');
   assert.match(recordLabel({kind:'original',role:'user',time:Date.UTC(2026,4,8,6)}),/^原话 · 用户说 · 2026-05-0\d /u);
-  assert.equal(recordLabel({kind:'entry',type:'plan',state:{validity:'current',progress:'planned'}}),'记忆条目 · 计划（尚未发生） · 当前有效 · 依据时间 时间未知');
+  assert.equal(recordLabel({kind:'document',domain:'thoughts',time:null}),'助手自己的想法 · 写于时间不详');
+  assert.match(recordLabel({kind:'document',domain:'thoughts',time:Date.UTC(2026,4,8,6)}),/^助手自己的想法 · 写于 2026-05-0\d /u);
+  assert.equal(recordLabel({kind:'document',domain:'diary'}),'助手自己的日记 · 写于时间不详');
+  assert.equal(recordLabel({kind:'document',domain:'document',title:'虚构手选资料',time:null}),'检索资料 · 虚构手选资料');
+  assert.equal(recordLabel({kind:'document',domain:'document',source:{permalink:'personal/manual/虚构-手选资料'},time:null}),'检索资料 · 虚构 手选资料');
+  assert.equal(recordLabel({kind:'document',domain:'document',text:'# 虚构标题\n正文',time:null}),'检索资料 · 虚构标题');
+  assert.match(recordLabel({kind:'document',domain:'document',title:'虚构手选资料',time:Date.UTC(2026,4,8,6)}),/^检索资料 · 虚构手选资料 · 写于 2026-05-0\d /u);
+  const labels=[
+    recordLabel({kind:'document',domain:'thoughts',time:null}),
+    recordLabel({kind:'document',domain:'diary'}),
+    recordLabel({kind:'document',domain:'document',title:'虚构手选资料',time:null}),
+  ].join('\n');
+  assert.doesNotMatch(labels,/记忆条目|有效性未知/u);
   assert.match(recordLabel({kind:'original',role:'user',text:'我以前的杯子是什么？  ',time:0}),/ · 当时的提问$/u);
   assert.doesNotMatch(recordLabel({kind:'original',role:'assistant',text:'你想问什么？',time:0}),/当时的提问/u);
+});
+
+test('memory_search and memory_open label an assistant diary as persona writing',async t=>{
+  const original=personalTimeZone();t.after(()=>setPersonalTimeZone(original));setPersonalTimeZone('Asia/Shanghai');
+  const row={id:'persona-diary',revision:'v1',kind:'document',domain:'diary',title:'Dafeiyu Diary 2026-05-08',
+    text:'虚构的雨后树影，我想留住那些安静的细节。',time:Date.UTC(2026,4,8,6),
+    anchor:{id:'persona-diary',revision:'v1',ref:{storage:'document',id:'persona-diary'}}};
+  const vectors={async getSnapshot(){return {id:'fixture',revision:1};},async query(){return {records:[row]};},
+    async resolveDocument(){return row;}};
+  const f=await fixture(t,{vectors});
+  const found=await f.answer.search({query:'雨后的树影'});
+  assert.equal(found.records.length,1);
+  assert.match(found.records[0].label,/^助手自己的日记 · 写于 2026-05-08 /u);
+  assert.doesNotMatch(found.records[0].label,/记忆条目|有效性未知/u);
+  const opened=await f.answer.expand({ref:found.records[0].ref});
+  assert.equal(opened.records[0].label,found.records[0].label);
 });
 
 test('a memory-enabled turn carries one merged answer-rules message',async t=>{

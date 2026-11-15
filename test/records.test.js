@@ -3,16 +3,23 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveConfig } from '../lib/config.js';
 import { createRecordsTool } from '../lib/records.js';
 import { setPersonalTimeZone } from '../lib/personal-namespace.js';
 import { vaultMemoryStore } from './vault-memory.js';
-import {formatBytes} from '../lib/review.js';
 
 setPersonalTimeZone('Asia/Shanghai');
 
 const NOW = () => new Date('2026-10-24T04:00:00.000Z');
 const memoryStore = vault => vaultMemoryStore({vault});
+function formatBytes(value) {
+  if (value === null || value === undefined || value === '') return '未统计';
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return '未统计';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+  return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
 async function makeVault(){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'dafeiyu-records-'));
   const vault=path.join(root,'vault');
@@ -398,6 +405,70 @@ test('a migrated old record keeps its note-level first-record date after a save'
     const finalContent = store.notes.get(permalink).content;
     assert.equal((finalContent.match(/- 笔记首次记录:/g) || []).length, 1);
     assert.match(finalContent, /- 笔记首次记录: 2026-10-24 21:42/);
+  } finally {
+    await fs.rm(path.dirname(vault), { recursive: true, force: true });
+  }
+});
+
+test('existing personal notes with legacy priority fields still list, read, search and save', async () => {
+  const vault = await makeVault();
+  const store = await memoryStore(vault);
+  const tool = makeTool(store, vault);
+  const marker = '<!-- dsh-entry:{"id":"legacy-priority","base_priority":0.25,"half_life_days":365,"reinforcement_count":2} -->';
+  const content = [
+    '<!-- dafeiyu-record kind=thoughts -->',
+    '# Legacy Priority',
+    '',
+    '## 12:00',
+    marker,
+    '- 发生日期: 2026-10-20',
+    '- 记录日期: 2026-10-24 12:00',
+    '旧优先级字段里的虚构想法。',
+    '',
+  ].join('\n');
+  try {
+    const written = await store.backend.write({
+      title: 'Legacy Priority',
+      directory: 'dafeiyu/thoughts',
+      content,
+      metadata: {
+        dafeiyu: 'true',
+        dafeiyu_kind: 'thoughts',
+        subjective: 'true',
+        status: 'active',
+        recorded_at: '2026-10-24T04:00:00.000Z',
+        base_priority: 0.25,
+        half_life_days: 365,
+        reinforcement_count: 2,
+      },
+      tags: ['dafeiyu', 'dafeiyu-thoughts', 'subjective'],
+    });
+
+    const listed = await call(tool, { action: 'list', kind: 'thoughts' });
+    assert.equal(listed.ok, true);
+    assert.equal(listed.records[0].permalink, written.permalink);
+
+    const read = await call(tool, { action: 'read', kind: 'thoughts', title: written.permalink });
+    assert.equal(read.ok, true);
+    assert.equal(read.entries[0].text, '旧优先级字段里的虚构想法。');
+
+    const searched = await call(tool, { action: 'search', kind: 'thoughts', query: '虚构想法' });
+    assert.equal(searched.ok, true);
+    assert.equal(searched.results[0].permalink, written.permalink);
+
+    const saved = await call(tool, {
+      action: 'save',
+      kind: 'thoughts',
+      title: written.permalink,
+      entryIndex: 1,
+      expectedChecksum: read.checksum,
+      text: '修订后的虚构想法。',
+    });
+    assert.equal(saved.ok, true);
+    const after = await fs.readFile(path.join(vault, written.file_path), 'utf8');
+    assert.match(after, /base_priority: "?0\.25"?/);
+    assert.match(after, /"base_priority":0\.25/);
+    assert.match(after, /修订后的虚构想法/);
   } finally {
     await fs.rm(path.dirname(vault), { recursive: true, force: true });
   }
