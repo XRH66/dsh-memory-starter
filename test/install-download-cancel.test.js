@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { verifiedDownload, userCancel } from '../lib/raw-rag/install-download.js';
+import { verifiedDownload, userCancel } from '../lib/raw-rag/local/install-download.js';
 import { scratchDirectory } from './helpers.js';
 
 // A fictional artifact served in small chunks; the download is aborted after the first chunk lands.

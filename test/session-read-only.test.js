@@ -133,7 +133,7 @@ test('controller persists read-only independently from memory enablement',async 
 });
 
 test('a read-only turn cannot admit originals, authorize sources, notify vectors or complete handoff',async t=>{
-  const f=await fixture(t,{recentContext:false,rawRecall:true});
+  const f=await fixture(t,{recentContext:false,rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5'});
   const agent=f.actor(),raw=new RawMemoryStore(f.config.rawRecallDbPath,logger);
   const bridge=f.bridge({raw});
   await bridge.waitForIdle();
@@ -175,6 +175,7 @@ test('a read-only turn cannot admit originals, authorize sources, notify vectors
 });
 
 test('read-only keeps prefetch, memory_search and first-turn handoff while suppressing the current turn',async t=>{
+  // Runs on the fresh cloud default with no model name: text search, prefetch and handoff keep working.
   const f=await fixture(t,{autoRecall:true,recentContext:true,rawRecall:true});
   const source=f.actor('session-read-source'),reader=f.actor('session-read-only-reader');
   const raw=new RawMemoryStore(f.config.rawRecallDbPath,logger),bridge=f.bridge({raw});

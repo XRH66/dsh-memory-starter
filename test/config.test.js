@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Config, DEFAULT_CONFIG, resolveConfig } from '../lib/config.js';
 import { hostTimeZone } from '../lib/personal-namespace.js';
+import { rawModelSpec } from '../lib/raw-rag/models.js';
 
 test('config defaults apply the product limits without a session allowlist', () => {
   const config = resolveConfig({});
@@ -11,6 +12,8 @@ test('config defaults apply the product limits without a session allowlist', () 
   assert.equal(config.autoRecall, true);
   assert.equal(config.rawRecallMinScore, null);
   assert.equal(config.rawRecallQueryWaitMs, 0);
+  assert.equal(config.rawRecallModel, 'custom-api');
+  assert.throws(() => rawModelSpec(config), /模型名称/);
   assert.equal(config.captureFolder, 'chats');
   assert.deepEqual([
     config.prefetchMaxChars, config.prefetchMaxRecords, config.prefetchMinLexical,
@@ -18,6 +21,14 @@ test('config defaults apply the product limits without a session allowlist', () 
     config.prefetchRerankCandidates,
   ], [1000, 3, 0.6, 0.1, 0.02, 0.5, 16]);
   assert.equal(resolveConfig({}).autoCapture, undefined);
+});
+
+test('old configurations preserve explicit and default-local embedding choices', () => {
+  assert.equal(resolveConfig({ rawRecallModel: 'BAAI/bge-small-zh-v1.5' }).rawRecallModel,
+    'BAAI/bge-small-zh-v1.5');
+  const receipt = resolveConfig({ rawRecallInstallReceipt: '/fictional/default-local-receipt.json' });
+  assert.equal(receipt.rawRecallModel, 'BAAI/bge-small-zh-v1.5');
+  assert.equal(rawModelSpec(receipt).engine, 'fastembed');
 });
 
 test('prefetch thresholds validate their bounds and integer fields', () => {

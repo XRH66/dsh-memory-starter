@@ -67,4 +67,4 @@ Suzu 固定核心的闭包只使用内部包及 Node 内置模块；内部导入
 
 API 型号通过服务商 endpoint 调用，模型不在包中；服务使用条款、计费和数据处理按所选服务商执行。软件许可与服务条款分别适用。
 
-原始安装资源、固定版本及已有校验值见 [install-catalog.js](lib/raw-rag/install-catalog.js)。直接 Python 依赖虽固定版本，传递依赖未全部锁定；手动已有制品应保留其实际来源记录，不能以 catalog 替它追认。
+原始安装资源、固定版本及已有校验值见 [install-catalog.js](lib/raw-rag/local/install-catalog.js)。直接 Python 依赖虽固定版本，传递依赖未全部锁定；手动已有制品应保留其实际来源记录，不能以 catalog 替它追认。

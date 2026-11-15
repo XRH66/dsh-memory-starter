@@ -163,7 +163,7 @@ async function fixture(t) {
   await write(directory,'deployment.json',JSON.stringify({
     ownerDirectory:owner,
     ownerSubject:'fictional-cli-owner',
-    memory:{rawRecall:true,rawRecallDbPath:dbFile},
+    memory:{rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5',rawRecallDbPath:dbFile},
   }));
   await fs.mkdir(path.dirname(dbFile),{recursive:true});
   new RawMemoryStore(dbFile,{warn(){}}).close();

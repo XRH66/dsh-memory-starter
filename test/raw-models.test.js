@@ -62,6 +62,7 @@ test('a custom API request names the served model and does not ask for a size', 
 });
 
 test('an explicit raw recall similarity floor overrides the model default', () => {
+  assert.equal(minSimilarityFor(resolveConfig({})),0.30);
   const config = resolveConfig({rawRecallModel:'BAAI/bge-small-zh-v1.5', rawRecallMinScore:0.2});
   assert.equal(minSimilarityFor(config), 0.2);
 });
@@ -108,6 +109,7 @@ test('custom BGE-M3 remains provider-embedding without a query prefix or contrac
 });
 
 test('query wait follows model, device and explicit override', () => {
+  assert.equal(queryWaitFor(resolveConfig({})),4000);
   assert.equal(queryWaitFor(resolveConfig({rawRecallModel:'BAAI/bge-small-zh-v1.5'})),2500);
   assert.equal(queryWaitFor(resolveConfig({rawRecallModel:'Qwen/Qwen3-Embedding-0.6B'})),2500);
   assert.equal(queryWaitFor(resolveConfig({rawRecallModel:'Qwen/Qwen3-Embedding-4B'})),2000);

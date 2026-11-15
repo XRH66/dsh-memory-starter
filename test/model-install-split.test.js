@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createModelInstaller } from '../lib/raw-rag/install.js';
-import { PYTHON_PACKAGES, FASTEMBED_PACKAGE } from '../lib/raw-rag/install-catalog.js';
+import { createModelInstaller } from '../lib/raw-rag/local/install.js';
+import { PYTHON_PACKAGES, FASTEMBED_PACKAGE } from '../lib/raw-rag/local/install-catalog.js';
 import { scratchDirectory } from './helpers.js';
 
 const CURRENT='Qwen/Qwen3-Embedding-4B';

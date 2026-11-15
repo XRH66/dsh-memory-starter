@@ -113,6 +113,13 @@ const runtime=()=>({ok:true,vectors:{activeProfileId:MODEL,selectedProfileId:MOD
     batches:[{id:'batch-one',state:'held',error:'MEMORY_INTERRUPTED_REVIEW_REQUIRED'}]}});
 const component=(tree,name)=>{const node=nodes(tree,n=>typeof n.type==='function'&&n.type.name===name)[0];assert.ok(node,'Missing component: '+name);return node;};
 const select=(tree,label)=>{const node=nodes(tree,n=>n.type==='select'&&n.props['aria-label']===label)[0];assert.ok(node,'Missing select: '+label);return node;};
+const localDetails=tree=>nodes(tree,n=>n.type==='details'&&text(n).startsWith('本地模型（可选）'))[0];
+async function openLocal(host){
+  const details=localDetails(host.tree);assert.ok(details,'Missing local model section');
+  if(!details.props.open){details.props.onToggle({currentTarget:{open:true}});await host.flush();}
+  return select(host.tree,'本地模型');
+}
+async function chooseLocal(host,id){await openLocal(host);select(host.tree,'本地模型').props.onChange({target:{value:id}});await host.flush();}
 const field=(tree,label)=>{const parent=nodes(tree,n=>n.type==='label'&&text(n).startsWith(label))[0];assert.ok(parent,'Missing field: '+label);return nodes(parent,n=>n.type==='input')[0];};
 // A status line: name (and optional meta) on the left, value on the right.
 const rowOf=(tree,name)=>{const node=nodes(tree,n=>n.props?.className==='memory-row'&&text(children(children(n)[0])[0]).startsWith(name))[0];assert.ok(node,'Missing row: '+name);
@@ -152,23 +159,11 @@ test('maintenance time zone shows the active and host zones and saves the config
   assert.deepEqual(JSON.parse(JSON.stringify(write.body)),{timeZone:'Asia/Shanghai',revision:'r1'});
 });
 
-test('cloud expert settings keep only environment and timing fields and preserve the saved endpoint',async t=>{
+test('cloud models hide the local files, threads and timing expert panel',async t=>{
   const info=snapshot();info.rawModel={fields:{rawRecallModel:CLOUD,rawRecallApiBase:'https://fictional-a.example/v1',rawRecallApiKeyEnv:'FICTIONAL_A_KEY',rawRecallAllowCloud:true}};
-  const env=environment(()=>info);t.after(()=>env.close());const {model}=await modelPage(env);
-  assert.equal(rowOf(model.tree,'当前模型').value,'云端 v4');assert.match(rowOf(model.tree,'当前模型').meta,/更换模型请到「检索模型」页/);
-  assert.equal(nodes(model.tree,n=>n.type==='label'&&text(n).startsWith('API 地址')).length,0);
-  assert.equal(nodes(model.tree,n=>n.type==='input'&&n.props.type==='password').length,0);
-  assert.doesNotMatch(text(model.tree),/复用.*密钥|允许云端|向量维度/);
-  button(model.tree,'专家模式').props.onClick();await model.flush();
-  assert.equal(field(model.tree,'API Key 环境变量').props.value,'FICTIONAL_A_KEY');
-  field(model.tree,'API Key 环境变量').props.onChange({target:{value:'FICTIONAL_B_KEY'}});await model.flush();
-  field(model.tree,'检索总等待（毫秒，0 为自动）').props.onChange({target:{value:'2500'}});await model.flush();
-  await button(model.tree,'应用运行设置').props.onClick();await model.flush();
-  const call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');
-  assert.equal(call.body.settings.rawRecallApiBase,'https://fictional-a.example/v1');
-  assert.equal(call.body.settings.rawRecallApiKeyEnv,'FICTIONAL_B_KEY');
-  assert.equal(call.body.settings.rawRecallQueryWaitMs,2500);
-  assert.equal(call.body.apiKey,undefined);assert.equal(call.body.reuseApiKey,undefined);
+  const env=environment(()=>info);t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'维护').props.onClick();await page.flush();
+  assert.equal(nodes(page.tree,n=>typeof n.type==='function'&&n.type.name==='RawModelSettings').length,0);
 });
 
 test('settings page recognizes the active Include entry at a frozen version file URI',async t=>{
@@ -257,7 +252,7 @@ test('the model picker shows device choices only for llamacpp and saves onnx mod
   assert.equal(nodes(device,n=>n.type==='option'&&n.props.value==='cuda')[0].props.disabled,undefined);
   device.props.onChange({target:{value:'cuda'}});await picker.flush();
   assert.equal(select(picker.tree,'运行设备').props.value,'cuda');
-  select(picker.tree,'检索模型').props.onChange({target:{value:OTHER_LOCAL}});await picker.flush();
+  await chooseLocal(picker,OTHER_LOCAL);
   assert.equal(nodes(picker.tree,n=>n.type==='select'&&n.props['aria-label']==='运行设备').length,0);
   assert.match(text(picker.tree),/此模型只用 CPU。/);
   await button(picker.tree,'保存').props.onClick();await picker.flush();
@@ -280,10 +275,11 @@ test('the expert panel hides device choices for an onnx model without mentioning
 
 test('cloud models never show local device, path or lifecycle controls in the expert panel',async t=>{
   const info=snapshot();info.rawModel={fields:{rawRecallModel:CLOUD,rawRecallApiBase:'https://fictional-a.example/v1',rawRecallAllowCloud:true}};
-  const env=environment(()=>info);t.after(()=>env.close());const {model}=await modelPage(env);
-  assert.equal(nodes(model.tree,n=>n.type==='select'&&n.props['aria-label']==='运行设备').length,0);
-  assert.equal(nodes(model.tree,n=>n.type==='input'&&n.props.value==='/fixture/llama.exe').length,0);
-  assert.equal(nodes(model.tree,n=>n.type?.name==='MemoryRuntimeSettings').length,0);
+  const env=environment(()=>info);t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'维护').props.onClick();await page.flush();
+  assert.equal(nodes(page.tree,n=>n.type==='select'&&n.props['aria-label']==='运行设备').length,0);
+  assert.equal(nodes(page.tree,n=>n.type==='input'&&n.props.value==='/fixture/llama.exe').length,0);
+  assert.equal(nodes(page.tree,n=>typeof n.type==='function'&&n.type.name==='RawModelSettings').length,0);
   const {view}=await statusRuntime(env);
   assert.equal(nodes(view.tree,n=>n.type==='button'&&['加载／预热','释放运行资源'].includes(text(n))).length,0);
   assert.equal(writes(env).length,0);
@@ -522,8 +518,9 @@ test('the model tab offers a dropdown of models and saving a cloud choice requir
   const select=nodes(picker.tree,n=>n.type==='select'&&n.props['aria-label']==='检索模型')[0];assert.ok(select);
   const options=nodes(select,n=>n.type==='option');
   assert.ok(options.length>=2);assert.equal(options.filter(n=>n.props.value===select.props.value).length,1);
-  assert.deepEqual(nodes(select,n=>n.type==='optgroup').map(n=>n.props.label),['本地运行','云端 API']);
+  assert.deepEqual(options.filter(n=>n.props.value).map(n=>n.props.value),[CLOUD]);
   assert.ok(options.some(n=>n.props.value===CLOUD&&text(n).includes('云端 · v4')));
+  assert.equal(localDetails(picker.tree).props.open,true,'the current local model opens its optional section');
   select.props.onChange({target:{value:CLOUD}});await picker.flush();
   assert.equal(button(picker.tree,'保存').props.disabled,true);
   assert.match(text(picker.tree),/保存并重启后会自动建索引，费用按服务商价格计算/);
@@ -532,6 +529,31 @@ test('the model tab offers a dropdown of models and saving a cloud choice requir
   const call=writes(env).at(-1);assert.equal(call.path,BASE+'/model');assert.equal(call.body.settings.rawRecallModel,CLOUD);assert.equal(call.body.settings.rawRecallAllowCloud,true);
   assert.equal(call.body.confirmSwitch,true);assert.equal(call.body.cloudConfirmed,true);
   assert.match(text(picker.tree),/建索引会把纳入索引的内容发送到服务商并计费/);
+});
+
+test('a fresh cloud default keeps local models collapsed and makes no install request',async t=>{
+  const info=snapshot();
+  info.rawModel={fields:{rawRecallModel:'custom-api',rawRecallApiBase:'https://fictional.example/v1',
+    rawRecallApiModel:'',rawRecallDimensions:1024,rawRecallAllowCloud:false},error:'请填写自定义 API 的模型名称'};
+  info.flags={autoRecall:true,recentContext:true,rawRecall:false};
+  info.rawModels=[...info.rawModels,{id:'custom-api',label:'自定义 API（OpenAI 兼容）',tier:'cloud',
+    engine:'api',cloud:true,custom:true,dimensions:1024}];
+  const env=environment(()=>info);t.after(()=>env.close());
+  const page=env.page();await page.flush();
+  const rawRow=nodes(page.tree,node=>node.props?.className==='memory-row'&&text(node).startsWith('原话检索'))[0];
+  assert.ok(rawRow);
+  const rawHelp=nodes(rawRow,node=>typeof node.type==='function'&&node.type.name==='Help')[0];
+  assert.ok(rawHelp);assert.match(rawHelp.props.text,/填写云端向量服务/);
+  button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  const select=nodes(picker.tree,node=>node.type==='select'&&node.props['aria-label']==='检索模型')[0];
+  const offered=nodes(select,node=>node.type==='option'&&node.props.value).map(node=>node.props.value);
+  assert.ok(offered.includes('custom-api'));
+  assert.equal(offered.some(id=>[MODEL,OTHER_LOCAL,LARGE_LOCAL].includes(id)),false);
+  assert.equal(localDetails(picker.tree).props.open,false);
+  assert.equal(nodes(picker.tree,node=>node.type==='select'&&node.props['aria-label']==='本地模型').length,0);
+  assert.match(text(picker.tree),/请填写云端向量服务地址、模型名称和 API Key/);
+  assert.equal(env.calls.some(call=>call.path===BASE+'/model-install'),false);
 });
 
 test('a custom API model needs an address and a model name, and vendor presets are not offered',async t=>{
@@ -703,7 +725,7 @@ test('local model inventory marks installed and missing choices without repeatin
   });t.after(()=>env.close());
   const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
   const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
-  const options=nodes(select(picker.tree,'检索模型'),node=>node.type==='option');
+  const options=nodes(await openLocal(picker),node=>node.type==='option');
   const option=id=>text(options.find(node=>node.props.value===id));
   assert.match(option(MODEL),/当前使用/);assert.doesNotMatch(option(MODEL),/已安装/);
   assert.match(option(OTHER_LOCAL),/未安装/);assert.match(option(LARGE_LOCAL),/已安装/);
@@ -719,8 +741,8 @@ test('choosing another model and returning to the one in use saves its original 
   });t.after(()=>env.close());
   const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
   const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
-  select(picker.tree,'检索模型').props.onChange({target:{value:LARGE_LOCAL}});await picker.flush();
-  select(picker.tree,'检索模型').props.onChange({target:{value:MODEL}});await picker.flush();
+  await chooseLocal(picker,LARGE_LOCAL);
+  await chooseLocal(picker,MODEL);
   const residency=nodes(nodes(picker.tree,n=>n.type==='label'&&text(n).startsWith('模型常驻'))[0],n=>n.type==='select')[0];
   residency.props.onChange({target:{value:'idle'}});await picker.flush();
   await button(picker.tree,'保存').props.onClick();await picker.flush();
@@ -742,7 +764,7 @@ test('a missing local model can download files but cannot save or write model se
   });t.after(()=>env.close());
   const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
   const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
-  select(picker.tree,'检索模型').props.onChange({target:{value:OTHER_LOCAL}});await picker.flush();
+  await chooseLocal(picker,OTHER_LOCAL);
   assert.equal(button(picker.tree,'保存').props.disabled,true);
   const preparation=env.component(component(picker.tree,'ModelPreparation'));await preparation.flush();
   assert.match(text(preparation.tree),/尚未下载（约 585\.1 MB）。下载只保存文件，不切换模型。/);
@@ -767,7 +789,7 @@ test('a model preparation plan response uses its own callback and never a siblin
   });t.after(()=>env.close());
   const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
   const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
-  select(picker.tree,'检索模型').props.onChange({target:{value:OTHER_LOCAL}});await picker.flush();
+  await chooseLocal(picker,OTHER_LOCAL);
   const node=component(picker.tree,'ModelPreparation');
   const preparation=env.component({...node,props:{...node.props,onPlan:value=>plans.push(value)}});await preparation.flush();
   await button(preparation.tree,'下载').props.onClick();await preparation.flush();
@@ -795,7 +817,7 @@ test('a completed download refreshes inventory and saves the installed paths',as
   });t.after(()=>env.close());
   const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
   const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
-  select(picker.tree,'检索模型').props.onChange({target:{value:OTHER_LOCAL}});await picker.flush();
+  await chooseLocal(picker,OTHER_LOCAL);
   const preparation=env.component(component(picker.tree,'ModelPreparation'));await preparation.flush();
   await button(preparation.tree,'下载').props.onClick();await preparation.flush();
   completed=true;
@@ -821,7 +843,7 @@ test('an installed local model offers save without a download button',async t=>{
   });t.after(()=>env.close());
   const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
   const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
-  select(picker.tree,'检索模型').props.onChange({target:{value:LARGE_LOCAL}});await picker.flush();
+  await chooseLocal(picker,LARGE_LOCAL);
   assert.equal(nodes(picker.tree,node=>node.type==='button'&&text(node)==='下载').length,0);
   assert.match(text(picker.tree),/已安装。点「保存」后启用。/);
   assert.equal(button(picker.tree,'保存').props.disabled,false);
@@ -856,7 +878,7 @@ test('inventory failure leaves the page usable and does not block save',async t=
   });t.after(()=>env.close());
   const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
   const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
-  select(picker.tree,'检索模型').props.onChange({target:{value:OTHER_LOCAL}});await picker.flush();
+  await chooseLocal(picker,OTHER_LOCAL);
   assert.equal(button(picker.tree,'保存').props.disabled,false);
   await button(picker.tree,'保存').props.onClick();await picker.flush();
   assert.equal(writes(env).filter(call=>call.path===BASE+'/model').length,1);

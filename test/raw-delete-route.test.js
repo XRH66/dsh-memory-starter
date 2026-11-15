@@ -25,7 +25,7 @@ async function fixture(t){
   const sessions={get:id=>id===agent.session.id?agent.session:null};
   const access=await createSessionMemory({directory,ownerSubject:owner,agents,sessions,logger});
   const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecallDbPath:path.join(directory,'raw.sqlite'),
-    rawRecall:true,autoCapture:false,recentContext:false,maxTimelineEntries:0,maxIndexNotes:0});
+    rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5',autoCapture:false,recentContext:false,maxTimelineEntries:0,maxIndexNotes:0});
   await fs.mkdir(config.vaultPath,{recursive:true});
   const store=new RawMemoryStore(config.rawRecallDbPath,logger);
   const bridge=createBridge({config,tools:fakeTools(()=>{throw Error('unexpected tool call');}),llm:fakeLlm('{"actions":[]}'),access,

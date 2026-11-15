@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { findPython } from '../lib/raw-rag/install-files.js';
+import { findPython } from '../lib/raw-rag/local/install-files.js';
 
 test('an inaccessible automatic Python alias cannot block a usable runtime; explicit paths report their error', async t => {
   const parent = path.resolve(os.tmpdir()), root = await fs.mkdtemp(path.join(parent, 'dsh-python-discovery-'));

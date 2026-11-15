@@ -37,7 +37,7 @@
 
 ## 安装来源、固定版本与许可
 
-来源、完整 revision、文件名、大小与 SHA-256 以随包 [安装 catalog](lib/raw-rag/install-catalog.js) 为权威；下表是 2026-11-06 快照。Python 的固定版本仅覆盖直接依赖，传递依赖未完整锁定。
+来源、完整 revision、文件名、大小与 SHA-256 以随包 [安装 catalog](lib/raw-rag/local/install-catalog.js) 为权威；下表是 2026-11-06 快照。Python 的固定版本仅覆盖直接依赖，传递依赖未完整锁定。
 
 | 组件 | 安装来源与固定版本 | 许可声明与原文入口 |
 | --- | --- | --- |

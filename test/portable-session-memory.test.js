@@ -126,7 +126,8 @@ test('retired organizer settings are ignored while originals continue to save',a
 });
 
 test('unified vectors own retrieval without opening any session grant',async t=>{
-  const f=await fixture(t,{rawRecall:true}),agent=f.actor();
+  // The fresh cloud default with no model name yet: the runtime status must still load.
+  const f=await fixture(t,{rawRecall:true}),agent=f.actor();assert.equal(f.config.rawRecallModel,'custom-api');
   const runtime=await createPersonalMemoryRuntime({directory:f.directory,config:f.config,access:f.access,llm:fakeLlm('{"items":[],"changes":[]}'),
     findAgent:id=>id===agent.session.id?agent:null,listAgents:()=>[agent],logger});
   f.disposals.push(()=>runtime.close());
@@ -170,7 +171,7 @@ test('native message commits save both message bodies immediately without vector
 });
 
 test('raw commits keep notifying vector consumers when a notification fails',async t=>{
-  const f=await fixture(t,{rawRecall:true,autoCapture:false}),agent=f.actor(),warnings=[];
+  const f=await fixture(t,{rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5',autoCapture:false}),agent=f.actor(),warnings=[];
   const bridge=f.bridge(undefined,{logger:{warn:message=>warnings.push(message)}});
   const vector=[];
   bridge.vectors.notifyChanged=notice=>{
@@ -437,7 +438,7 @@ test('pre-step prefetch never spends the model query budget; an explicit memory 
 });
 
 test('a delayed recall result is discarded after close and reopen rather than using the new epoch',async t=>{
-  const f=await fixture(t,{rawRecall:true,autoRecall:false}),agent=f.actor();await f.access.set(agent.session.id,true);
+  const f=await fixture(t,{rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5',autoRecall:false}),agent=f.actor();await f.access.set(agent.session.id,true);
   const entered=deferred(),release=deferred();
   const bridge=f.bridge(),user=f.begin(agent,1,bridge);
   assert.ok(bridge.vectors,'raw recall mounts the vector index');

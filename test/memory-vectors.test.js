@@ -18,7 +18,7 @@ async function maintenanceFixture(t){
   const owner=await fs.mkdtemp(path.join(os.tmpdir(),'vector-maintenance-'));
   const dbFile=path.join(owner,'management','raw-recall','raw-recall.sqlite');
   const store=new RawMemoryStore(dbFile),scope='fictional-owner';
-  const config={rawRecall:true,rawRecallDbPath:dbFile,vaultPath:path.join(owner,'vault'),project:'main'};
+  const config={rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5',rawRecallDbPath:dbFile,vaultPath:path.join(owner,'vault'),project:'main'};
   await fs.mkdir(config.vaultPath);
   const raw=createRawRecall({config,ownerSubject:scope,store});raw.useExternalVectors();
   const turn=buildTurn({scope,sessionId:'maintenance-session',turn:1,completedAt:1000,messages:[

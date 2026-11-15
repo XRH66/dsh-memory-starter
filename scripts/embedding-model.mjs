@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import {setTimeout as delay} from 'node:timers/promises';
 import path from 'node:path';
-import {createModelInstaller} from '../lib/raw-rag/install.js';
+import {createModelInstaller} from '../lib/raw-rag/local/install.js';
 import {readDeploymentModelConfiguration,stageDeploymentRawModel} from '../lib/deployment-config.js';
-import {inspectSelectedInstallation} from '../lib/raw-rag/install-files.js';
+import {inspectSelectedInstallation} from '../lib/raw-rag/local/install-files.js';
 const [action,...args]=process.argv.slice(2),options={};
 for(let index=0;index<args.length;index++){
   const name=args[index];if(!name.startsWith('--'))throw Error('请使用命名参数');
