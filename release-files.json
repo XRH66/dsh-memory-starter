@@ -128,6 +128,7 @@
   "test/assistant-provenance.test.js",
   "test/current-state-recency.test.js",
   "test/monotonic.test.js",
+  "test/host-stall-timing.test.js",
   "test/prefetch-noise.test.js",
   "test/query-speed.test.js",
   "test/memory-rerank.test.js",

@@ -10,6 +10,7 @@ import {ANSWER_RULES,createMemoryQueryAnswer,createMemoryQueryTools,selectPrefet
 import {createBridge} from '../lib/index.js';
 import {createUnifiedProfiles} from '../lib/storage/profiles.js';
 import {resolveConfig} from '../lib/config.js';
+import {createStopwatch} from '../lib/monotonic.js';
 import {applyInheritRecords} from '../lib/inherit/importer.js';
 import {convertLegacyVault} from '../lib/inherit/vault.js';
 import {personalTimeZone,setPersonalTimeZone} from '../lib/personal-namespace.js';
@@ -125,11 +126,11 @@ test('short originals stay out of search ranking but remain available to recent 
 });
 
 test('recent bypasses vector configuration and later searches share a pending answer snapshot',async t=>{
-  let release,entered,textEntered=false,snapshots=0;
+  let release,entered,textEntered=false,snapshots=0,monotonic=0;
   const pendingProfile=new Promise(resolve=>release=resolve),textStarted=new Promise(resolve=>entered=resolve);
   const profiles=[];
   const vectors={getSnapshot(){snapshots++;return pendingProfile;},async query({profile}){profiles.push(profile);return {records:[]};}};
-  const f=await fixture(t,{vectors});
+  const f=await fixture(t,{vectors,elapsed:()=>monotonic});
   const first=f.save({text:'只有周末有空才整理书架。'});
   const queryReader=f.raw.queryReader.bind(f.raw);
   f.raw.queryReader=(...args)=>{const reader=queryReader(...args);return {...reader,search(input){textEntered=true;entered();return reader.search(input);}};};
@@ -142,7 +143,7 @@ test('recent bypasses vector configuration and later searches share a pending an
   const waiting=f.answer.search({query:'桌面'});
   for(let index=0;index<6&&!textEntered;index++)await nextTurn();
   assert.equal(textEntered,true,'text lanes continue while the vector profile is pending');
-  t.mock.timers.tick(2450);
+  monotonic=2450;t.mock.timers.tick(2450);
   const partial=await Promise.race([waiting,nextTurn()]);
   assert.equal(partial?.channels.vector.state,'timeout');assert.deepEqual(resultIds(f.answer,partial),[second.id]);
   assert.equal(snapshots,1);assert.equal(profiles.length,0);
@@ -228,7 +229,7 @@ test('all timed-out lanes without a record still return TIMEOUT',async t=>{
 
 test('slow final validation falls back through the same visibility, withdrawal, auth and budget path',async t=>{
   const reports=[];let delayed=false;
-  const f=await fixture(t,{searchWaitMs:500,now:()=>0,visibleMessageIds:new Set(['visible-message']),onSearch:row=>reports.push(row)});
+  const f=await fixture(t,{searchWaitMs:500,now:()=>0,elapsed:createStopwatch(),visibleMessageIds:new Set(['visible-message']),onSearch:row=>reports.push(row)});
   const kept=f.save({messageId:'kept-message',sequence:2,text:'书架计划：周末先量尺寸。'});
   f.save({messageId:'excluded-message',sequence:3,text:'书架计划：这条已经被撤回。'});
   f.save({messageId:'visible-message',sequence:4,text:'书架计划：这条已经在眼前。'});
