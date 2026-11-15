@@ -53,19 +53,23 @@
 
 ## 从旧版本升级
 
-旧版本的记忆目录可以在「维护 → 记忆库」直接切过来使用。0.3 的旧笔记用 `scripts/inherit-memory.mjs` 搬进原话库：先运行 `check` 检查并预估向量编码量，确认后再运行 `apply`。导入前会备份原话库；每批都能用 `undo --batch` 整批排除，并用 `restore --batch` 恢复。Vault 原文件只读，不会被修改。旧的分类迁移做法已被这条导入流程取代。
-
-从这个版本起，搜索不再直接读 Vault 里的 0.3 旧笔记；升级后先运行 `scripts/inherit-memory.mjs` 导入，否则这些旧笔记搜不到。导入不会修改原文件。
+从这个版本起，搜索不再直接读 Vault 里的旧笔记。从 0.3～0.6 任何一个版本升级，旧笔记和条目都用同一个命令搬进原话库：先用 `check` 看会导入什么、跳过什么、为什么跳过，确认后再用 `apply` 导入。不导入的旧笔记搜不到。
 
 ```powershell
-node scripts/inherit-memory.mjs check --deployment <deployment.json> --vault <旧 Vault>
-node scripts/inherit-memory.mjs apply --deployment <deployment.json> --vault <旧 Vault>
-node scripts/inherit-memory.mjs list --deployment <deployment.json>
-node scripts/inherit-memory.mjs undo --deployment <deployment.json> --batch <批次号>
-node scripts/inherit-memory.mjs restore --deployment <deployment.json> --batch <批次号>
+node scripts/inherit-memory.mjs check --deployment <配置文件>
+node scripts/inherit-memory.mjs apply --deployment <配置文件>
+node scripts/inherit-memory.mjs list --deployment <配置文件>
+node scripts/inherit-memory.mjs undo --deployment <配置文件> --batch <批次号>
+node scripts/inherit-memory.mjs restore --deployment <配置文件> --batch <批次号>
 ```
 
-已导出的标准 JSONL 也可以把 `--vault` 换成 `--file`。`check --out <文件.jsonl>` 只把检查通过的转换结果写成标准格式，方便核对。
+`<配置文件>` 是首次配置页生成的 `<DSH 主目录>/profiles/<档案名>/basic-memory-bridge/configuration.json`。命令默认读取当前记忆库的 Vault；旧库在别处时，给 `check` 和 `apply` 加上 `--vault <旧 Vault>`。
+
+- **会导入**：0.3 的 `chats/facts`、`events`、`history`、`review` 笔记；0.4～0.6 中你自己写的条目和从 0.3 笔记迁过来的条目；你补写在主题页下方的文字。一篇 0.3 笔记已经迁成条目时，只导入条目。
+- **默认跳过**：整理器从对话里整理出来的条目。它们的依据就是原话库里的原话，再导一份摘要只会重复，还可能带进整理时的推断。确实想要时加 `--include-derived`。
+- **不导入**：主题页的固定内容、条目改写前的旧版本存档、只在旧数据库里的待确认整理结果。
+
+`check` 只读。`apply` 先备份原话库，不改 Vault 原文件；重复运行不会重复导入；每批可以用 `undo` 整批撤销，再用 `restore` 恢复。导入后全文检索马上能找到；开了向量检索的，到「状态」页点「准备索引」（或重启 DSH），新内容才进向量索引。没开向量检索也能导入。
 
 ## 可选：人设和状态面板
 
