@@ -53,9 +53,19 @@
 
 记忆存在本地，不代表模型推理也在本地。开启记忆的对话、后台整理的内容会发给你选的对话模型和整理模型；选用接口向量模型时，被索引的内容也会发给向量服务。密钥单独保存，页面不回显。
 
-## 从旧版本迁移
+## 从旧版本升级
 
-旧版本的记忆目录可以在「维护 → 记忆库」直接切过来使用。切到旧库后，可以在「维护 → 旧记忆迁移」把旧格式笔记一键转成新条目：程序原样搬移结构化字段，整理模型只做分类选择题，拿不准的少数条目留给你确认。旧文件不会被修改。
+旧版本的记忆目录可以在「维护 → 记忆库」直接切过来使用。0.3 的旧笔记用 `scripts/inherit-memory.mjs` 搬进原话库：先运行 `check` 检查并预估向量编码量，确认后再运行 `apply`。导入前会备份原话库；每批都能用 `undo --batch` 整批排除，并用 `restore --batch` 恢复。Vault 原文件只读，不会被修改。旧的分类迁移做法已被这条导入流程取代。
+
+```powershell
+node scripts/inherit-memory.mjs check --deployment <deployment.json> --vault <旧 Vault>
+node scripts/inherit-memory.mjs apply --deployment <deployment.json> --vault <旧 Vault>
+node scripts/inherit-memory.mjs list --deployment <deployment.json>
+node scripts/inherit-memory.mjs undo --deployment <deployment.json> --batch <批次号>
+node scripts/inherit-memory.mjs restore --deployment <deployment.json> --batch <批次号>
+```
+
+已导出的标准 JSONL 也可以把 `--vault` 换成 `--file`。`check --out <文件.jsonl>` 只把检查通过的转换结果写成标准格式，方便核对。
 
 ## 可选：人设和状态面板
 
