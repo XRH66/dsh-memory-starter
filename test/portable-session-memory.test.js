@@ -431,7 +431,8 @@ test('pre-step prefetch never spends the model query budget; an explicit memory 
   await runPreStep(bridge,{turn:1,agent,messages:[directUser('我喜欢什么杯子？','pending-user')]});
   assert.equal(bridge.getQueryState(agent.session.id),null);
   const result=await bridge.queryTools.find(tool=>tool.name==='memory_search').execute({query:'杯子'},{agent,signal:new AbortController().signal});
-  assert.equal(result.budget.calls,1);assert.ok(['empty','unavailable'].includes(result.channels.legacy.state));assert.equal(result.channels.structured,undefined);
+  assert.equal(result.budget.calls,1);assert.equal(result.status,'empty');
+  assert.equal(Object.hasOwn(result.channels,'legacy'),false);assert.equal(result.channels.structured,undefined);
   f.emit(agent,'turn/end',{turn:1,reason:{kind:'completed'}},bridge);assert.equal(bridge.getQueryState(agent.session.id),null);
 });
 
@@ -514,7 +515,7 @@ test('turn-start prefetch attaches bounded earlier originals through the read gr
   assert.ok(summary);assert.equal(summary.injected,1);assert.ok(summary.injectedChars>0);assert.ok(summary.totalMs>=0);
   assert.ok(summary.admitted>=summary.injected);assert.ok(summary.rejected>=0);assert.ok(summary.folded>=0);
   for(const key of ['lexical','vector','agree'])assert.ok(Number.isSafeInteger(summary[key]));
-  assert.deepEqual(Object.keys(summary.candidates).sort(),['legacy','original','vector']);
+  assert.deepEqual(Object.keys(summary.candidates).sort(),['original','vector']);
   assert.equal(JSON.stringify(summary).includes(firstQuery),false,'prefetch telemetry never stores the query');
   assert.equal(bridge.getQueryState(agent.session.id),null,'prefetch does not open the model query session');
   // The model sees who said it and when, with the relative day computed by the program.

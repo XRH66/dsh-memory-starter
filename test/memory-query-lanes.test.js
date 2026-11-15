@@ -32,6 +32,24 @@ test('a failed or unavailable channel cannot erase other ready results or expose
     text:async()=>({records:[row('kept')]}),structure:async()=>{throw Error('private-source-body-and-path');},vector:async()=>({state:'unavailable',records:[]}),
   }});
   assert.equal(result.channels.structure.state,'failed');assert.equal(result.channels.vector.state,'unavailable');assert.equal(result.results.text.records.length,1);assert.doesNotMatch(JSON.stringify(result),/private-source/);
+  assert.equal(result.degraded,true);
+});
+
+test('an unavailable source is complete while partial, timeout and failed work remain degraded',async()=>{
+  const unavailable=await runMemoryQueryLanes({deadline:Date.now()+1000,lanes:{
+    text:async()=>({records:[row('kept')]}),vector:async()=>({state:'unavailable',records:[]}),
+  }});
+  assert.equal(unavailable.degraded,false);
+  const partial=await runMemoryQueryLanes({deadline:Date.now()+1000,lanes:{
+    text:async()=>({records:[row('kept')],degraded:true}),
+  }});
+  assert.equal(partial.channels.text.state,'partial');assert.equal(partial.degraded,true);
+  const failed=await runMemoryQueryLanes({deadline:Date.now()+1000,lanes:{
+    text:async()=>{throw Error('fixture failed');},
+  }});
+  assert.equal(failed.channels.text.state,'failed');assert.equal(failed.degraded,true);
+  const timeout=await runMemoryQueryLanes({deadline:Date.now()-1,lanes:{text:async()=>({records:[]})}});
+  assert.equal(timeout.channels.text.state,'timeout');assert.equal(timeout.degraded,true);
 });
 
 test('a channel completing past the cutoff cannot publish before the timer callback',async()=>{

@@ -201,14 +201,15 @@ test('portable registers 4B without loading, indexes retained documents and skip
   f.note('main/manual/chosen','chosen manual');f.note('main/private/not-selected','private body never read');
   const grant=f.manager();await f.api.ready();await f.api.registerCurrentConfig({grant});
   assert.equal(f.instances.length,0);assert.equal(f.calls.some(call=>call.op.includes('read_note')),false);
-  await f.api.selectDocuments({grant,identifiers:['main/manual/chosen']});
-  const prepared=await f.api.prepare({grant});assert.equal(prepared.completed,7);
-  const coverage=await f.api.coverage({grant});assert.equal(coverage.total,7);assert.equal(coverage.caughtUp,true);
-  assert.deepEqual(Object.keys(coverage.domains).sort(),['diary','document','fact','raw','thoughts']);
+  await f.api.selectDocuments({grant,identifiers:['main/manual/chosen','main/chats/facts/old']});
+  const prepared=await f.api.prepare({grant});assert.equal(prepared.completed,6);
+  const coverage=await f.api.coverage({grant});assert.equal(coverage.total,6);assert.equal(coverage.caughtUp,true);
+  assert.deepEqual(Object.keys(coverage.domains).sort(),['diary','document','raw','thoughts']);
   const reader=f.api.forAgent(f.agent),snapshot=await reader.getSnapshot({});
   const result=await reader.query({query:'fictional',profile:snapshot,limit:40,deadline:Date.now()+2000});
-  assert.equal(result.records.length,7);assert.equal(result.profile.modelKey,'same-weight-space');
+  assert.equal(result.records.length,6);assert.equal(result.profile.modelKey,'same-weight-space');
   assert.equal(result.records.some(record=>record.id==='entry-id'),false);
+  assert.equal(result.records.some(record=>record.id.startsWith('legacy-note:')),false);
   assert.equal(f.instances.length,1);assert.equal(f.instances[0].settings.rawRecallModel,'Qwen/Qwen3-Embedding-4B');
   assert.equal(f.calls.some(call=>call.args?.identifier==='main/private/not-selected'),false);
   const catalogue=await fs.readFile(path.join(f.directory,'documents.json'),'utf8');assert.equal(catalogue.includes('chosen manual'),false);
@@ -248,6 +249,46 @@ test('an old entry vector opens without re-encoding the existing original',async
   assert.ok(prepared);
   assert.equal(documentEmbeds(),before);
   resumed.cancel();
+});
+
+test('legacy note vectors are removed during reconciliation without re-encoding the original',async t=>{
+  const f=await fixture(t);f.messages.set('m1',f.source('m1',0));
+  const grant=f.manager();await f.api.registerCurrentConfig({grant});await f.api.prepare({grant});grant.cancel();
+  const documentEmbeds=()=>f.calls.filter(call=>call.op==='embed'&&call.kind==='document').length;
+  const before=documentEmbeds();assert.equal(before,1);
+  await f.api.close();
+
+  const db=new DatabaseSync(path.join(f.directory,'vectors.sqlite'));
+  try{
+    const snapshot=db.prepare("SELECT * FROM vector_snapshots WHERE state='ready' ORDER BY created_at DESC LIMIT 1").get();
+    assert.ok(snapshot);
+    const existing=db.prepare(`SELECT d.* FROM vector_members m JOIN vector_documents d ON d.version_id=m.document_version_id
+      WHERE m.snapshot_id=? LIMIT 1`).get(snapshot.id);
+    const chunk=db.prepare('SELECT * FROM vector_chunks WHERE document_version_id=? ORDER BY ordinal LIMIT 1').get(existing.version_id);
+    db.exec('BEGIN IMMEDIATE');
+    try{
+      const inserted=db.prepare(`INSERT INTO vector_documents(owner_subject,project,index_identity,doc_id,revision,domain,source_ids,anchor)
+        VALUES(?,?,?,?,?,?,?,?)`).run(existing.owner_subject,existing.project,existing.index_identity,'legacy-note:fictional',
+        JSON.stringify('legacy-v1'),'fact',JSON.stringify(['legacy-note:fictional']),JSON.stringify({storage:'note',id:'legacy-note:fictional'}));
+      const version=Number(inserted.lastInsertRowid);
+      db.prepare(`INSERT INTO vector_chunks(document_version_id,ordinal,start,end,token_bound,text_hash,vector)
+        VALUES(?,?,?,?,?,?,?)`).run(version,chunk.ordinal,chunk.start,chunk.end,chunk.token_bound,chunk.text_hash,chunk.vector);
+      db.prepare('INSERT INTO vector_members(snapshot_id,doc_id,document_version_id) VALUES(?,?,?)').run(snapshot.id,'legacy-note:fictional',version);
+      db.exec('COMMIT');
+    }catch(error){db.exec('ROLLBACK');throw error;}
+  }finally{db.close();}
+
+  await f.restart();
+  const resumed=f.manager();t.after(()=>resumed.cancel());await f.api.registerCurrentConfig({grant:resumed});
+  const stale=await f.api.coverage({grant:resumed});
+  assert.equal(stale.removed,1);assert.equal(stale.caughtUp,false);
+  const prepared=await f.api.prepare({grant:resumed});
+  assert.equal(prepared.completed,1);
+  assert.equal(documentEmbeds(),before);
+  const coverage=await f.api.coverage({grant:resumed});
+  assert.equal(coverage.total,1);assert.equal(coverage.removed,0);assert.equal(coverage.caughtUp,true);
+  const result=await f.api.query({grant:resumed,query:'fictional',deadline:Date.now()+2000});
+  assert.equal(result.records.some(record=>record.id.startsWith('legacy-note:')),false);
 });
 
 // Pause the actual profile-file publication, after the last source scan. This
@@ -372,7 +413,7 @@ test('portable publication arms the normal timer and catches up without another 
   assert.equal((await f.api.status()).queue.completed,1);grant.cancel();
 });
 
-test('canonical, legacy and Basic Memory enumeration continue beyond the first 100',async t=>{
+test('canonical, legacy raw and Basic Memory enumeration continue beyond the first 100',async t=>{
   const f=await fixture(t);
   for(let i=0;i<101;i++){
     f.messages.set('m'+i,f.source('m'+i,i));f.legacy.set('l'+i,f.source('l'+i,i,'legacy'));

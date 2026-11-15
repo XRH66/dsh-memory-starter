@@ -55,6 +55,8 @@
 
 旧版本的记忆目录可以在「维护 → 记忆库」直接切过来使用。0.3 的旧笔记用 `scripts/inherit-memory.mjs` 搬进原话库：先运行 `check` 检查并预估向量编码量，确认后再运行 `apply`。导入前会备份原话库；每批都能用 `undo --batch` 整批排除，并用 `restore --batch` 恢复。Vault 原文件只读，不会被修改。旧的分类迁移做法已被这条导入流程取代。
 
+从这个版本起，搜索不再直接读 Vault 里的 0.3 旧笔记；升级后先运行 `scripts/inherit-memory.mjs` 导入，否则这些旧笔记搜不到。导入不会修改原文件。
+
 ```powershell
 node scripts/inherit-memory.mjs check --deployment <deployment.json> --vault <旧 Vault>
 node scripts/inherit-memory.mjs apply --deployment <deployment.json> --vault <旧 Vault>

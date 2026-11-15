@@ -1,10 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import {createHash} from 'node:crypto';
-import {createLegacyNoteReader,parseLegacyNote} from '../lib/legacy-notes.js';
+import {parseLegacyNote} from '../lib/legacy-notes.js';
 
 const NOTE=`---
 title: 用户 - 虚构宠物
@@ -27,42 +23,12 @@ tags:
 - [fact] 养了一只叫阿岑的猫
 `;
 
-test('old-format notes are read from the Vault with the Basic Memory checksum and found by text', async t => {
-  const vault = await fs.mkdtemp(path.join(os.tmpdir(), 'legacy-notes-'));
-  t.after(() => fs.rm(vault, { recursive: true, force: true }));
-  await fs.mkdir(path.join(vault, 'chats/facts'), { recursive: true });
-  await fs.writeFile(path.join(vault, 'chats/facts/pet.md'), NOTE);
-  const reader = createLegacyNoteReader({ vaultPath: vault, directories: ['chats/facts', 'chats/events'] });
-  assert.equal(reader.available(), true);
-  const [note] = reader.search('阿岑是什么');
-  assert.equal(note.metadata.memory_id, 'fixture-1'); assert.deepEqual(note.metadata.tags, ['dsh-memory', 'dsh-fact']);
-  assert.equal(note.metadata.recorded_at, '2026-10-25T04:21:07.668Z');
-  assert.equal(note.checksum, createHash('sha256').update(NOTE).digest('hex'));
-  assert.equal(note.file_path, 'chats/facts/pet.md');
-  assert.equal(reader.search('小周的绿萝').length, 0);
-  assert.equal(parseLegacyNote('no frontmatter'), null);
-});
-
-test('legacy note cache is shared across readers and invalidates edits and deletions',async t=>{
-  const vault=await fs.mkdtemp(path.join(os.tmpdir(),'legacy-shared-cache-'));
-  t.after(()=>fs.rm(vault,{recursive:true,force:true}));
-  await fs.mkdir(path.join(vault,'chats/facts'),{recursive:true});
-  const file=path.join(vault,'chats/facts/pet.md');
-  await fs.writeFile(file,NOTE);
-  const directories=['chats/facts','chats/events'];
-  const firstReader=createLegacyNoteReader({vaultPath:vault,directories});
-  const [first]=firstReader.notes();
-  assert.equal(firstReader.search('阿岑').length,1);
-  const secondReader=createLegacyNoteReader({vaultPath:vault,directories});
-  const [shared]=secondReader.notes();
-  assert.equal(shared,first,'a second reader reuses the cached note object and term set');
-
-  const changed=NOTE.replaceAll('养了一只叫阿岑的猫','后来养了一只叫阿岑的白猫');
-  await fs.writeFile(file,changed);
-  const [updated]=secondReader.notes();
-  assert.notEqual(updated,first);assert.match(updated.content,/后来养了一只叫阿岑的白猫/u);
-  assert.equal(secondReader.search('后来').length,1);
-
-  await fs.rm(file);
-  assert.deepEqual(secondReader.notes(),[]);assert.deepEqual(secondReader.search('阿岑'),[]);
+test('old-format frontmatter parsing remains available to inheritance and Vault readers',()=>{
+  const parsed=parseLegacyNote(NOTE);
+  assert.equal(parsed.metadata.memory_id,'fixture-1');
+  assert.deepEqual(parsed.metadata.tags,['dsh-memory','dsh-fact']);
+  assert.equal(parsed.metadata.recorded_at,'2026-10-25T04:21:07.668Z');
+  assert.match(parsed.content,/养了一只叫阿岑的猫/u);
+  assert.equal(parseLegacyNote('no frontmatter'),null);
+  assert.equal(parseLegacyNote('---\nmetadata:\n  nested: value\n---\nbody'),null);
 });

@@ -4,12 +4,10 @@ import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createMemoryQueryAnswer} from '../lib/memory-query.js';
-import {memoryDirectory} from '../lib/memory.js';
 import {resolveConfig} from '../lib/config.js';
 import {lexicalMatch} from '../lib/raw-rag/lexical.js';
-import {createLegacyNoteReader} from '../lib/legacy-notes.js';
 
-const ROUNDS = 2000, ENTRIES = 300, LEGACY = 200, SAMPLES = 50, LIMIT = 4;
+const ROUNDS = 2000, ENTRIES = 300, SAMPLES = 50, LIMIT = 4;
 
 function option(name, fallback) {
   const prefix = `--${name}=`, found = process.argv.slice(2).find(value => value.startsWith(prefix));
@@ -25,29 +23,6 @@ const percentile = (values, fraction) => {
 };
 const average = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 const rounded = value => Math.round(value * 100) / 100;
-
-function legacyNote(index, directory) {
-  const id = `bench-${index}`;
-  return `---
-title: Fictional legacy ${index}
-permalink: personal/${directory}/${id}
-memory_id: ${id}
-memory_kind: fact
-status: active
-subject: 阿岑
-attribute: fixture-${index}
-value: 虚构旧笔记 ${index} 阿岑用于离线测速
-recorded_at: '2026-10-01T00:00:${String(index % 60).padStart(2, '0')}.000Z'
-tags:
-- dsh-memory
----
-
-<!-- dsh-fact-memory -->
-# Fictional legacy ${index}
-
-- [fact] 虚构旧笔记 ${index} 阿岑用于离线测速
-`;
-}
 
 function sourceRecord(index, role) {
   const id = `${role}-${index}`;
@@ -72,24 +47,17 @@ function entryRecord(index, source) {
   };
 }
 
-async function buildFixture(root, config) {
-  const facts = memoryDirectory(config, 'fact');
-  await fs.mkdir(path.join(root, 'vault', facts), {recursive: true});
+async function buildFixture(root) {
   const sources = [];
   for (let index = 0; index < ROUNDS; index++) {
     sources.push(sourceRecord(index, 'user'), sourceRecord(index, 'assistant'));
   }
   const sourceById = new Map(sources.map(source => [source.id, source]));
   const entries = Array.from({length: ENTRIES}, (_, index) => entryRecord(index, sources[0]));
-  const files = await Promise.all(Array.from({length: LEGACY}, async (_, index) => {
-    const relative = `${facts}/bench-${index}.md`;
-    await fs.writeFile(path.join(root, 'vault', relative), legacyNote(index, facts), 'utf8');
-    return relative;
-  }));
-  await fs.writeFile(path.join(root, 'fixture.json'), JSON.stringify({rounds: ROUNDS, entries: ENTRIES, legacy: LEGACY, sources}), 'utf8');
+  await fs.writeFile(path.join(root, 'fixture.json'), JSON.stringify({rounds: ROUNDS, entries: ENTRIES, sources}), 'utf8');
   return {
     sources: JSON.parse(await fs.readFile(path.join(root, 'fixture.json'), 'utf8')).sources,
-    sourceById, entries, files,
+    sourceById, entries,
   };
 }
 
@@ -130,7 +98,6 @@ function adapters(fixture, vectorDelay, dispatchTimes) {
         neighbors() { return []; },
       };
     },
-    querySourceState() { return {state: 'live'}; },
     status() { return {backend: {actualDevice: 'fixture'}}; },
   };
   const entries = {
@@ -176,11 +143,11 @@ async function run() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'memory-prefetch-bench-'));
   try {
     const config = resolveConfig({project: 'main', vaultPath: path.join(root, 'vault'), rawRecall: false});
-    const fixture = await buildFixture(root, config);
+    const fixture = await buildFixture(root);
     const dispatchTimes = [];
     const runtime = adapters(fixture, vectorDelay, dispatchTimes);
     const agent = {session: {id: 'bench-session'}};
-    const totals = [], channels = {originals: [], structured: [], legacy: [], vector: []};
+    const totals = [], channels = {originals: [], structured: [], vector: []};
     const prefetchOnce = async () => {
       runtime.beginSample();
       const started = performance.now();
@@ -207,26 +174,13 @@ async function run() {
         answer.dispose();
       }
     };
-    const directories = ['fact', 'event', 'history'].map(kind => memoryDirectory(config, kind));
-    const firstReader = createLegacyNoteReader({vaultPath:config.vaultPath, directories});
-    let started = performance.now();
-    firstReader.search('阿岑', 20);
-    const legacyFirstMs = performance.now() - started;
-    const legacyFresh = [];
-    for (let index = 0; index < SAMPLES; index++) {
-      const reader = createLegacyNoteReader({vaultPath:config.vaultPath, directories});
-      started = performance.now();
-      reader.search('阿岑', 20);
-      legacyFresh.push(performance.now() - started);
-    }
     const first = await prefetchOnce();
     for (let index = 0; index < SAMPLES; index++) await prefetchOnce();
     return {
-      fixture: {rounds: ROUNDS, entries: ENTRIES, legacyNotes: LEGACY, samples: SAMPLES, vectorDelayMs: vectorDelay},
+      fixture: {rounds: ROUNDS, entries: ENTRIES, samples: SAMPLES, vectorDelayMs: vectorDelay},
       prefetch: {p50Ms: rounded(percentile(totals, .5)), p95Ms: rounded(percentile(totals, .95))},
       vectorDispatchMs: {p50: rounded(percentile(dispatchTimes, .5))},
       channelsMeanMs: Object.fromEntries(Object.entries(channels).map(([name, values]) => [name, rounded(average(values))])),
-      legacy: {firstMs: rounded(legacyFirstMs), cachedMeanMs: rounded(average(legacyFresh))},
       firstInjected: first.injected,
       firstInjectedChars: first.injectedChars,
     };

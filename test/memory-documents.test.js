@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createMemoryDocuments} from '../lib/memory-documents.js';
 import {createUnifiedStateStore} from '../lib/storage/state-store.js';
+import {sourceBodyHash} from '../lib/source-lineage.js';
 import {vaultMemoryStore} from './vault-memory.js';
 
 function yamlValue(value){
@@ -57,63 +58,75 @@ async function fixture(t,project='main'){
   };
 }
 
-test('main indexes and reopens migrated notes by file path while keeping their identities and sources',async t=>{
+test('personal notes and explicit ordinary files are indexed while 0.3 memory_id notes are skipped',async t=>{
   const f=await fixture(t);
-  const fact=await f.add('personal/chats/facts/a-stable-slug','chats/facts/Current title.md',{
-    frontmatter:{memory_id:'fictional-fact',memory_kind:'fact',value:'Fictional note',source_message_id:'fictional-message'},
+  await f.add('personal/chats/facts/fact','chats/facts/Fact.md',{
+    frontmatter:{memory_id:'fictional-fact',memory_kind:'fact',value:'Fictional fact'},
   });
-  const diary=await f.add('personal/dafeiyu/thoughts/a-stable-slug','dafeiyu/diary/Current title.md',{
-    directory:'dafeiyu/diary',
+  await f.add('personal/chats/events/event','chats/events/Event.md',{directory:'chats/events',frontmatter:{memory_id:'fictional-event'}});
+  await f.add('personal/chats/history/history','chats/history/History.md',{directory:'chats/history',frontmatter:{memory_id:'fictional-history'}});
+  const thought=await f.add('personal/dafeiyu/thoughts/thought','dafeiyu/thoughts/Thought.md',{directory:'dafeiyu/thoughts'});
+  const diary=await f.add('personal/dafeiyu/diary/diary','dafeiyu/diary/Diary.md',{directory:'dafeiyu/diary'});
+  const chosen=await f.add('personal/manual/chosen','manual/Chosen.md',{directory:'manual'});
+  const legacyChosen=await f.add('personal/chats/facts/legacy-chosen','manual/Legacy chosen.md',{
+    directory:'manual',frontmatter:{memory_id:'fictional-legacy-chosen',memory_kind:'fact',value:'Fictional legacy choice'},
   });
+
+  await f.documents.selectDocuments({grant:f.grant,identifiers:[chosen.file_path,legacyChosen.file_path]});
   const rows=await f.list();
-  assert.deepEqual(rows.map(row=>[row.id,row.domain]),[
-    ['legacy-note:fictional-fact','fact'],['document:'+encodeURIComponent(diary.permalink),'diary'],
+  assert.deepEqual(rows.map(row=>[row.domain,row.anchor.ref.identifier]),[
+    ['thoughts',thought.permalink],['diary',diary.permalink],['document',chosen.permalink],
   ]);
-  const [saved]=rows;
-  assert.deepEqual(saved.sourceIds,['fictional-message']);
-  assert.equal(saved.identifier,fact.permalink);
-  assert.equal(saved.anchor.ref.identifier,fact.permalink);
-  assert.equal((await f.resolve(saved)).source.permalink,fact.permalink);
-  assert.ok(f.store.calls.filter(call=>call.name==='read').every(call=>call.identifier===fact.file_path||call.identifier===diary.file_path));
-
-  // A temporary omission from the directory catalogue still checks the known file.
-  f.control.omit=fact.file_path;
-  assert.ok((await f.list()).some(row=>row.id===saved.id));
-  f.control.omit=null;
-
-  await f.rewrite(fact.file_path,{title:'Current title',permalink:'other/chats/facts/a-stable-slug',
-    frontmatter:fact.frontmatter,content:fact.content});
-  assert.equal(await f.resolve(saved),null);
-
-  await f.rewrite(fact.file_path,{title:'Current title',permalink:fact.permalink,
-    frontmatter:{...fact.frontmatter,source_hidden:true},content:fact.content});
-  assert.equal(await f.resolve(saved),null);
+  assert.ok(rows.every(row=>!row.id.startsWith('legacy-note:')));
+  for(const row of rows)assert.equal((await f.resolve(row)).source.permalink,row.anchor.ref.identifier);
+  assert.equal((await f.resolve(rows[0])).text,'Fictional note');
+  const reads=f.store.calls.filter(call=>call.name==='read').map(call=>call.identifier);
+  assert.ok(reads.includes(legacyChosen.file_path));
+  assert.equal(reads.some(identifier=>['chats/facts/Fact.md','chats/events/Event.md','chats/history/History.md'].includes(identifier)),false);
 });
 
-test('migration is limited to main, permitted vault paths and explicit selections',async t=>{
+test('a selected file with derivation metadata keeps its source lineage instead of throwing',async t=>{
   const f=await fixture(t);
-  await f.add('other/chats/facts/wrong-namespace','chats/facts/Wrong namespace.md');
-  await f.add('personal/chats/facts/fixture','chats/facts/Fixture.md',{frontmatter:{qa_fixture:true}});
-  await f.add('personal/chats/facts/private','manual/Chosen.md');
+  const body='Fictional derived note';
+  const derived=await f.add('personal/manual/derived','manual/Derived.md',{directory:'manual',content:body,frontmatter:{
+    dsh_derivation:JSON.stringify({schema:'memory-derivation-v1',authority:'derived',bodyHash:sourceBodyHash(body),sources:[{messageId:'fictional-message'}]}),
+  }});
+  const edited=await f.add('personal/manual/edited','manual/Edited.md',{directory:'manual',content:'Fictional edited note',frontmatter:{
+    dsh_derivation:JSON.stringify({schema:'memory-derivation-v1',authority:'manual',bodyHash:'0'.repeat(64),sources:[{messageId:'fictional-message'}]}),
+  }});
+  await f.documents.selectDocuments({grant:f.grant,identifiers:[derived.file_path,edited.file_path]});
+  const rows=await f.list(),byIdentifier=new Map(rows.map(row=>[row.anchor.ref.identifier,row]));
+  assert.deepEqual(byIdentifier.get(derived.permalink).sourceIds,['fictional-message']);
+  assert.equal(byIdentifier.get(derived.permalink).authority,'derived');
+  // A body the user rewrote counts as manual and still names itself as the source.
+  const manual=byIdentifier.get(edited.permalink);
+  assert.deepEqual(manual.sourceIds,[manual.id]);
+  assert.equal(manual.authority,'manual');
+});
+
+test('document enumeration stays inside main, personal directories and explicit selections',async t=>{
+  const f=await fixture(t);
+  await f.add('personal/dafeiyu/diary/fixture','dafeiyu/diary/Fixture.md',{directory:'dafeiyu/diary',frontmatter:{qa_fixture:true}});
+  const chosen=await f.add('personal/manual/private','manual/Chosen.md',{directory:'manual'});
 
   assert.deepEqual(await f.list(),[]);
-  assert.ok(f.store.calls.some(call=>call.name==='read'&&call.identifier==='chats/facts/Fixture.md'));
-  await f.documents.selectDocuments({grant:f.grant,identifiers:['manual/Chosen.md']});
+  assert.equal(f.store.calls.some(call=>call.name==='read'&&call.identifier==='manual/Chosen.md'),false);
+  await f.documents.selectDocuments({grant:f.grant,identifiers:[chosen.file_path]});
   const [selected]=await f.list();
-  assert.equal(selected.source.permalink,'personal/chats/facts/private');
+  assert.equal(selected.anchor.ref.identifier,chosen.permalink);
   assert.equal((await f.resolve(selected)).text,'Fictional note');
   await f.documents.selectDocuments({grant:f.grant,identifiers:[]});
   assert.equal(await f.resolve(selected),null);
 
   const other=await fixture(t,'other');
-  await other.add('personal/chats/facts/legacy','chats/facts/Legacy.md');
+  await other.add('other/chats/facts/legacy','chats/facts/Legacy.md',{directory:'chats/facts'});
   assert.deepEqual(await other.list(),[]);
   assert.equal(other.store.calls.some(call=>call.name==='read'),false);
 });
 
 test('the production document factory forwards logger warnings without file bodies',async t=>{
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'memory-documents-logger-')),vault=path.join(directory,'vault');
-  const malformed=path.join(vault,'chats','facts','Malformed.md');
+  const malformed=path.join(vault,'dafeiyu','diary','Malformed.md');
   const body='FICTIONAL_MALFORMED_BODY_MUST_NOT_BE_LOGGED',warnings=[];
   await fs.mkdir(path.dirname(malformed),{recursive:true});
   await fs.writeFile(malformed,`---\ntitle: Malformed\nmetadata:\n  nested: value\n---\n\n${body}`);
@@ -129,7 +142,7 @@ test('the production document factory forwards logger warnings without file bodi
   for await(const row of documents.listDocuments({grant:{kind:'management',project:'main',ownerSubject:'fictional-owner'}}))rows.push(row);
   assert.deepEqual(rows,[]);
   assert.equal(warnings.length,1);
-  assert.match(warnings[0],/chats\/facts\/Malformed\.md/u);
+  assert.match(warnings[0],/dafeiyu\/diary\/Malformed\.md/u);
   assert.equal(warnings[0].includes(body),false);
 });
 
@@ -153,7 +166,7 @@ test('selected metadata reads wait for committed changes and do not expose mutab
 
 test('catalogue point lookups follow a committed rescan and return independent metadata',async t=>{
   const f=await fixture(t);
-  const note=await f.add('personal/chats/facts/point-note','chats/facts/Point note.md');
+  const note=await f.add('personal/dafeiyu/diary/point-note','dafeiyu/diary/Point note.md',{directory:'dafeiyu/diary'});
   const [first]=await f.list();
   const metadata=f.documents.getMetadata({...first,grant:f.grant});
   metadata.anchor.ref.identifier='mutated-locator';

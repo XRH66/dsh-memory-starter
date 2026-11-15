@@ -7,13 +7,11 @@ import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {createRawRecall} from '../lib/raw-rag/index.js';
 import {createMemoryQueryAnswer,createMemoryQueryTools,recordLabel,selectPrefetch,shouldPrefetch} from '../lib/memory-query.js';
 import {resolveConfig} from '../lib/config.js';
-import {memoryDirectory} from '../lib/memory.js';
 import {createSessionMemory} from '../lib/session-memory.js';
 import {createBridge} from '../lib/index.js';
 import {memoryStore} from './fake-memory.js';
 import {directUser,fakeAgent,fakeLlm} from './helpers.js';
 
-const LEGACY_ID='legacy-noise-current';
 const rerankCandidate=(id,rerank,patch={})=>({
   id,revision:1,kind:'document',text:'rerank candidate '+id,label:'虚构重排标签',
   signals:{lexical:0,similarity:null,rerank,lanes:['vector']},
@@ -99,51 +97,8 @@ async function queryFixture(t,overrides={}){
   return {directory,config,agent,memory,access,raw,answer,save};
 }
 
-async function writeLegacy(config,{id=LEGACY_ID,value='用户继续用靛蓝色杯子喝白茶。'}){
-  const facts=memoryDirectory(config,'fact'),relative=path.join(facts,id+'.md');
-  await fs.mkdir(path.join(config.vaultPath,facts),{recursive:true});
-  await fs.writeFile(path.join(config.vaultPath,relative),`---
-title: 虚构当前偏好
-permalink: main/${facts}/${id}
-memory_id: ${id}
-memory_kind: fact
-status: active
-subject: 用户
-attribute: 杯子颜色
-value: ${value}
-recorded_at: '2026-10-25T04:21:07.668Z'
-tags:
-- dsh-memory
----
-
-<!-- dsh-fact-memory -->
-# 虚构当前偏好
-
-- [fact] ${value}
-`,'utf8');
-  return relative;
-}
-
-test('real retrieval folds a similar original and legacy note into one slot',async t=>{
+test('original question labels identify past questions without a legacy channel',async t=>{
   const f=await queryFixture(t);
-  const text='用户继续用靛蓝色杯子喝白茶，这是当前偏好。';
-  f.save({messageId:'indigo-source',text});
-  await writeLegacy(f.config,{value:text});
-  const answer=f.answer({keepSignals:true});
-  const found=await answer.search({query:'靛蓝色杯子喝白茶',limit:4});
-  const selected=selectPrefetch({records:found.records,minSimilarity:0.45,options:{}});
-  assert.equal(selected.lines.length,1,JSON.stringify(selected.stats));
-  assert.match(selected.lines[0],/旧笔记/u,JSON.stringify(found.records));assert.match(selected.lines[0],/靛蓝色杯子/u);
-  assert.ok(selected.stats.folded>=1);
-});
-
-test('legacy-note and old-question labels identify provenance and past questions',async t=>{
-  const f=await queryFixture(t);
-  await writeLegacy(f.config,{id:'legacy-question',value:'旧笔记里保存着虚构问题'});
-  const answer=f.answer({keepSignals:true});
-  const found=await answer.search({query:'虚构问题',limit:4});
-  const record=found.records.find(item=>answer.resolve(item.ref)?.id?.startsWith('legacy-note:'));
-  assert.ok(record,JSON.stringify(found));assert.match(record.label,/^旧笔记（未迁移）/u);
   assert.match(recordLabel({kind:'original',role:'user',text:'我以前的杯子是什么？'}),/ · 当时的提问$/u);
   f.save({messageId:'old-question',sequence:2,text:'我以前是不是说过靛蓝色杯子？'});
   const questionAnswer=f.answer({keepSignals:true});

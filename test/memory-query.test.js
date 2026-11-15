@@ -10,6 +10,8 @@ import {ANSWER_RULES,createMemoryQueryAnswer,createMemoryQueryTools,selectPrefet
 import {createBridge} from '../lib/index.js';
 import {createUnifiedProfiles} from '../lib/storage/profiles.js';
 import {resolveConfig} from '../lib/config.js';
+import {applyInheritRecords} from '../lib/inherit/importer.js';
+import {convertLegacyVault} from '../lib/inherit/vault.js';
 import {personalTimeZone,setPersonalTimeZone} from '../lib/personal-namespace.js';
 import {estimateTokens} from '../lib/token-estimate.js';
 import {memoryStore} from './fake-memory.js';
@@ -90,8 +92,9 @@ test('actual original reader and native tools share the answer ledger without mo
   const f=await fixture(t);f.save();f.save({messageId:'qa-assistant',role:'assistant',sequence:2,text:'我建议先量尺寸。',content:[{type:'text',text:'我建议先量尺寸。'}]});
   assert.equal(f.grants(),0);assert.equal(f.raw.status().backend.prepared,false);
   const tools=createMemoryQueryTools({answer:()=>f.answer}),exec={agent:f.agent,signal:new AbortController().signal};
-  const found=await tools[0].execute({query:'书架'},exec);assert.equal(found.status,'partial');assert.equal(found.records.length,1);
+  const found=await tools[0].execute({query:'书架'},exec);assert.equal(found.status,'ok');assert.equal(found.records.length,1);
   assert.match(found.records[0].label,/用户说/u);assert.ok(found.records[0].text.includes('只有周末'));assert.equal(found.channels.vector.state,'unavailable');
+  assert.equal(Object.hasOwn(found.channels,'legacy'),false);assert.equal(found.error,undefined);
   const opened=await tools[1].execute({ref:found.records[0].ref},exec);assert.deepEqual(opened.records.map(item=>item.label.match(/(用户说|助手说)/u)?.[0]),['用户说','助手说']);
   await tools[2].execute({},exec);await tools[0].execute({query:'尺寸'},exec);
   assert.equal((await tools[0].execute({query:'第五次'},exec)).error.code,'CALLS');assert.equal(f.grants(),1);
@@ -392,70 +395,68 @@ test('revocation and unissued paths cannot reveal originals or bypass the answer
   const found=await f.answer.search({query:'书架'});f.revoke();assert.equal((await f.answer.expand({ref:found.records[0].ref})).status,'denied');
 });
 
-test('old-format notes in the Vault bypass Basic Memory search_notes',async t=>{
+test('0.3 Vault notes enter memory_search and prefetch only after inheritance import',async t=>{
   const f=await fixture(t),directory=path.join(f.config.vaultPath,'chats/facts');
   await fs.mkdir(directory,{recursive:true});
   await fs.writeFile(path.join(directory,'pet.md'),legacyVaultNote);
-  const original=f.notes.tools.get.bind(f.notes.tools);let searches=0;
-  f.notes.tools.get=(name,agent)=>{const tool=original(name,agent);if(name!=='mcp__basic_memory__search_notes'||!tool)return tool;
-    return {...tool,execute:(...args)=>{searches++;return tool.execute(...args);}};};
+  const prefetchAnswer=createMemoryQueryAnswer({access:f.access,agent:f.agent,raw:f.raw,tools:f.notes.tools,
+    config:f.config,searchKind:'prefetch',keepSignals:true});
+  t.after(()=>prefetchAnswer.dispose());
 
-  const found=await f.answer.search({query:'阿岑'});
-  assert.equal(searches,0);
-  assert.equal(found.channels.legacy.records,1);
-  assert.equal(f.answer.resolve(found.records[0].ref).id,'legacy-note:vault-legacy-qa');
+  const before=await f.answer.search({query:'阿岑'}),beforePrefetch=await prefetchAnswer.search({query:'阿岑',limit:4});
+  assert.deepEqual(before.records,[]);assert.deepEqual(beforePrefetch.records,[]);
+  assert.equal(Object.hasOwn(before.channels,'legacy'),false);assert.equal(Object.hasOwn(beforePrefetch.channels,'legacy'),false);
+
+  const converted=await convertLegacyVault(f.config.vaultPath);
+  const applied=applyInheritRecords({store:f.memory,scope:'owner',records:converted.records,
+    batchId:'fixture-vault-inherit',source:{kind:'vault',path:converted.vault},clock:()=>1000});
+  assert.deepEqual({inserted:applied.inserted,conflicts:applied.conflicts},{inserted:1,conflicts:0});
+
+  const found=await f.answer.search({query:'阿岑'}),prefetched=await prefetchAnswer.search({query:'阿岑',limit:4});
+  assert.equal(found.records.length,1);assert.equal(prefetched.records.length,1);
+  assert.match(found.records[0].label,/^旧笔记（整理摘要） · 写于 /u);
   assert.equal(found.records[0].text,'养了一只叫阿岑的猫');
+  assert.equal(prefetched.records[0].text,'养了一只叫阿岑的猫');
+  assert.equal(Object.hasOwn(found.channels,'legacy'),false);
+  const selected=selectPrefetch({records:prefetched.records,minSimilarity:.45,options:{maxRecords:4}});
+  assert.equal(selected.lines.length,1,JSON.stringify(selected.stats));
+  assert.equal((selected.lines[0].match(/阿岑/gu)??[]).length,1,selected.lines[0]);
 });
 
-test('old-format search reports unavailable without falling back to Basic Memory tools',async t=>{
-  const f=await fixture(t);
-  assert.equal(await fs.stat(path.join(f.config.vaultPath,'chats/facts')).then(()=>true,()=>false),false);
-  await f.notes.tools.get('mcp__basic_memory__write_note',f.agent).execute({project:'main',title:'QA旧偏好',directory:'chats/facts',tags:['dsh-memory'],
-    content:'<!-- dsh-fact-memory -->\n# QA旧偏好\n\n- [preference] QA用户喜欢靛蓝。\n- subject: owner\n- attribute: 颜色',
-    metadata:{memory_id:'memory-legacy-qa',memory_kind:'fact',status:'active',subject:'owner',attribute:'颜色',value:'QA用户喜欢靛蓝。',recorded_at:'2026-11-06T00:00:00Z'}},{agent:f.agent});
-  const original=f.notes.tools.get.bind(f.notes.tools);let searches=0;
-  f.notes.tools.get=(name,agent)=>{const tool=original(name,agent);if(name!=='mcp__basic_memory__search_notes'||!tool)return tool;
-    return {...tool,execute:(...args)=>{searches++;return tool.execute(...args);}};};
-
-  const found=await f.answer.search({query:'靛蓝'});
-  assert.equal(searches,0);
-  assert.equal(found.channels.legacy.state,'unavailable');
-  assert.equal(found.channels.legacy.records,0);
+test('legacy note vectors are filtered by identity and note anchors before ranking',async t=>{
+  const current={id:'current-document',revision:'v1',kind:'document',domain:'document',text:'虚构当前资料',
+    sourceStatus:{eligible:true,manualBody:true},anchor:{id:'current-document',revision:'v1',ref:{storage:'document',id:'current-document'}}};
+  const legacyById={id:'legacy-note:old',revision:'v1',kind:'entry',domain:'fact',text:'虚构旧笔记甲',
+    anchor:{id:'legacy-note:old',revision:'v1',ref:{storage:'document',id:'legacy-note:old'}}};
+  const legacyByAnchor={id:'old-note-anchor',revision:'v1',kind:'entry',domain:'fact',text:'虚构旧笔记乙',
+    anchor:{id:'old-note-anchor',revision:'v1',ref:{storage:'note',id:'legacy-note:old'}}};
+  let resolves=0;
+  const vectors={async getSnapshot(){return {id:'fixture',revision:1};},
+    async query(){return {records:[legacyById,legacyByAnchor,current]};},
+    async resolveDocument(){resolves++;return null;}};
+  const f=await fixture(t,{vectors});
+  const found=await f.answer.search({query:'虚构'});
+  assert.deepEqual(resultIds(f.answer,found),['current-document']);
+  assert.equal(found.channels.vector.records,1);assert.equal(resolves,0);
 });
 
-test('a migrated personal permalink remains locally searchable and expandable until its source changes',async t=>{
-  const f=await fixture(t),relative='chats/facts/migrated.md';
-  const content=`---
-title: QA旧偏好
-permalink: personal/chats/facts/QA旧偏好
-memory_id: legacy-qa
-memory_kind: fact
-status: active
-subject: owner
-attribute: 颜色
-value: QA用户喜欢靛蓝。
-recorded_at: '2026-11-06T00:00:00Z'
-tags:
-- dsh-memory
----
-
-<!-- dsh-fact-memory -->
-# QA旧偏好
-
-- [preference] QA用户喜欢靛蓝。
-`;
-  await fs.mkdir(path.join(f.config.vaultPath,'chats/facts'),{recursive:true});
-  await fs.writeFile(path.join(f.config.vaultPath,relative),content);
-  const found=await f.answer.search({query:'靛蓝'}),foundLocation=f.answer.resolve(found.records[0].ref);
-  assert.equal(found.channels.legacy.records,1);assert.equal(foundLocation.id,'legacy-note:legacy-qa');
-  assert.match(found.records[0].label,/^旧笔记（未迁移） · 事实 · 依据时间 /u);
-  const opened=await f.answer.expand({ref:found.records[0].ref});assert.equal(opened.records[0].text,'QA用户喜欢靛蓝。');
-  await fs.writeFile(path.join(f.config.vaultPath,relative),content.replace('- dsh-memory','- dsh-memory\nmemory_excluded: true'));
-  assert.equal((await f.answer.expand({ref:found.records[0].ref})).channels.source.state,'source_changed');
-  assert.equal((await f.answer.search({query:'靛蓝'})).records.length,0);
-  await fs.mkdir(path.join(f.config.vaultPath,'work'),{recursive:true});
-  await fs.rename(path.join(f.config.vaultPath,relative),path.join(f.config.vaultPath,'work/qa-old.md'));
-  assert.equal((await f.answer.search({query:'靛蓝'})).records.length,0);
+test('memory_open receives an old note ref without reading the Vault and reports source_changed',async t=>{
+  const f=await fixture(t),sessionId=f.agent.session.id;
+  const oldSource={id:'legacy-note:old',revision:'v1',role:'summary',text:'虚构旧笔记正文',
+    sessionId,messageId:'legacy-old',sequence:1,turn:1,time:1000,ref:{storage:'note',id:'legacy-note:old'}};
+  let noteReads=0;
+  const base=f.raw.queryReader.bind(f.raw);
+  f.raw.queryReader=(...args)=>{
+    const reader=base(...args);
+    return {...reader,search:()=>({sources:[oldSource],partial:false}),
+      get:ref=>ref.storage==='note'?(noteReads++,oldSource):reader.get(ref)};
+  };
+  const found=await f.answer.search({query:'虚构旧笔记'});
+  assert.equal(found.records.length,1);
+  const readsAfterSearch=noteReads;
+  const opened=await f.answer.expand({ref:found.records[0].ref});
+  assert.deepEqual(opened.records,[]);assert.equal(opened.channels.source.state,'source_changed');
+  assert.equal(noteReads,readsAfterSearch);
 });
 
 test('an original excluded while another search channel is pending cannot leave in the final result',async t=>{
@@ -467,31 +468,6 @@ test('an original excluded while another search channel is pending cannot leave 
   const pending=f.answer.search({query:'书架'});await entered;
   f.memory.setControl({scope:'owner',targetType:'message',targetId:'qa-user',excluded:true});release();
   const result=await pending;assert.deepEqual(result.records,[]);assert.equal(result.coverage.complete,false);
-});
-
-test('a deliberately located downweighted fact can still be opened by its issued anchor',async t=>{
-  const f=await fixture(t);
-  const relative='chats/facts/soft.md',content=`---
-title: 青岚山旧行程
-permalink: main/chats/facts/青岚山旧行程
-memory_id: soft-qa
-memory_kind: fact
-status: active
-subject: owner
-attribute: 行程
-value: 去过青岚山，需要预约。
-base_priority: 0.02
----
-
-<!-- dsh-fact-memory -->
-# 青岚山旧行程
-
-- [fact] 去过青岚山，需要预约。
-`;
-  await fs.mkdir(path.join(f.config.vaultPath,'chats/facts'),{recursive:true});
-  await fs.writeFile(path.join(f.config.vaultPath,relative),content);
-  const found=await f.answer.search({query:'青岚山'});assert.equal(found.records.length,1);
-  const opened=await f.answer.expand({ref:found.records[0].ref});assert.equal(opened.records.length,1);assert.ok(opened.records[0].text.includes('需要预约'));
 });
 
 test('portable vectors pin the answer profile, resolve issued anchors and revalidate original evidence at delivery',async t=>{
@@ -557,8 +533,6 @@ test('records carry a label saying original or entry, speaker, progress and time
   const {recordLabel}=await import('../lib/memory-query.js');
   assert.match(recordLabel({kind:'original',role:'user',time:Date.UTC(2026,4,8,6)}),/^原话 · 用户说 · 2026-05-0\d /u);
   assert.equal(recordLabel({kind:'entry',type:'plan',state:{validity:'current',progress:'planned'}}),'记忆条目 · 计划（尚未发生） · 当前有效 · 依据时间 时间未知');
-  assert.equal(recordLabel({id:'legacy-note:old',kind:'entry',type:'fact',state:{validity:'current'}}),
-    '旧笔记（未迁移） · 事实 · 依据时间 时间未知');
   assert.match(recordLabel({kind:'original',role:'user',text:'我以前的杯子是什么？  ',time:0}),/ · 当时的提问$/u);
   assert.doesNotMatch(recordLabel({kind:'original',role:'assistant',text:'你想问什么？',time:0}),/当时的提问/u);
 });
