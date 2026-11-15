@@ -435,6 +435,19 @@ test('pre-step prefetch never spends the model query budget; an explicit memory 
   f.emit(agent,'turn/end',{turn:1,reason:{kind:'completed'}},bridge);assert.equal(bridge.getQueryState(agent.session.id),null);
 });
 
+test('a delayed recall result is discarded after close and reopen rather than using the new epoch',async t=>{
+  const f=await fixture(t,{rawRecall:true,autoRecall:false}),agent=f.actor();await f.access.set(agent.session.id,true);
+  const entered=deferred(),release=deferred();
+  const bridge=f.bridge(),user=f.begin(agent,1,bridge);
+  assert.ok(bridge.vectors,'raw recall mounts the vector index');
+  // Hold the search inside the vector lane: with the entry lane gone it is the awaited step of memory_search.
+  bridge.vectors.getSnapshot=async()=>{entered.resolve();await release.promise;return null;};
+  await runPreStep(bridge,{turn:1,agent,messages:[user.data]});
+  const pending=bridge.queryTools.find(tool=>tool.name==='memory_search').execute({query:'青瓷杯'},{agent,signal:new AbortController().signal});await entered.promise;
+  await f.access.set(agent.session.id,false);await f.access.set(agent.session.id,true);f.begin(agent,2);
+  release.resolve();const result=await pending;assert.equal(result.status,'denied');assert.deepEqual(result.records,[]);
+});
+
 test('authorized tool checks both before execution and after asynchronous return',async t=>{
   const f=await fixture(t),agent=f.actor();await f.access.set(agent.session.id,true);f.begin(agent,1);
   const grant=f.access.grant(agent),entered=deferred(),release=deferred();let calls=0;
