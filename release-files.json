@@ -126,6 +126,7 @@
   "test/memory-query-lanes.test.js",
   "test/memory-query.test.js",
   "test/assistant-provenance.test.js",
+  "test/current-state-recency.test.js",
   "test/monotonic.test.js",
   "test/prefetch-noise.test.js",
   "test/query-speed.test.js",
