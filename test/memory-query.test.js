@@ -6,8 +6,7 @@ import os from 'node:os';
 import {performance} from 'node:perf_hooks';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {createRawRecall} from '../lib/raw-rag/index.js';
-import {createMemoryEntryAccess} from '../lib/memory-entry-access.js';
-import {ANSWER_RULES,createMemoryQueryAnswer,createMemoryQueryTools,createMemoryReferenceLoader,selectPrefetch,vectorQueryText} from '../lib/memory-query.js';
+import {ANSWER_RULES,createMemoryQueryAnswer,createMemoryQueryTools,selectPrefetch,vectorQueryText} from '../lib/memory-query.js';
 import {createBridge} from '../lib/index.js';
 import {createUnifiedProfiles} from '../lib/storage/profiles.js';
 import {resolveConfig} from '../lib/config.js';
@@ -46,13 +45,13 @@ async function fixture(t,options={}){
   let enabled=true,grants=0;const controllers=[];
   const access={ownerSubject:'owner',grant(){grants++;const controller=new AbortController();controllers.push(controller);return {kind:'read',ownerSubject:'owner',project:'main',sessionId:agent.session.id,rootSessionId:agent.session.id,epoch:'one',signal:controller.signal,cancel:()=>controller.abort()};},
     validate:grant=>enabled&&!grant.signal?.aborted,validateMessage:()=>enabled,assertCurrent(){if(!enabled)throw Error('closed');},withGrant:(_grant,work)=>work()};
-  const raw=createRawRecall({config,store:memory,ownerSubject:'owner'}),entries=createMemoryEntryAccess({access,raw,tools:notes.tools,config});
+  const raw=createRawRecall({config,store:memory,ownerSubject:'owner'});
   const source=({text='只有周末有空才整理书架。',content=[{type:'text',text}],...patch}={})=>({ownerSubject:'owner',project:'main',sessionId:agent.session.id,messageId:'qa-user',role:'user',sequence:1,turn:1,rootTurn:1,
     text,content,time:1000,authorization:{rootSessionId:agent.session.id},...patch});
   const save=patch=>memory.messages.record(source(patch),{authorize:()=>enabled}).source;
-  const answer=createMemoryQueryAnswer({access,agent,raw,entries,tools:notes.tools,config,...options});
+  const answer=createMemoryQueryAnswer({access,agent,raw,tools:notes.tools,config,...options});
   t.after(async()=>{answer.dispose();await raw.dispose();await fs.rm(directory,{recursive:true,force:true});});
-  return {answer,save,raw,memory,access,agent,entries,notes,config,grants:()=>grants,revoke(){enabled=false;for(const c of controllers)c.abort();}};
+  return {answer,save,raw,memory,access,agent,notes,config,grants:()=>grants,revoke(){enabled=false;for(const c of controllers)c.abort();}};
 }
 
 test('real vector index excerpts retain absolute positions through search, open and continuation',async t=>{
@@ -85,20 +84,6 @@ test('real vector index excerpts retain absolute positions through search, open 
   const continued=(await f.answer.expand({ref:opened.ref})).records[0],continuedLocation=f.answer.resolve(continued.ref);
   assert.equal(continuedLocation.anchor.range.start,openLocation.anchor.nextOffset);
   assert.equal(continued.text,text.slice(continuedLocation.anchor.range.start,continuedLocation.anchor.range.end));
-});
-
-test('organizer requests eligible vector candidates before the limit and thresholds semantic similarity',async t=>{
-  const f=await fixture(t),calls=[];
-  const vectors={async getSnapshot(){return {id:'fixture'};},async query(input){calls.push(input);return {records:[
-    {id:'softened',revision:'one',score:0,similarity:1,state:{validity:'current'},anchor:{ref:{storage:'entry'}}},
-    {id:'low-similarity',revision:'one',score:1,similarity:.19,state:{validity:'current'},anchor:{ref:{storage:'entry'}}},
-    {id:'historical',revision:'one',score:1,similarity:1,state:{validity:'historical'},anchor:{ref:{storage:'entry'}}}
-  ]};}};
-  const load=createMemoryReferenceLoader({access:f.access,tools:f.notes.tools,vectors,config:f.config});
-  const found=await load({sources:[{role:'user',text:'虚构背景'}]},
-    {agent:f.agent,scope:{ownerSubject:'owner',project:'main'},signal:new AbortController().signal,check(){}});
-  assert.deepEqual(found,[{id:'softened',revision:'one'}]);
-  assert.equal(calls[0].referenceOnly,true);assert.equal(calls[0].minSimilarity,0.45);assert.equal(calls[0].limit,8);
 });
 
 test('actual original reader and native tools share the answer ledger without model or vector preparation',async t=>{
@@ -142,8 +127,8 @@ test('recent bypasses vector configuration and later searches share a pending an
   const vectors={getSnapshot(){snapshots++;return pendingProfile;},async query({profile}){profiles.push(profile);return {records:[]};}};
   const f=await fixture(t,{vectors});
   const first=f.save({text:'只有周末有空才整理书架。'});
-  const forGrant=f.entries.forGrant.bind(f.entries);
-  f.entries.forGrant=(...args)=>{const reader=forGrant(...args);return {...reader,async search(...searchArgs){textEntered=true;entered();return reader.search(...searchArgs);}};};
+  const queryReader=f.raw.queryReader.bind(f.raw);
+  f.raw.queryReader=(...args)=>{const reader=queryReader(...args);return {...reader,search(input){textEntered=true;entered();return reader.search(input);}};};
   t.after(()=>release(null));
   t.mock.timers.enable({apis:['setTimeout','Date'],now:10000});
   const recent=await Promise.race([f.answer.recent({}),nextTurn()]);
@@ -306,11 +291,8 @@ test('vector query encoding dispatches before synchronous text lanes',async t=>{
   const f=await fixture(t,{vectors});f.save();
   const queryReader=f.raw.queryReader.bind(f.raw);
   f.raw.queryReader=(...args)=>{const reader=queryReader(...args);return {...reader,search(input){order.push('originals');return reader.search(input);}};};
-  const forGrant=f.entries.forGrant.bind(f.entries);
-  f.entries.forGrant=(...args)=>{const reader=forGrant(...args);return {...reader,async search(...searchArgs){order.push('structured');return reader.search(...searchArgs);}};};
   await f.answer.search({query:'书架'});
   assert.ok(order.indexOf('vector')>=0);assert.ok(order.indexOf('originals')>order.indexOf('vector'));
-  assert.ok(order.indexOf('structured')>order.indexOf('vector'));
 });
 
 test('revocation cancels the shared profile load and prevents late vector work',async t=>{
@@ -325,9 +307,11 @@ test('revocation cancels the shared profile load and prevents late vector work',
 
 test('vectors.query results are treated as already verified without another resolve pass',async t=>{
   let resolves=0;
-  const row={id:'vector-only',revision:'one',kind:'entry',text:'虚构向量候选',state:{validity:'current',progress:null},
-    sourceStatus:{eligible:true,manualBody:true},anchor:{id:'vector-only',revision:'one',ref:{storage:'entry',id:'vector-only'}}};
-  const vectors={async getSnapshot(){return {id:'fixture',revision:1};},async query(){return {records:[row]};},
+  const row={id:'vector-only',revision:'one',kind:'document',domain:'document',text:'虚构向量候选',
+    anchor:{id:'vector-only',revision:'one',ref:{storage:'document',id:'vector-only'}}};
+  const oldEntry={id:'old-entry',revision:'entry-v1',kind:'entry',domain:'entry',text:'旧条目向量',
+    anchor:{id:'old-entry',revision:'entry-v1',ref:{storage:'entry',id:'old-entry'}}};
+  const vectors={async getSnapshot(){return {id:'fixture',revision:1};},async query(){return {records:[oldEntry,row]};},
     async resolveDocument(){resolves++;return row;}};
   const f=await fixture(t,{vectors});
   const found=await f.answer.search({query:'虚构',limit:2});
@@ -361,7 +345,7 @@ test('vector similarity is ranked once and final merge applies weight once',asyn
   const rows=[row(high,.9,.5),row(low,.3,1)];
   const vectors={async getSnapshot(){return {id:'fixture',revision:1};},async query(){return {records:rows};},
     async resolveDocument({id,revision}){return rows.find(item=>item.id===id&&item.revision===revision);}};
-  const answer=createMemoryQueryAnswer({access:f.access,agent:f.agent,raw:f.raw,entries:f.entries,tools:f.notes.tools,config:f.config,vectors});
+  const answer=createMemoryQueryAnswer({access:f.access,agent:f.agent,raw:f.raw,tools:f.notes.tools,config:f.config,vectors});
   t.after(()=>answer.dispose());
   const found=await answer.search({query:'书架',limit:2});
   assert.deepEqual(resultIds(answer,found),[low.id,high.id]);
@@ -370,78 +354,18 @@ test('vector similarity is ranked once and final merge applies weight once',asyn
 test('memory search total wait derives from the configured model and device',async t=>{
   const f=await fixture(t);
   const config=resolveConfig({...f.config,rawRecallModel:'Qwen/Qwen3-Embedding-4B',rawRecallDevice:'cpu'});
-  const answer=createMemoryQueryAnswer({access:f.access,agent:f.agent,raw:f.raw,entries:f.entries,tools:f.notes.tools,config});
+  const answer=createMemoryQueryAnswer({access:f.access,agent:f.agent,raw:f.raw,tools:f.notes.tools,config});
   t.after(()=>answer.dispose());
   const found=await answer.search({query:'书架',limit:1});
   assert.ok(found.budget.remainingMs>3900&&found.budget.remainingMs<=4000);
 });
 
-test('P02 committed Markdown entries are found with typed state and importance, then expand to their original evidence',async t=>{
-  const f=await fixture(t),source=f.save(),writer=f.entries.forBatch(f.agent,[{id:source.id,revision:source.revision}]);
-  const saved=await writer.commit({operationId:'query-entry',sources:new Map([['s1',source]]),subjects:new Map([['owner','owner']]),proposed:{
-    type:'plan',content:'QA 书架整理计划。',subject_ref:'owner',source_refs:['s1'],state:{validity:'current',progress:'planned'},tags:['书架'],
-    importance:{level:'high',basis:'user_explicit',reason:'虚构用户明确优先事项'},evidence_basis:'self_report',speaker_ref:'owner'}});
-  const reads=()=>f.notes.tools.calls.filter(call=>call.name.endsWith('read_note')).length;
-  let before=reads();
-  const found=await f.answer.search({query:'书架',type:'plan',progress:'planned',subject:'owner'});
-  assert.equal(found.records.length,1);const foundLocation=f.answer.resolve(found.records[0].ref);
-  assert.equal(foundLocation.id,saved.id);assert.match(found.records[0].label,/计划（尚未发生）.*当前有效/u);
-  assert.equal(found.records[0].subject_ref,'owner');assert.deepEqual(found.records[0].tags,['书架']);assert.equal(found.coverage.rawTypedFilters,'not_applicable');
-  assert.equal(reads()-before,1);assert.equal(foundLocation.revision,saved.revision);
-  const opened=await f.answer.expand({ref:found.records[0].ref});
-  assert.match(opened.records[0].label,/记忆条目/u);assert.match(opened.records[1].label,/原话 · 用户说/u);
-  assert.equal((await f.answer.search({query:'书架',type:'habit'})).records.length,0);
-
-  const manual='人工修订：下周再整理书架。';
-  const block=text=>`<!-- dsh-memory-entry:start -->\n${text}\n<!-- dsh-memory-entry:end -->`;
-  await f.notes.tools.get('mcp__basic_memory__edit_note',f.agent).execute({project:'main',identifier:saved.permalink,operation:'find_replace',
-    find_text:block('QA 书架整理计划。'),content:block(manual),expected_checksum:saved.revision},{agent:f.agent});
-  f.memory.setControl({scope:'owner',targetType:'message',targetId:source.messageId,excluded:true});
-  before=reads();
-  const changed=await f.answer.search({query:'书架',type:'plan'});
-  const changedLocation=f.answer.resolve(changed.records[0].ref);
-  assert.equal(reads()-before,1);assert.equal(changedLocation.id,saved.id);
-  assert.notEqual(changedLocation.revision,saved.revision);assert.equal(changed.records[0].text,manual);
-  assert.equal('sourceStatus' in changed.records[0],false);
-});
-
-test('the first search slot keeps an unapplied user correction and excludes the active question',async t=>{
+test('search excludes the active question',async t=>{
   const f=await fixture(t,{answerTurn:3});
-  const old=f.save({messageId:'old',text:'以后每周五不排会。'});
-  const writer=f.entries.forBatch(f.agent,[{id:old.id,revision:old.revision}]);
-  const entry=await writer.commit({operationId:'recall-correction-original',sources:new Map([['s1',old]]),subjects:new Map([['owner','owner']]),proposed:{
-    type:'preference',content:'用户每周五不排会。',subject_ref:'owner',source_refs:['s1'],state:{validity:'current',progress:null},tags:['排会'],
-    importance:{level:'high',basis:'user_explicit',reason:'用户明确安排'},evidence_basis:'self_report',speaker_ref:'owner'}});
-  const processingContext={owner:'pipeline-v1',target:{provider:'fixture',model:'fixture'}};
-  const correction=f.save({messageId:'correction',sequence:2,turn:2,rootTurn:2,time:2000,text:'更正一下，以后每周四不排会。',processingContext});
-  f.save({messageId:'ack',role:'assistant',sequence:3,turn:2,rootTurn:2,time:2001,text:'已安排优先整理。',processingContext});
-  f.memory.messages.completeTurn({ownerSubject:'owner',project:'main',sessionId:f.agent.session.id,turn:2,state:'completed',changeKind:'correction'},{authorize:()=>true});
+  f.save({messageId:'old',sequence:2,turn:2,rootTurn:2,text:'以后每周五不排会。'});
   const question=f.save({messageId:'current-question',sequence:4,turn:3,rootTurn:3,time:3000,text:'我每周哪天不排会？'});
-
   const found=await f.answer.search({query:'排会',limit:2});
-  assert.deepEqual(resultIds(f.answer,found),[correction.id,entry.id]);
-  assert.equal(found.records[0].correction,true);
-  assert.match(found.records[1].label,/当前有效/u);
   assert.ok(!resultIds(f.answer,found).includes(question.id));
-  const opened=await f.answer.expand({ref:found.records[0].ref});
-  assert.equal(opened.records[0].text,correction.text);
-});
-
-test('a vector-only correction can still be reviewed for the first slot',async t=>{
-  let rows;
-  const vectors={async getSnapshot(){return {id:'fixture',revision:1};},async query(){return {records:rows};},
-    async resolveDocument({id}){return rows.find(record=>record.id===id);}};
-  const f=await fixture(t,{vectors});
-  const processingContext={owner:'pipeline-v1',target:{provider:'fixture',model:'fixture'}};
-  const correction=f.save({text:'更正一下，以后周四不排会。',processingContext});
-  f.save({messageId:'ack',role:'assistant',sequence:2,text:'收到。',processingContext});
-  f.memory.messages.completeTurn({ownerSubject:'owner',project:'main',sessionId:f.agent.session.id,turn:1,state:'completed',changeKind:'correction'},{authorize:()=>true});
-  rows=[{id:'vector-top',revision:1,kind:'document',text:'虚构日程说明',anchor:{id:'vector-top',revision:1,ref:{storage:'document',id:'vector-top'}}},
-    {id:correction.id,revision:correction.revision,kind:'original',text:correction.text,
-      anchor:{id:correction.id,revision:correction.revision,ref:{storage:'message',id:correction.id,revision:correction.revision}}}];
-  const found=await f.answer.search({query:'日程安排',limit:1});
-  assert.equal(found.channels.originals.state,'empty');assert.equal(f.answer.resolve(found.records[0].ref).id,correction.id);
-  assert.equal(found.records[0].correction,true);
 });
 
 test('an original edit or exclusion invalidates an issued anchor; a new body never impersonates its old revision',async t=>{
@@ -534,33 +458,12 @@ tags:
   assert.equal((await f.answer.search({query:'靛蓝'})).records.length,0);
 });
 
-test('an excluded structured note is unavailable to text search, an issued anchor and organizer reads',async t=>{
-  const f=await fixture(t),source=f.save(),writer=f.entries.forBatch(f.agent,[source]);
-  const saved=await writer.commit({operationId:'excluded-structured-note',sources:new Map([['s1',source]]),subjects:new Map([['owner','owner']]),proposed:{
-    type:'plan',content:'QA 书架整理计划。',subject_ref:'owner',source_refs:['s1'],state:{validity:'current',progress:'planned'},tags:['书架'],
-    importance:{level:'high',basis:'user_explicit',reason:'虚构用户明确优先事项'},evidence_basis:'self_report',speaker_ref:'owner'}});
-  const found=await f.answer.search({query:'书架',type:'plan'});
-  assert.equal(f.answer.resolve(found.records[0]?.ref)?.id,saved.id);
-  const note=f.notes.notes.get(saved.permalink);
-  for(const marker of ['qa_fixture','excluded']){
-    note.frontmatter[marker]=true;
-    assert.equal(await writer.read(saved.id),null);
-    assert.equal((await writer.list({includeUnavailable:true})).entries.length,0);
-    delete note.frontmatter[marker];
-  }
-  note.frontmatter.excluded=true;
-  assert.equal((await f.answer.expand({ref:found.records[0].ref})).records.length,0);
-  assert.equal((await f.answer.search({query:'书架',type:'plan'})).records.length,0);
-  delete note.frontmatter.excluded;
-  assert.equal((await writer.read(saved.id))?.id,saved.id);
-});
-
 test('an original excluded while another search channel is pending cannot leave in the final result',async t=>{
   const f=await fixture(t);f.save();let enter,release;
   const entered=new Promise(resolve=>enter=resolve),waiting=new Promise(resolve=>release=resolve);
   t.after(()=>release());
-  const forGrant=f.entries.forGrant.bind(f.entries);
-  f.entries.forGrant=(...args)=>{const reader=forGrant(...args);return {...reader,async search(...searchArgs){enter();await waiting;return reader.search(...searchArgs);}};};
+  const queryReader=f.raw.queryReader.bind(f.raw);
+  f.raw.queryReader=(...args)=>{const reader=queryReader(...args);return {...reader,async search(input){enter();await waiting;return reader.search(input);}};};
   const pending=f.answer.search({query:'书架'});await entered;
   f.memory.setControl({scope:'owner',targetType:'message',targetId:'qa-user',excluded:true});release();
   const result=await pending;assert.deepEqual(result.records,[]);assert.equal(result.coverage.complete,false);
@@ -593,8 +496,8 @@ base_priority: 0.02
 
 test('portable vectors pin the answer profile, resolve issued anchors and revalidate original evidence at delivery',async t=>{
   const firstProfile={id:'Qwen/Qwen3-Embedding-4B',revision:1,modelKey:'fixture-vector-space-one'};
-  let activeProfile=firstProfile,snapshots=0,source,f,changeDuringOpen=false;
-  const calls=[],documents=new Map();
+  let activeProfile=firstProfile,snapshots=0,source,staleRevision=false;
+  const calls=[];
   const vectors={
     async getSnapshot(input){snapshots++;calls.push({kind:'snapshot',...input});return activeProfile;},
     async query(input){
@@ -602,50 +505,33 @@ test('portable vectors pin the answer profile, resolve issued anchors and revali
       assert.deepEqual(input.profile,{id:'Qwen/Qwen3-Embedding-4B',revision:1,modelKey:'fixture-vector-space-one'});
       assert.equal(Object.isFrozen(input.profile),true);assert.notEqual(input.profile,activeProfile);
       assert.equal(input.limit,10);assert.ok(Number.isFinite(input.deadline));assert.equal(input.signal.aborted,false);
-      return {records:input.query==='搬运箱子'?[documents.get('vector-one'),documents.get('wrong-role'),documents.get('withdrawn')]:[documents.get('vector-two')]};
+      return {records:[{id:'vector-document',revision:staleRevision?'old-revision':'document-v1',kind:'document',domain:'document',
+        text:staleRevision?'虚构旧正文':source.text,sourceStatus:{eligible:true,manualBody:true},
+        anchor:{id:'vector-document',revision:staleRevision?'old-revision':'document-v1',ref:{storage:'document',id:'vector-document'}},similarity:1}]};
     },
     async resolveDocument(input){
-      calls.push({kind:'resolve',...input});assert.equal(f.access.validate(input.grant),true);
-      const row=documents.get(input.id);if(!row||input.revision!==row.revision||input.id==='withdrawn')return null;
-      // Simulate a source edit after asynchronous document resolution but before
-      // the answer's final synchronous delivery check. No stale evidence escapes.
-      if(changeDuringOpen&&input.id==='vector-two'){
-        changeDuringOpen=false;
-        const edited=f.save({sequence:3,text:'现在改为整理工具箱。',content:[{type:'text',text:'现在改为整理工具箱。'}]});
-        assert.equal(edited.revision,source.revision+1);
-      }
-      return row;
+      if(staleRevision)return null;
+      return {id:'vector-document',revision:'document-v1',kind:'document',domain:'document',text:source.text,
+        sourceStatus:{eligible:true,manualBody:true},anchor:{id:'vector-document',revision:'document-v1',ref:{storage:'document',id:'vector-document'}}};
     },
   };
-  f=await fixture(t,{vectors});source=f.save();
-  function document(id,role='user'){
-    return {id,revision:'note-v1',kind:'entry',text:'虚构计划：准备周末搬运与收纳。',type:'plan',subject_ref:'owner',
-      state:{validity:'current',progress:'planned'},time:source.time,tags:['收纳'],sourceStatus:{eligible:true,manualBody:false},
-      source_refs:[{id:source.id,revision:source.revision,role}],anchor:{id,revision:'note-v1',ref:{storage:'entry',id}}};
-  }
-  for(const id of ['vector-one','vector-two'])documents.set(id,document(id));
-  documents.set('withdrawn',document('withdrawn','assistant'));
-  documents.set('wrong-role',document('wrong-role','assistant'));
+  const f=await fixture(t,{vectors});source=f.save();
   const tools=createMemoryQueryTools({answer:()=>f.answer}),exec={agent:f.agent,signal:new AbortController().signal};
   assert.equal(snapshots,0);
-  const found=await tools[0].execute({query:'搬运箱子',type:'plan'},exec);
-  assert.deepEqual(resultIds(f.answer,found),['vector-one']);assert.equal(found.channels.vector.state,'ready');
-  assert.equal(found.channels.sourceValidation.removed,2);assert.equal(found.coverage.complete,false);
-  assert.deepEqual(calls.filter(call=>call.kind==='resolve'),[]);
+  const found=await tools[0].execute({query:'搬运箱子'},exec);
+  assert.deepEqual(resultIds(f.answer,found),['vector-document'],JSON.stringify(found));assert.equal(found.channels.vector.state,'ready');
 
   // Changing the active service profile cannot replace the encoding snapshot
   // already pinned to this answer, including an edit to the original object.
   firstProfile.revision=99;
   activeProfile={id:'Qwen/Qwen3-Embedding-0.6B',revision:2,modelKey:'fixture-vector-space-two'};
   const opened=await tools[1].execute({ref:found.records[0].ref},exec);
-  assert.match(opened.records[0].label,/记忆条目/u);assert.match(opened.records[1].label,/原话 · 用户说/u);
-  assert.equal(opened.records[1].text,source.text);assert.equal(f.answer.resolve(opened.records[0].ref).revision,'note-v1');
-  const next=await tools[0].execute({query:'换一组线索',type:'plan'},exec);
-  assert.deepEqual(resultIds(f.answer,next),['vector-two']);
-  changeDuringOpen=true;
-  const stale=await tools[1].execute({ref:next.records[0].ref},exec);
-  assert.deepEqual(stale.records,[]);assert.equal(stale.channels.sourceValidation.state,'source_changed');
-  assert.equal(stale.channels.sourceValidation.removed,1);assert.equal(stale.coverage.complete,false);
+  assert.match(opened.records[0].label,/记忆条目/u);assert.equal(opened.records[0].text,source.text);
+  staleRevision=true;
+  const next=await tools[0].execute({query:'换一组线索'},exec);
+  assert.deepEqual(resultIds(f.answer,next),['vector-document']);
+  const staleOpen=await tools[1].execute({ref:next.records[0].ref},exec);
+  assert.deepEqual(staleOpen.records,[]);assert.equal(staleOpen.channels.source.state,'source_changed');
   assert.equal(snapshots,1);assert.equal(f.grants(),1);assert.equal(f.answer.budget().calls,4);
   const grant=calls.find(call=>call.kind==='snapshot').grant;
   assert.ok(calls.every(call=>call.grant===grant));assert.equal(calls.filter(call=>call.kind==='query').length,2);
@@ -656,13 +542,6 @@ test('vector lane folds multi-line and padded queries the vector service would r
   assert.equal(vectorQueryText('  填个表\n我全名咋写\r\n\t多大来着  '),'填个表 我全名咋写 多大来着');
   assert.equal(vectorQueryText('\n\t '),'');
   assert.equal(vectorQueryText('x'.repeat(2100)).length,2000);
-  const f=await fixture(t),calls=[];
-  const vectors={async getSnapshot(){return {id:'fixture'};},async query(input){calls.push(input);return {records:[]};}};
-  const load=createMemoryReferenceLoader({access:f.access,tools:f.notes.tools,vectors,config:f.config});
-  await load({sources:[{role:'user',text:'虚构背景第一行\n第二行  '}]},
-    {agent:f.agent,scope:{ownerSubject:'owner',project:'main'},signal:new AbortController().signal,check(){}});
-  assert.equal(calls.length,1);
-  assert.doesNotMatch(calls[0].query,/[\u0000-\u001f]/u);assert.equal(calls[0].query,calls[0].query.trim());
 });
 
 test('search records carry a readable personal time next to epoch milliseconds',async t=>{
@@ -713,9 +592,9 @@ test('a memory-enabled turn carries one merged answer-rules message',async t=>{
 test('memory_search description is compact and does not repeat the material rules',()=>{
   const [search]=createMemoryQueryTools({answer:()=>({})});
   assert.match(search.description,/只把结果里实际写到的内容当事实；本轮如附有记忆使用规则，照规则回答。/u);
-  assert.match(search.description,/原话还是记忆条目、谁说的、何时说的/u);
+  assert.match(search.description,/原话还是旧笔记、谁说的、何时说的/u);
   assert.match(search.description,/memory_open/u);
-  assert.match(search.description,/correction/u);
+  assert.doesNotMatch(search.description,/correction|记忆条目/u);
   assert.match(search.description,/1K tokens/u);
   assert.ok(estimateTokens(search.description)<=200,String(estimateTokens(search.description)));
   for(const rule of ANSWER_RULES)assert.equal(search.description.includes(rule),false,rule);

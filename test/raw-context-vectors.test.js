@@ -7,7 +7,6 @@ import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {createRawRecall} from '../lib/raw-rag/index.js';
 import {createMemoryVectors} from '../lib/memory-vectors.js';
 import {createMemoryQueryAnswer} from '../lib/memory-query.js';
-import {createMemoryEntryAccess} from '../lib/memory-entry-access.js';
 import {resolveConfig} from '../lib/config.js';
 import {embeddingContract} from './embedding-fixture.js';
 import {memoryStore} from './fake-memory.js';
@@ -22,8 +21,7 @@ async function fixture(t){
   let enabled=true;
   const access={ownerSubject:'fictional-owner',grant(){const controller=new AbortController();return {ownerSubject:this.ownerSubject,project:'main',kind:'read',sessionId:agent.session.id,rootSessionId:agent.session.id,epoch:'one',signal:controller.signal,cancel:()=>controller.abort()};},
     validate:grant=>enabled&&!grant.signal?.aborted,validateMessage:()=>enabled,withGrant:(_g,action)=>action()};
-  const entries=createMemoryEntryAccess({access,raw,tools:notes.tools,config});
-  const vectors=createMemoryVectors({directory:path.join(directory,'vectors'),access,raw,entries,tools:notes.tools,config,
+  const vectors=createMemoryVectors({directory:path.join(directory,'vectors'),access,raw,tools:notes.tools,config,
     findAgent:()=>agent,listAgents:()=>[agent],managementAgent:agent,
     queueConfig:{debounceMs:0,timers:{setTimeout(){return {unref(){}};},clearTimeout(){}}},
     createBackend(){return {...embeddingContract('context-fixture',2560,2048),async embed(texts,{kind,authorize}={}){
@@ -34,7 +32,7 @@ async function fixture(t){
   const grant=vectors.managementGrant({agent});
   const save=({id,role='user',text,sequence,turn=1,sessionId='context-life'})=>store.messages.record({ownerSubject:access.ownerSubject,project:'main',sessionId,messageId:id,role,text,
     content:[{type:'text',text}],sequence,turn,rootTurn:turn,turnState:'completed',time:sequence*1000,authorization:{fixture:true}}, {authorize:()=>enabled}).source;
-  const answer=()=>createMemoryQueryAnswer({access,agent,raw,entries,tools:notes.tools,vectors,config});
+  const answer=()=>createMemoryQueryAnswer({access,agent,raw,tools:notes.tools,vectors,config});
   t.after(async()=>{grant.cancel();await vectors.close();await raw.dispose();await fs.rm(directory,{recursive:true,force:true});});
   await vectors.ready();await vectors.registerCurrentConfig({grant});
   return {directory,config,store,raw,vectors,grant,save,calls,answer,access,agent};

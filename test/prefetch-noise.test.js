@@ -5,9 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {createRawRecall} from '../lib/raw-rag/index.js';
-import {createMemoryEntryAccess} from '../lib/memory-entry-access.js';
-import {createMemoryQueryAnswer,createMemoryQueryTools,recordLabel} from '../lib/memory-query.js';
-import {selectPrefetch,shouldPrefetch} from '../lib/memory-prefetch.js';
+import {createMemoryQueryAnswer,createMemoryQueryTools,recordLabel,selectPrefetch,shouldPrefetch} from '../lib/memory-query.js';
 import {resolveConfig} from '../lib/config.js';
 import {memoryDirectory} from '../lib/memory.js';
 import {createSessionMemory} from '../lib/session-memory.js';
@@ -17,7 +15,7 @@ import {directUser,fakeAgent,fakeLlm} from './helpers.js';
 
 const LEGACY_ID='legacy-noise-current';
 const rerankCandidate=(id,rerank,patch={})=>({
-  id,revision:1,kind:'entry',text:'rerank candidate '+id,label:'虚构重排标签',
+  id,revision:1,kind:'document',text:'rerank candidate '+id,label:'虚构重排标签',
   signals:{lexical:0,similarity:null,rerank,lanes:['vector']},
   state:{validity:'current',progress:null},...patch,
 });
@@ -29,23 +27,6 @@ test('relative rerank admission keeps the top half and enforces the absolute flo
   const low=[.04,.03,.015].map((score,index)=>rerankCandidate('low-'+index,score));
   const lowSelected=selectPrefetch({records:low,options:{minRerank:.02,rerankRatio:.5,rerankApplied:true,maxRecords:4}});
   assert.deepEqual(lowSelected.lines.map(line=>line.split(' ').at(-1)),['low-0','low-1']);
-});
-
-test('correction discounts both rerank floors',()=>{
-  const floorSelected=selectPrefetch({records:[
-    rerankCandidate('ordinary-floor',.3),
-    rerankCandidate('corrected-floor',.3,{source:{changeKind:'correction'}}),
-  ],options:{minRerank:.4,rerankRatio:.5,rerankApplied:true,maxRecords:4}});
-  assert.deepEqual(floorSelected.lines.map(line=>line.split(' ').at(-1)),['corrected-floor']);
-  assert.equal(floorSelected.stats.correction,1);
-
-  const ratioSelected=selectPrefetch({records:[
-    rerankCandidate('top',1),
-    rerankCandidate('ordinary-ratio',.35),
-    rerankCandidate('corrected-ratio',.35,{source:{changeKind:'correction'}}),
-  ],options:{minRerank:.02,rerankRatio:.5,rerankApplied:true,maxRecords:4}});
-  assert.deepEqual(ratioSelected.lines.map(line=>line.split(' ').at(-1)),['top','corrected-ratio']);
-  assert.equal(ratioSelected.stats.correction,1);
 });
 
 test('historical and disputed rerank scores do not set the relative top',()=>{
@@ -83,7 +64,7 @@ test('one- and two-character originals never occupy prefetch candidates',()=>{
 async function queryFixture(t,overrides={}){
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'prefetch-noise-'));
   const memory=new RawMemoryStore(path.join(directory,'raw.sqlite'),{warn(){}});
-  const notes=memoryStore({project:'main'}),agent=fakeAgent('session-prefetch-noise');
+  const agent=fakeAgent('session-prefetch-noise');
   const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),
     rawRecallDbPath:path.join(directory,'raw.sqlite'),rawRecall:false,autoCapture:false,recentContext:false,...overrides});
   await fs.mkdir(config.vaultPath,{recursive:true});
@@ -99,10 +80,9 @@ async function queryFixture(t,overrides={}){
     withGrant:(_grant,work)=>work(),
   };
   const raw=createRawRecall({config,store:memory,ownerSubject:'owner'});
-  const entries=createMemoryEntryAccess({access,raw,tools:notes.tools,config});
   const answers=[];
   const answer=(options={})=>{
-    const value=createMemoryQueryAnswer({access,agent,raw,entries,tools:notes.tools,config,...options});
+    const value=createMemoryQueryAnswer({access,agent,raw,config,...options});
     answers.push(value);return value;
   };
   const save=(patch={})=>{
@@ -112,15 +92,11 @@ async function queryFixture(t,overrides={}){
       rootTurn:patch.rootTurn??patch.turn??sequence,text,content:[{type:'text',text}],time:patch.time??sequence*1000,
       authorization:{rootSessionId:agent.session.id},...patch},{authorize:()=>true}).source;
   };
-  const entry=(source,proposed,operationId)=>entries.forBatch(agent,[{id:source.id,revision:source.revision}])
-    .commit({operationId,sources:new Map([['s1',source]]),subjects:new Map([['owner','owner']]),proposed});
-  const correction=source=>memory.messages.completeTurn({ownerSubject:'owner',project:'main',
-    sessionId:agent.session.id,turn:source.turn,state:'completed',changeKind:'correction'},{authorize:()=>true});
   t.after(async()=>{
     for(const value of answers)value.dispose();
     await raw.dispose();await fs.rm(directory,{recursive:true,force:true});
   });
-  return {directory,config,agent,memory,notes,access,raw,entries,answer,save,entry,correction};
+  return {directory,config,agent,memory,access,raw,answer,save};
 }
 
 async function writeLegacy(config,{id=LEGACY_ID,value='用户继续用靛蓝色杯子喝白茶。'}){
@@ -148,42 +124,17 @@ tags:
   return relative;
 }
 
-test('real retrieval folds a current entry, its source original and a similar legacy note into one slot',async t=>{
+test('real retrieval folds a similar original and legacy note into one slot',async t=>{
   const f=await queryFixture(t);
   const text='用户继续用靛蓝色杯子喝白茶，这是当前偏好。';
-  const source=f.save({messageId:'indigo-source',text});
-  await f.entry(source,{type:'preference',content:text,subject_ref:'owner',source_refs:['s1'],
-    state:{validity:'current',progress:null},tags:['杯子'],
-    importance:{level:'normal',basis:'user_explicit',reason:'虚构偏好'},evidence_basis:'self_report',speaker_ref:'owner'},
-  'noise-entry');
+  f.save({messageId:'indigo-source',text});
   await writeLegacy(f.config,{value:text});
   const answer=f.answer({keepSignals:true});
   const found=await answer.search({query:'靛蓝色杯子喝白茶',limit:4});
   const selected=selectPrefetch({records:found.records,minSimilarity:0.45,options:{}});
   assert.equal(selected.lines.length,1,JSON.stringify(selected.stats));
-  assert.match(selected.lines[0],/记忆条目/u,JSON.stringify(found.records));assert.match(selected.lines[0],/靛蓝色杯子/u);
-  assert.doesNotMatch(selected.lines[0],/旧笔记/u);
-  assert.ok(selected.stats.folded>=2);
-});
-
-test('historical entries are rejected and a newer correction is admitted',async t=>{
-  const f=await queryFixture(t);
-  const old=f.save({messageId:'old-preference',text:'很早以前记录过一条不再使用的内容。',sequence:1});
-  await f.entry(old,{type:'preference',content:'用户喜欢墨绿色杯子，这是旧偏好。',subject_ref:'owner',source_refs:['s1'],
-    state:{validity:'historical',progress:null},tags:['杯子'],
-    importance:{level:'normal',basis:'user_explicit',reason:'虚构旧偏好'},evidence_basis:'self_report',speaker_ref:'owner'},
-  'noise-historical');
-  const corrected=f.save({messageId:'corrected-preference',text:'更正一下，我现在更喜欢墨绿色杯子。',
-    sequence:2,time:3000,processingContext:{owner:'pipeline-v1',target:{provider:'fixture',model:'fixture'}}});
-  f.save({messageId:'correction-ack',role:'assistant',text:'好的，已按更正后的偏好理解。',sequence:3,turn:2,rootTurn:2,
-    time:3001,processingContext:{owner:'pipeline-v1',target:{provider:'fixture',model:'fixture'}}});
-  f.correction(corrected);
-  const answer=f.answer({keepSignals:true});
-  const found=await answer.search({query:'墨绿色杯子偏好',limit:4});
-  const selected=selectPrefetch({records:found.records,minSimilarity:0.45,options:{}});
-  assert.equal(selected.lines.length,1,JSON.stringify({stats:selected.stats,records:found.records}));
-  assert.match(selected.lines[0],/更正一下/u);assert.doesNotMatch(selected.lines[0],/旧偏好/u);
-  assert.ok(selected.stats.correction>=1,JSON.stringify(found.records));
+  assert.match(selected.lines[0],/旧笔记/u,JSON.stringify(found.records));assert.match(selected.lines[0],/靛蓝色杯子/u);
+  assert.ok(selected.stats.folded>=1);
 });
 
 test('legacy-note and old-question labels identify provenance and past questions',async t=>{
@@ -217,9 +168,9 @@ test('relevance signals merge text and vector lanes and use the complete body be
 });
 
 test('weak vector candidates remain visible to memory_search but automatic prefetch gates them',async t=>{
-  const row={id:'weak-vector',revision:'v1',kind:'entry',text:'这是一条弱相关的虚构向量候选',
-    similarity:.5,state:{validity:'current',progress:null},sourceStatus:{eligible:true,manualBody:true},
-    anchor:{id:'weak-vector',revision:'v1',ref:{storage:'entry',id:'weak-vector'}}};
+  const row={id:'weak-vector',revision:'v1',kind:'document',domain:'document',text:'这是一条弱相关的虚构向量候选',
+    similarity:.5,sourceStatus:{eligible:true,manualBody:true},
+    anchor:{id:'weak-vector',revision:'v1',ref:{storage:'document',id:'weak-vector'}}};
   const vectors={async getSnapshot(){return {id:'fixture',revision:'v1'};},
     async query(){return {records:[row]};}};
   const f=await queryFixture(t),answer=f.answer({vectors,keepSignals:true});

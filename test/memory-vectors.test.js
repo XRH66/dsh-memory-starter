@@ -4,9 +4,9 @@ import {createHook} from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createMemoryVectors} from '../lib/memory-vectors.js';
-import {memoryEntryMetadata} from '../lib/memory-entry.js';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {RawMemoryStore,buildTurn} from '../lib/raw-rag/store.js';
@@ -155,12 +155,7 @@ async function fixture(t,overrides={}){
   },legacyPage({after='',limit}){
     calls.push({op:'legacy',after});const all=[...legacy.values()].filter(row=>!row.hidden).sort((a,b)=>a.id.localeCompare(b.id));const offset=after?all.findIndex(row=>row.id===after)+1:0;
     const sources=all.slice(offset,offset+limit);return {sources,nextAfter:offset+limit<all.length?sources.at(-1).id:null};
-  }};},entryRepository(){return {operation(){return null;}};},querySourceState(){return {state:'live'};}};
-  const entries={forGrant(_agent,grant){return {async read(id){
-    assert.equal(access.validate(grant),true);const note=[...notes.values()].find(note=>note.frontmatter.memory_entry_id===id);if(!note)return null;
-    const {readMemoryEntry}=await import('../lib/memory-entry.js');
-    return {...readMemoryEntry({metadata:note.frontmatter,content:note.content.split('\n')[1]}),id,revision:note.checksum,sourceStatus:{eligible:true,manualBody:false}};
-  }};}};
+  }};},querySourceState(){return {state:'live'};}};
   const toolDefinition=name=>({async execute(args,exec){
     assert.equal(exec.memoryAuthorization(),true);calls.push({op:name,args});
     if(name.endsWith('list_directory')){
@@ -183,7 +178,7 @@ async function fixture(t,overrides={}){
       async dispose(){calls.push({op:'dispose'});backend.modelKey=null;backend.disposed=true;}};
     instances.push({backend,settings,profile,deviceCacheFile});return backend;
   };
-  const options={directory,access,raw,entries,tools,config,findAgent:id=>id===agent.session.id?agent:null,listAgents:()=>[agent],createBackend,queueConfig:{debounceMs:60000},...overrides};
+  const options={directory,access,raw,tools,config,findAgent:id=>id===agent.session.id?agent:null,listAgents:()=>[agent],createBackend,queueConfig:{debounceMs:60000},...overrides};
   api=createMemoryVectors(options);
   t.after(async()=>{await api.close();await fs.rm(directory,{recursive:true,force:true});});
   function source(id,index,storage='message'){
@@ -192,32 +187,67 @@ async function fixture(t,overrides={}){
   }
   function note(identifier,content,frontmatter={}){const row={permalink:identifier,content,checksum:'v1-'+identifier,frontmatter};notes.set(identifier,row);return row;}
   const manager=()=>api.managementGrant({agent});
-  return {get api(){return api;},directory,agent,access,config,raw,entries,notes,messages,legacy,calls,instances,hooks,source,note,manager,tools,options,
+  return {get api(){return api;},directory,agent,access,config,raw,notes,messages,legacy,calls,instances,hooks,source,note,manager,tools,options,
     disable(){enabled=false;},async restart(){await api.close();api=createMemoryVectors(options);await api.ready();},
     async prepare(){const grant=manager();try{await api.registerCurrentConfig({grant});return await api.prepare({grant});}finally{grant.cancel();}}};
 }
 
-test('portable registers 4B without loading and prepares all domains in one active space',async t=>{
+test('portable registers 4B without loading, indexes retained documents and skips entries',async t=>{
   const f=await fixture(t);
   f.messages.set('m1',f.source('m1',0));f.messages.set('m2',f.source('m2',1));f.legacy.set('old',f.source('old',2,'legacy'));
   f.note('main/chats/facts/old','<!-- dsh-fact-memory -->\n- [fact] fictional preference',{memory_id:'old-note',memory_kind:'fact',value:'fictional preference'});
-  const semantic={type:'preference',content:'new preference',subject_ref:null,source_refs:[{id:'m1',revision:1,role:'user'}],state:{validity:'current',progress:null},tags:[],importance:null};
-  f.note('main/chats/entries/new','<!-- dsh-memory-entry:start -->\nnew preference\n<!-- dsh-memory-entry:end -->',{...memoryEntryMetadata(semantic),memory_entry_id:'entry-id'});
+  f.note('main/chats/entries/new','<!-- dsh-memory-entry:start -->\nnew preference\n<!-- dsh-memory-entry:end -->',{memory_entry_id:'entry-id'});
   f.note('main/dafeiyu/thoughts/one','fictional thought');f.note('main/dafeiyu/diary/one','fictional diary');
   f.note('main/manual/chosen','chosen manual');f.note('main/private/not-selected','private body never read');
   const grant=f.manager();await f.api.ready();await f.api.registerCurrentConfig({grant});
   assert.equal(f.instances.length,0);assert.equal(f.calls.some(call=>call.op.includes('read_note')),false);
   await f.api.selectDocuments({grant,identifiers:['main/manual/chosen']});
-  const prepared=await f.api.prepare({grant});assert.equal(prepared.completed,8);
-  const coverage=await f.api.coverage({grant});assert.equal(coverage.total,8);assert.equal(coverage.caughtUp,true);
-  assert.deepEqual(Object.keys(coverage.domains).sort(),['diary','document','entry','fact','raw','thoughts']);
+  const prepared=await f.api.prepare({grant});assert.equal(prepared.completed,7);
+  const coverage=await f.api.coverage({grant});assert.equal(coverage.total,7);assert.equal(coverage.caughtUp,true);
+  assert.deepEqual(Object.keys(coverage.domains).sort(),['diary','document','fact','raw','thoughts']);
   const reader=f.api.forAgent(f.agent),snapshot=await reader.getSnapshot({});
   const result=await reader.query({query:'fictional',profile:snapshot,limit:40,deadline:Date.now()+2000});
-  assert.equal(result.records.length,8);assert.equal(result.profile.modelKey,'same-weight-space');
+  assert.equal(result.records.length,7);assert.equal(result.profile.modelKey,'same-weight-space');
+  assert.equal(result.records.some(record=>record.id==='entry-id'),false);
   assert.equal(f.instances.length,1);assert.equal(f.instances[0].settings.rawRecallModel,'Qwen/Qwen3-Embedding-4B');
   assert.equal(f.calls.some(call=>call.args?.identifier==='main/private/not-selected'),false);
   const catalogue=await fs.readFile(path.join(f.directory,'documents.json'),'utf8');assert.equal(catalogue.includes('chosen manual'),false);
   reader.close();grant.cancel();
+});
+
+test('an old entry vector opens without re-encoding the existing original',async t=>{
+  const f=await fixture(t);f.messages.set('m1',f.source('m1',0));
+  const grant=f.manager();await f.api.registerCurrentConfig({grant});await f.api.prepare({grant});grant.cancel();
+  const documentEmbeds=()=>f.calls.filter(call=>call.op==='embed'&&call.kind==='document').length;
+  const before=documentEmbeds();assert.equal(before,1);
+  await f.api.close();
+
+  const db=new DatabaseSync(path.join(f.directory,'vectors.sqlite'));
+  try{
+    const snapshot=db.prepare("SELECT * FROM vector_snapshots WHERE state='ready' ORDER BY created_at DESC LIMIT 1").get();
+    assert.ok(snapshot);
+    const existing=db.prepare(`SELECT d.* FROM vector_members m JOIN vector_documents d ON d.version_id=m.document_version_id
+      WHERE m.snapshot_id=? LIMIT 1`).get(snapshot.id);
+    const chunk=db.prepare('SELECT * FROM vector_chunks WHERE document_version_id=? ORDER BY ordinal LIMIT 1').get(existing.version_id);
+    db.exec('BEGIN IMMEDIATE');
+    try{
+      const inserted=db.prepare(`INSERT INTO vector_documents(owner_subject,project,index_identity,doc_id,revision,domain,source_ids,anchor)
+        VALUES(?,?,?,?,?,?,?,?)`).run(existing.owner_subject,existing.project,existing.index_identity,'old-entry',JSON.stringify('old-revision'),'entry',
+        JSON.stringify(['old-entry']),JSON.stringify({storage:'entry',id:'old-entry'}));
+      const version=Number(inserted.lastInsertRowid);
+      db.prepare(`INSERT INTO vector_chunks(document_version_id,ordinal,start,end,token_bound,text_hash,vector)
+        VALUES(?,?,?,?,?,?,?)`).run(version,chunk.ordinal,chunk.start,chunk.end,chunk.token_bound,chunk.text_hash,chunk.vector);
+      db.prepare('INSERT INTO vector_members(snapshot_id,doc_id,document_version_id) VALUES(?,?,?)').run(snapshot.id,'old-entry',version);
+      db.exec('COMMIT');
+    }catch(error){db.exec('ROLLBACK');throw error;}
+  }finally{db.close();}
+
+  await f.restart();
+  const resumed=f.manager();await f.api.registerCurrentConfig({grant:resumed});
+  const prepared=await f.api.prepare({grant:resumed});
+  assert.ok(prepared);
+  assert.equal(documentEmbeds(),before);
+  resumed.cancel();
 });
 
 // Pause the actual profile-file publication, after the last source scan. This
@@ -354,12 +384,10 @@ test('canonical, legacy and Basic Memory enumeration continue beyond the first 1
   assert.ok(f.calls.some(call=>call.args?.dir_name==='dafeiyu/diary'&&call.args?.page===2));
 });
 
-test('manual edits, unselection, hidden original and broken entry proof invalidate old candidates',async t=>{
+test('manual edits, unselection and hidden originals invalidate old candidates',async t=>{
   const f=await fixture(t);f.messages.set('m1',f.source('m1',0));
   f.note('main/dafeiyu/diary/edit','before edit');
   f.note('main/manual/chosen','selected body');
-  const semantic={type:'fact',content:'derived entry',subject_ref:null,source_refs:[{id:'m1',revision:1}],state:{validity:'current',progress:null},tags:[],importance:null};
-  f.note('main/chats/entries/new','<!-- dsh-memory-entry:start -->\nderived entry\n<!-- dsh-memory-entry:end -->',{...memoryEntryMetadata(semantic),memory_entry_id:'entry-id'});
   const manager=f.manager();await f.api.selectDocuments({grant:manager,identifiers:['main/manual/chosen']});await f.prepare();
   const reader=f.api.forAgent(f.agent),profile=await reader.getSnapshot({});
   f.notes.get('main/dafeiyu/diary/edit').content='manual new version';f.notes.get('main/dafeiyu/diary/edit').checksum='v2';

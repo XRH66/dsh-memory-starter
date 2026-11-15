@@ -112,13 +112,14 @@ test('explicit access is lazy: default-off initialization and a closed session n
   await assert.rejects(fs.access(f.config.rawRecallDbPath),{code:'ENOENT'});
 });
 
-test('without an organizer model originals save but no old Markdown organization runs',async t=>{
-  const f=await fixture(t),agent=f.actor(),bridge=f.bridge({}, {semanticOrganizer:undefined});
+test('retired organizer settings are ignored while originals continue to save',async t=>{
+  const f=await fixture(t),agent=f.actor(),bridge=f.bridge(undefined,{config:{...f.config,autoCapture:true,
+    captureProvider:'retired-provider',captureModel:'retired-model',organizerReasoningEffort:'high'}});
   await f.access.set(agent.session.id,true);
   f.begin(agent,1,bridge);
   f.finish(agent,1,bridge);
   await bridge.waitForIdle();
-  assert.equal(bridge.pipeline.enabled,false);
+  assert.equal(bridge.pipeline,undefined);assert.equal(bridge.memoryChangeTool,undefined);
   assert.equal(bridge.messageSources.forAgent(agent).list({}).sources.length,2);
   const files=await fs.readdir(f.config.vaultPath,{recursive:true});
   assert.deepEqual(files.filter(file=>file.endsWith('.md')),[]);
@@ -168,14 +169,10 @@ test('native message commits save both message bodies immediately without vector
   assert.equal(embeddingCalls,0);assert.equal(llm.calls.length,0);assert.equal(bridge.messageSources.status().lastError,null);
 });
 
-test('raw commits notify vector and semantic consumers independently of delay and failure',async t=>{
+test('raw commits keep notifying vector consumers when a notification fails',async t=>{
   const f=await fixture(t,{rawRecall:true,autoCapture:false}),agent=f.actor(),warnings=[];
   const bridge=f.bridge(undefined,{logger:{warn:message=>warnings.push(message)}});
-  const pending=deferred(),semantic=[],vector=[];
-  bridge.pipeline.notify=notice=>{
-    semantic.push(notice.id);
-    if(semantic.length===1)return pending.promise.then(()=>{throw Error('semantic registration failed');});
-  };
+  const vector=[];
   bridge.vectors.notifyChanged=notice=>{
     vector.push(notice.id);
     if(vector.length===2)throw Error('vector registration failed');
@@ -183,13 +180,10 @@ test('raw commits notify vector and semantic consumers independently of delay an
   await f.access.set(agent.session.id,true);
   f.begin(agent,1,bridge);
   const [source]=bridge.messageSources.forAgent(agent).list({}).sources;
-  pending.resolve();
-  assert.deepEqual(vector,[source.id],'vector notification is delivered while semantic registration is still pending');
+  assert.deepEqual(vector,[source.id]);
   f.finish(agent,1,bridge);
   await bridge.waitForIdle();
   assert.equal(vector.length,4);
-  assert.deepEqual(semantic,vector);
-  assert.ok(warnings.some(message=>message.includes('semantic registration failed')));
   assert.ok(warnings.some(message=>message.includes('vector registration failed')));
   assert.ok(bridge.messageSources.forAgent(agent).list({}).sources.every(item=>item.turnState==='completed'));
 });
@@ -430,22 +424,6 @@ test('closing during handoff preparation removes pending memory additions and st
   assert.equal(appends,0);assert.deepEqual(decision.messages,[user.data]);
 });
 
-test('structured writers use original message proofs while later authorized chats can read already committed notes',async t=>{
-  const f=await fixture(t,{autoCapture:false}),a=f.actor(),b=f.actor('session-other-entry-reader'),bridge=f.bridge();
-  await f.access.set(a.session.id,true);f.begin(a,1,bridge);
-  const source=bridge.messageSources.forAgent(a).list({}).sources[0],refs=[{id:source.id,revision:source.revision}],writer=bridge.entries.forBatch(a,refs);
-  const input={operationId:'native-proof-entry',proposed:{type:'preference',content:'QA虚构偏好：用青瓷杯喝茶。',subject_ref:'u1',source_refs:['s1'],state:{validity:'current',progress:null},tags:['测试'],importance:null},sources:new Map([['s1',source]]),subjects:new Map([['u1','用户']])};
-  const saved=await writer.commit(input);assert.equal(saved.state,'committed');
-  await f.access.set(b.session.id,true);f.begin(b,1,bridge);
-  assert.throws(()=>bridge.entries.forBatch(b,refs),{code:'MEMORY_NOT_AUTHORIZED'});
-  await f.access.set(a.session.id,false);
-  await assert.rejects(writer.commit({...input,operationId:'late-write'}),{code:'MEMORY_NOT_AUTHORIZED'});
-  const record=await bridge.entries.forAgent(b).read(saved.id);assert.equal(record.content,input.proposed.content);assert.equal(record.sourceStatus.eligible,true);
-  await f.access.set(a.session.id,true);f.begin(a,2,bridge);
-  assert.throws(()=>bridge.entries.forBatch(a,refs),{code:'MEMORY_NOT_AUTHORIZED'});
-  assert.equal(notesIn(f.memory,'chats/entries').length,1);assertTopicPage(f.memory,'测试');
-});
-
 test('pre-step prefetch never spends the model query budget; an explicit memory tool can read before the user source is committed',async t=>{
   const f=await fixture(t,{autoRecall:true}),agent=f.actor();await f.access.set(agent.session.id,true);
   const bridge=f.bridge();f.emit(agent,'turn/start',{turn:1},bridge);
@@ -453,20 +431,8 @@ test('pre-step prefetch never spends the model query budget; an explicit memory 
   await runPreStep(bridge,{turn:1,agent,messages:[directUser('我喜欢什么杯子？','pending-user')]});
   assert.equal(bridge.getQueryState(agent.session.id),null);
   const result=await bridge.queryTools.find(tool=>tool.name==='memory_search').execute({query:'杯子'},{agent,signal:new AbortController().signal});
-  assert.equal(result.budget.calls,1);assert.equal(result.channels.structured.state,'empty');
+  assert.equal(result.budget.calls,1);assert.ok(['empty','unavailable'].includes(result.channels.legacy.state));assert.equal(result.channels.structured,undefined);
   f.emit(agent,'turn/end',{turn:1,reason:{kind:'completed'}},bridge);assert.equal(bridge.getQueryState(agent.session.id),null);
-});
-
-test('a delayed recall result is discarded after close and reopen rather than using the new epoch',async t=>{
-  const f=await fixture(t,{autoRecall:false}),agent=f.actor();await f.access.set(agent.session.id,true);
-  const entered=deferred(),release=deferred();
-  const bridge=f.bridge(),user=f.begin(agent,1,bridge);
-  const forGrant=bridge.entries.forGrant.bind(bridge.entries);
-  bridge.entries.forGrant=(...args)=>{const reader=forGrant(...args);return {...reader,async search(...searchArgs){entered.resolve();await release.promise;return reader.search(...searchArgs);}};};
-  await runPreStep(bridge,{turn:1,agent,messages:[user.data]});
-  const pending=bridge.queryTools.find(tool=>tool.name==='memory_search').execute({query:'青瓷杯'},{agent,signal:new AbortController().signal});await entered.promise;
-  await f.access.set(agent.session.id,false);await f.access.set(agent.session.id,true);f.begin(agent,2);
-  release.resolve();const result=await pending;assert.equal(result.status,'denied');assert.deepEqual(result.records,[]);
 });
 
 test('authorized tool checks both before execution and after asynchronous return',async t=>{
@@ -475,82 +441,6 @@ test('authorized tool checks both before execution and after asynchronous return
   const tools=authorizedTools({get:()=>({async execute(){calls++;entered.resolve();await release.promise;return 'late';}})},f.access,grant,agent);
   const pending=tools.get('read',agent).execute({}, {agent});await entered.promise;await f.access.set(agent.session.id,false);await f.access.set(agent.session.id,true);f.begin(agent,2);release.resolve();await assert.rejects(pending);assert.equal(calls,1);
   await assert.rejects(tools.get('write',agent).execute({}, {agent}));assert.equal(calls,1);
-});
-
-test('the new batch owner consumes real committed source proofs and P02 writes without running the old per-turn generator',async t=>{
-  const f=await fixture(t),agent=f.actor(),llm=fakeLlm('{"actions":[]}');let bridge,preparedTarget;
-  bridge=f.bridge(llm,{semanticOrganizer:{
-    async prepare(input,context){
-      preparedTarget=context.target;
-      assert.deepEqual(input.sources.map(source=>source.role),['user','assistant']);
-      return {refs:input.sources.map(({id,revision})=>({id,revision})),proposed:{type:'preference',content:'QA虚构偏好：改用青瓷杯喝茶。',subject_ref:'u',source_refs:['s0'],state:{validity:'current',progress:null},tags:['测试'],importance:null}};
-    },
-    async commit(result,context){
-      const writer=bridge.entries.forBatch(context.agent,result.refs),saved=await writer.commit({operationId:context.batchId+':0',proposed:result.proposed,
-        sources:new Map(result.refs.map((ref,index)=>['s'+index,ref])),subjects:new Map([['u','用户']])});
-      return {committed:saved.state==='committed',entries:[{id:saved.id,revision:saved.revision}]};
-    },
-  }});
-  await f.access.set(agent.session.id,true);const user=f.begin(agent,1,bridge);await runPreStep(bridge,{turn:1,agent,messages:[user.data]});f.finish(agent,1,bridge);await bridge.waitForIdle();
-  const sources=bridge.messageSources.forAgent(agent).list({}).sources;assert.equal(sources.length,2);assert.ok(sources.every(source=>source.processingContext.owner==='pipeline-v1'));
-  const frozen=sources[0].processingContext.target;agent.options={provider:'another-provider',model:'another-model'};
-  await bridge.pipeline.wake({force:true});await bridge.waitForIdle();await bridge.retryPending({force:true});
-  assert.equal(llm.calls.length,0);assert.equal(notesIn(f.memory,'chats/entries').length,1);assertTopicPage(f.memory,'测试');
-  assert.equal(bridge.pipeline.status().completed,2);assert.deepEqual(preparedTarget,frozen);
-  assert.equal(bridge.pipeline.status().batches[0].state,'committed');
-});
-
-test('the default mounted organizer waits for eight full turns, yields to chatting and writes once through P02',async t=>{
-  const f=await fixture(t),agent=f.actor();
-  const llm=fakeLlm(JSON.stringify({items:[{type:'preference',content:'用户今后使用青瓷杯喝茶。',subject_ref:'p1',source_refs:['s1'],
-    state:{validity:'current',progress:null},tags:['杯具'],importance:null,evidence_basis:'self_report',speaker_ref:'p1'}],changes:[]}));
-  const bridge=f.bridge(llm,{semanticOrganizer:undefined,listAgents:()=>[agent]});assert.equal(bridge.pipeline.enabled,true);
-  await f.access.set(agent.session.id,true);agent.status='running';
-  for(let turn=1;turn<=8;turn++){
-    const user=f.begin(agent,turn,bridge);await runPreStep(bridge,{turn,agent,messages:[user.data]});f.finish(agent,turn,bridge);
-  }
-  await bridge.waitForIdle();assert.equal(llm.calls.length,0,'foreground work retains execution capacity');
-  agent.status='idle';await bridge.pipeline.wake();await bridge.waitForIdle();
-  assert.equal(llm.calls.length,1);assert.equal(llm.calls[0].purpose,'memory-capture');
-  assert.equal(notesIn(f.memory,'chats/entries').length,1);assertTopicPage(f.memory,'杯具');
-  assert.equal(bridge.pipeline.status().completed,16);
-  const prompt=JSON.parse(llm.calls[0].messages[0].content[0].text);assert.equal(prompt.sources.length,16);
-  assert.deepEqual([...new Set(prompt.sources.map(source=>source.role))].sort(),['assistant','user']);
-  await bridge.pipeline.resume();await bridge.pipeline.wake({force:true});assert.equal(llm.calls.length,1);
-});
-
-test('the foreground memory signal is scoped to its completed authorized turn',async t=>{
-  const f=await fixture(t),agent=f.actor();
-  const llm=fakeLlm('{"items":[],"changes":[]}');
-  const bridge=f.bridge(llm,{semanticOrganizer:undefined,listAgents:()=>[agent]});
-  const mark=kind=>bridge.memoryChangeTool.execute({kind},{agent});
-  await f.access.set(agent.session.id,true);agent.status='running';
-  const begin=async turn=>{const event=f.begin(agent,turn,bridge);await runPreStep(bridge,{turn,agent,messages:[event.data]});};
-
-  await begin(1);
-  assert.equal(mark('remember').duplicate,false);
-  assert.equal(mark('remember').duplicate,true);
-  assert.throws(()=>mark('topic'),/类型无效/);
-  await bridge.pipeline.wake({force:true});assert.equal(llm.calls.length,0);
-  f.finish(agent,1,bridge);agent.status='idle';
-  await bridge.pipeline.wake();
-  assert.equal(llm.calls.length,1);
-  assert.equal(bridge.pipeline.status().latestPriority.kind,'remember');
-
-  agent.status='running';await begin(2);mark('correction');
-  f.emit(agent,'turn/end',{turn:2,reason:{kind:'cancelled'}},bridge);
-  agent.status='idle';await bridge.pipeline.wake();
-  assert.equal(llm.calls.length,1);
-  assert.equal(bridge.pipeline.status().jobs.find(job=>job.turn===2).changeKind,undefined);
-
-  agent.status='running';await begin(3);mark('decision');
-  await f.access.set(agent.session.id,false);
-  assert.throws(()=>mark('decision'),/授权/);
-  f.finish(agent,3,bridge);agent.status='idle';
-  await f.access.set(agent.session.id,true);await begin(4);f.finish(agent,4,bridge);
-  await bridge.pipeline.wake();
-  assert.equal(llm.calls.length,1);
-  assert.ok(bridge.pipeline.status().jobs.filter(job=>job.turn>=3).every(job=>!job.changeKind));
 });
 
 test('a memory-enabled turn carries one merged answer-rules message',async t=>{
@@ -610,8 +500,8 @@ test('turn-start prefetch attaches bounded earlier originals through the read gr
   const summary=(await bridge.getMemoryRuntime()).searches.find(row=>row.kind==='prefetch'&&row.outcome==='injected');
   assert.ok(summary);assert.equal(summary.injected,1);assert.ok(summary.injectedChars>0);assert.ok(summary.totalMs>=0);
   assert.ok(summary.admitted>=summary.injected);assert.ok(summary.rejected>=0);assert.ok(summary.folded>=0);
-  for(const key of ['lexical','vector','agree','correction'])assert.ok(Number.isSafeInteger(summary[key]));
-  assert.deepEqual(Object.keys(summary.candidates).sort(),['entry','legacy','original','vector']);
+  for(const key of ['lexical','vector','agree'])assert.ok(Number.isSafeInteger(summary[key]));
+  assert.deepEqual(Object.keys(summary.candidates).sort(),['legacy','original','vector']);
   assert.equal(JSON.stringify(summary).includes(firstQuery),false,'prefetch telemetry never stores the query');
   assert.equal(bridge.getQueryState(agent.session.id),null,'prefetch does not open the model query session');
   // The model sees who said it and when, with the relative day computed by the program.

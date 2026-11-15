@@ -9,17 +9,15 @@ test('config defaults apply the product limits without a session allowlist', () 
   assert.equal(config.project, 'personal');
   assert.equal(config.timeZone, 'Asia/Shanghai');
   assert.equal(config.autoRecall, true);
-  assert.equal(config.autoCapture, true);
   assert.equal(config.rawRecallMinScore, null);
   assert.equal(config.rawRecallQueryWaitMs, 0);
   assert.equal(config.captureFolder, 'chats');
-  assert.equal(config.organizerReasoningEffort, 'low');
   assert.deepEqual([
     config.prefetchMaxChars, config.prefetchMaxRecords, config.prefetchMinLexical,
     config.prefetchVectorMargin, config.prefetchMinRerank, config.prefetchRerankRatio,
     config.prefetchRerankCandidates,
   ], [1000, 3, 0.6, 0.1, 0.02, 0.5, 16]);
-  assert.equal(Config({}).organizerReasoningEffort, 'low');
+  assert.equal(resolveConfig({}).autoCapture, undefined);
 });
 
 test('prefetch thresholds validate their bounds and integer fields', () => {
@@ -36,12 +34,19 @@ test('prefetch thresholds validate their bounds and integer fields', () => {
   assert.deepEqual(Config({}), Config({ prefetchMaxChars: 1000 }));
 });
 
-test('organizer reasoning effort honors explicit values and empty model defaults', () => {
-  assert.equal(resolveConfig({ organizerReasoningEffort: 'high' }).organizerReasoningEffort, 'high');
-  assert.equal(resolveConfig({ organizerReasoningEffort: '' }).organizerReasoningEffort, '');
-  assert.equal(resolveConfig({ organizerReasoningEffort: null }).organizerReasoningEffort, '');
-  assert.equal(Config({ organizerReasoningEffort: 'high' }).organizerReasoningEffort, 'high');
-  assert.equal(Config({ organizerReasoningEffort: null }).organizerReasoningEffort, null);
+test('retired organizer settings load without changing runtime configuration', () => {
+  const old = {
+    autoCapture: true,
+    organizerReasoningEffort: 'high',
+    captureProvider: 'fixture-provider',
+    captureModel: 'fixture-model',
+    captureTargetMode: 'fixed',
+  };
+  const resolved = resolveConfig(old);
+  assert.doesNotThrow(() => Config(old));
+  for (const key of Object.keys(old)) {
+    assert.equal(resolved[key], undefined, key);
+  }
 });
 
 test('invalid personal time zones fall back to Beijing time without stopping configuration', () => {
