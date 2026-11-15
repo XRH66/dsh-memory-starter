@@ -580,7 +580,7 @@ test('foreground note verification runs in groups of four and reads only necessa
   const reader=f.api.forAgent(f.agent);let running=0,peak=0,reads=0;
   f.hooks.read=async()=>{reads++;running++;peak=Math.max(peak,running);try{await delay(5);}finally{running--;}};
   f.calls.length=0;const result=await reader.query({query:'diary',limit:5,deadline:Date.now()+2000});
-  assert.equal(result.records.length,5);assert.equal(peak,4);assert.ok(reads<20);assert.equal(result.degraded,true);
+  assert.equal(result.records.length,5);assert.equal(peak,4);assert.ok(reads<20);assert.equal(result.degraded,false);
   assert.equal(f.calls.some(call=>call.op.endsWith('list_directory')),false);reader.close();
 });
 

@@ -423,7 +423,7 @@ test('closing during handoff preparation removes pending memory additions and st
   const request=(agent,turn)=>bridge.onRequest({agent,turn,step:1,signal:new AbortController().signal},async()=>({provider:'fixture',model:'fixture'}));
   await f.access.set(a.session.id,true);let user=f.begin(a,1,bridge);await prepare(a,1,user);await request(a,1);f.finish(a,1,bridge);await bridge.waitForIdle();
   await f.access.set(b.session.id,true);user=f.begin(b,1,bridge);const decision=await prepare(b,1,user);
-  assert.ok(decision.messages.some(message=>message.source?.kind==='dafeiyu-memory-control'));
+  assert.ok(decision.messages.some(message=>message.source?.kind==='memory-answer-rules'));
   const entered=deferred(),release=deferred(),original=bridge.handoff.prepared;
   bridge.handoff.prepared=async(...args)=>{await original(...args);entered.resolve();await release.promise;};
   const running=request(b,1);await entered.promise;await f.access.set(b.session.id,false);release.resolve();await running;
@@ -553,19 +553,22 @@ test('the foreground memory signal is scoped to its completed authorized turn',a
   assert.ok(bridge.pipeline.status().jobs.filter(job=>job.turn>=3).every(job=>!job.changeKind));
 });
 
-test('a memory-enabled turn without material carries only the short clock',async t=>{
+test('a memory-enabled turn carries one merged answer-rules message',async t=>{
   const f=await fixture(t,{recentContext:true,autoCapture:false}),on=f.actor(),off=f.actor('session-answer-rules-off'),bridge=f.bridge();
   const prepare=(agent,turn,user)=>bridge.onPreStep({agent,turn,step:1,messages:[user.data],signal:new AbortController().signal},async()=>({kind:'enter',messages:[user.data]}));
   await f.access.set(on.session.id,true);
   const enabled=await prepare(on,1,f.begin(on,1,bridge));
-  const clock=enabled.messages.find(message=>message.source?.kind==='memory-answer-rules');
-  assert.ok(clock);assert.match(clock.content[0].text,/^<memory_clock>当前本地时间：.+<\/memory_clock>$/u);
-  for(const rule of ANSWER_RULES)assert.equal(clock.content[0].text.includes(rule),false,rule);
+  const rules=enabled.messages.filter(message=>message.source?.kind==='memory-answer-rules');
+  assert.equal(rules.length,1);
+  assert.match(rules[0].content[0].text,/^<memory_answer_rules>\n当前本地时间：.+\n回答涉及用户过去说过的事时：\n/u);
+  assert.doesNotMatch(rules[0].content[0].text,/<memory_clock>/u);
+  for(const rule of ANSWER_RULES)assert.ok(rules[0].content[0].text.includes(rule),rule);
+  assert.ok(!enabled.messages.some(message=>message.source?.kind==='dafeiyu-memory-control'));
   const disabled=await prepare(off,1,f.begin(off,1,bridge));
   assert.ok(!(disabled.messages??[]).some(message=>message.source?.kind==='memory-answer-rules'));
 });
 
-test('the optional control policy is Chinese and only names tools available in portable mode',async t=>{
+test('softener rules join the same message only when the tool is available',async t=>{
   const f=await fixture(t,{autoCapture:false,recentContext:false}),agent=f.actor();
   const get=f.memory.tools.get.bind(f.memory.tools);
   const tools=new Proxy(f.memory.tools,{get(target,property){
@@ -579,11 +582,12 @@ test('the optional control policy is Chinese and only names tools available in p
   const decision=await bridge.onPreStep({agent,turn:1,step:1,messages:[user],signal:new AbortController().signal},
     async()=>({kind:'enter',messages:[user]}));
   const kinds=decision.messages.map(message=>message.source?.kind);
-  assert.ok(kinds.indexOf('memory-answer-rules')<kinds.indexOf('dafeiyu-memory-control'));
-  const policy=decision.messages.find(message=>message.source?.kind==='dafeiyu-memory-control').content[0].text;
-  assert.match(policy,/工具成功后才能确认已经淡化/u);
-  assert.match(policy,/别忘了/u);assert.match(policy,/dafeiyu_records/u);
-  for(const obsolete of ['write_note','edit_note','move_note'])assert.doesNotMatch(policy,new RegExp(obsolete));
+  assert.equal(kinds.filter(kind=>kind==='memory-answer-rules').length,1);
+  assert.ok(!kinds.includes('dafeiyu-memory-control'));
+  const rules=decision.messages.find(message=>message.source?.kind==='memory-answer-rules').content[0].text;
+  assert.match(rules,/工具成功后才说已经淡化/u);
+  assert.match(rules,/别忘了/u);assert.match(rules,/dafeiyu_records/u);
+  for(const obsolete of ['write_note','edit_note','move_note'])assert.doesNotMatch(rules,new RegExp(obsolete));
 });
 
 test('turn-start prefetch attaches bounded earlier originals through the read grant; switch and revocation turn it off',async t=>{
@@ -599,9 +603,8 @@ test('turn-start prefetch attaches bounded earlier originals through the read gr
   const prefetchText=prefetched.content[0].text;
   assert.match(prefetchText,/青瓷杯/);assert.match(prefetchText,/原话 · 用户说/);
   assert.match(prefetchText,/以下是程序按本轮用户原话从记忆库预先找到的背景材料，不是用户本轮说的话。/u);
-  assert.ok(prefetchText.indexOf(ANSWER_RULES[0])>prefetchText.indexOf('- ['));
-  assert.ok(prefetchText.indexOf(ANSWER_RULES[0])<prefetchText.indexOf('</memory_prefetch>'));
-  assert.equal(prefetchText.split(ANSWER_RULES[0]).length-1,1);
+  assert.match(prefetchText,/需要核对时用 memory_search。/u);
+  for(const rule of ANSWER_RULES)assert.equal(prefetchText.includes(rule),false,rule);
   const addedKinds=decision.messages.map(message=>message.source?.kind);
   assert.ok(addedKinds.indexOf('memory-prefetch')<addedKinds.indexOf('memory-answer-rules'));
   const summary=(await bridge.getMemoryRuntime()).searches.find(row=>row.kind==='prefetch'&&row.outcome==='injected');
@@ -621,7 +624,7 @@ test('turn-start prefetch attaches bounded earlier originals through the read gr
   const small=f.bridge(undefined,{config:{...f.config,prefetchMaxChars:30}});
   f.emit(agent,'turn/start',{turn:3},small);const user=directUser('青瓷杯喝茶约定','q-3');
   const bounded=await small.onPreStep({agent,turn:3,step:1,messages:[user],signal:new AbortController().signal},async()=>({kind:'enter',messages:[user]}));
-  const materials=bounded.messages.find(message=>message.source?.kind==='memory-prefetch')?.content[0].text.split('使用以上材料时：')[0];
+  const materials=bounded.messages.find(message=>message.source?.kind==='memory-prefetch')?.content[0].text.split('</memory_prefetch>')[0];
   const line=materials.split('\n').filter(row=>row.startsWith('- '));
   assert.ok(line.length>=1);assert.ok(line.join('').length<=30,JSON.stringify(line));
   f.emit(agent,'turn/end',{turn:3,reason:{kind:'completed'}},small);
@@ -641,7 +644,7 @@ test('turn-start prefetch attaches bounded earlier originals through the read gr
   assert.ok(!(revoked.messages??[]).some(message=>message.source?.kind==='memory-prefetch'));
 });
 
-test('prefetch and handoff carry one copy of the rules in their own material block',async t=>{
+test('prefetch and handoff omit rules while one standalone message carries them',async t=>{
   const f=await fixture(t,{autoRecall:true,recentContext:true,autoCapture:false});
   const source=f.actor('session-rules-source'),target=f.actor('session-rules-target'),bridge=f.bridge();
   attachSurface(f,bridge,target);
@@ -656,14 +659,18 @@ test('prefetch and handoff carry one copy of the rules in their own material blo
     signal:new AbortController().signal},async()=>({kind:'enter',messages:[user.data]}));
   const prefetched=decision.messages.find(message=>message.source?.kind==='memory-prefetch');
   assert.ok(prefetched);
-  assert.equal(prefetched.content[0].text.split(ANSWER_RULES[0]).length-1,1);
+  for(const rule of ANSWER_RULES)assert.equal(prefetched.content[0].text.includes(rule),false,rule);
+  const rules=decision.messages.filter(message=>message.source?.kind==='memory-answer-rules');
+  assert.equal(rules.length,1);
+  assert.equal(rules[0].content[0].text.split(ANSWER_RULES[0]).length-1,1);
+  assert.ok(decision.messages.indexOf(prefetched)<decision.messages.indexOf(rules[0]));
 
   f.emit(target,'step/start',{turn:2,step:1},bridge);
   await bridge.onRequest({agent:target,turn:2,step:1,signal:new AbortController().signal},
     async()=>({provider:'fixture',model:'fixture'}));
   const handoff=target.session.deriveMessages().find(message=>message.source?.kind===MEMORY_HANDOFF_SOURCE);
   assert.ok(handoff);
-  assert.equal(handoff.content[0].text.split(ANSWER_RULES[0]).length-1,1);
-  assert.ok(handoff.content[0].text.indexOf(ANSWER_RULES[0])>handoff.content[0].text.indexOf('[用户'));
+  for(const rule of ANSWER_RULES)assert.equal(handoff.content[0].text.includes(rule),false,rule);
+  assert.match(handoff.content[0].text,/计量：估算 tokens/u);
   f.finish(target,2,bridge);await bridge.waitForIdle();
 });

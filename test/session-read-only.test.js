@@ -159,6 +159,9 @@ test('a read-only turn cannot admit originals, authorize sources, notify queues,
   assert.ok(agent.denied.has('memory_mark_change'));
   assert.ok(agent.denied.has('soften_memory'));
   assert.ok(!decision.messages.some(message=>message.source?.kind==='dafeiyu-memory-control'));
+  const rules=decision.messages.filter(message=>message.source?.kind==='memory-answer-rules');
+  assert.equal(rules.length,1);
+  assert.doesNotMatch(rules[0].content[0].text,/soften_memory/u);
   assert.throws(()=>bridge.memoryChangeTool.execute({kind:'remember'},{agent}),/只读/);
   await assert.rejects(bridge.markSoftened(agent.session.id,{softenedAt:new Date().toISOString(),permalink:'fixture'}),{code:'MEMORY_READ_ONLY'});
   await bridge.onRequest({agent,turn:1,step:1,signal:new AbortController().signal},

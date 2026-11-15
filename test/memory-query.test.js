@@ -113,6 +113,28 @@ test('actual original reader and native tools share the answer ledger without mo
   assert.equal(f.raw.status().backend.prepared,false);assert.ok(f.notes.tools.calls.filter(call=>call.name.endsWith('search_notes')).every(call=>call.arguments.search_type==='text'));
 });
 
+test('short originals stay out of search ranking but remain available to recent and open',async t=>{
+  const f=await fixture(t);
+  const shortUser=f.save({messageId:'short-user',sequence:1,text:'好的',content:[{type:'text',text:'好的'}]});
+  const shortAssistant=f.save({messageId:'short-assistant',sequence:2,role:'assistant',text:'😀😀',
+    content:[{type:'text',text:'😀😀'}]});
+  const long=f.save({messageId:'long-user',sequence:3,text:'好的，我周末整理书架。',
+    content:[{type:'text',text:'好的，我周末整理书架。'}]});
+  const search=await f.answer.search({query:'好的'});
+  const ids=search.records.map(record=>f.answer.resolve(record.ref)?.id);
+  assert.ok(ids.includes(long.id));
+  assert.ok(!ids.includes(shortUser.id));
+  assert.ok(!ids.includes(shortAssistant.id));
+
+  const recent=(await f.answer.recent({})).records;
+  assert.ok(recent.some(record=>f.answer.resolve(record.ref)?.id===shortUser.id));
+  assert.ok(recent.some(record=>f.answer.resolve(record.ref)?.id===shortAssistant.id));
+  const short=recent.find(record=>f.answer.resolve(record.ref)?.id===shortUser.id);
+  const opened=await f.answer.expand({ref:short.ref});
+  assert.equal(f.answer.resolve(opened.records[0].ref)?.id,shortUser.id);
+  assert.equal(opened.records[0].text,'好的');
+});
+
 test('recent bypasses vector configuration and later searches share a pending answer snapshot',async t=>{
   let release,entered,textEntered=false,snapshots=0;
   const pendingProfile=new Promise(resolve=>release=resolve),textStarted=new Promise(resolve=>entered=resolve);
@@ -662,7 +684,7 @@ test('records carry a label saying original or entry, speaker, progress and time
   assert.doesNotMatch(recordLabel({kind:'original',role:'assistant',text:'你想问什么？',time:0}),/当时的提问/u);
 });
 
-test('a memory-enabled turn without material carries only the short clock',async t=>{
+test('a memory-enabled turn carries one merged answer-rules message',async t=>{
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'answer-guidance-')),agent=fakeAgent('guidance-session');
   const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecallDbPath:path.join(directory,'raw.sqlite'),
     autoRecall:false,autoCapture:false,personalRecall:false,recentContext:false,rawRecall:false});
@@ -678,9 +700,14 @@ test('a memory-enabled turn without material carries only the short clock',async
   const user=directUser('按规则回答。','guidance-user');
   bridge.onSessionEvent(agent.session,user);
   const decision=await runPreStep(bridge,{agent,turn:1,messages:[user.data]});
-  const clock=decision.messages.find(message=>message.source?.kind==='memory-answer-rules');
-  assert.ok(clock);assert.match(clock.content[0].text,/^<memory_clock>当前本地时间：.+<\/memory_clock>$/u);
-  for(const rule of ANSWER_RULES)assert.equal(clock.content[0].text.includes(rule),false,rule);
+  const messages=decision.messages.filter(message=>message.source?.kind==='memory-answer-rules');
+  assert.equal(messages.length,1);
+  const rules=messages[0].content[0].text;
+  assert.match(rules,/^<memory_answer_rules>\n当前本地时间：.+\n回答涉及用户过去说过的事时：\n/u);
+  assert.doesNotMatch(rules,/<memory_clock>/u);
+  for(const rule of ANSWER_RULES)assert.ok(rules.includes(rule),rule);
+  assert.match(rules,/soften_memory/u);
+  assert.ok(!decision.messages.some(message=>message.source?.kind==='dafeiyu-memory-control'));
 });
 
 test('memory_search description is compact and does not repeat the material rules',()=>{

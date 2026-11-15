@@ -240,6 +240,21 @@ test('a full maintenance queue never refuses a query', async t => {
   release(); assert.equal((await query)[0].length, 2560); await Promise.all(docs);
 });
 
+test('local query encoding remains strictly serial', async t => {
+  let running=0,peak=0;
+  const gate=async()=>{
+    running++;peak=Math.max(peak,running);
+    try{await delay(10);}finally{running--;}
+  };
+  const f=await backendFixture(t,{rawRecallDevice:'cpu'},{gate});
+  const backend=f.create();
+  await backend.prepare();
+  running=0;peak=0;
+  await Promise.all(Array.from({length:5},(_,index)=>
+    backend.embed(['serial-query-'+index],{kind:'query',timeoutMs:2000})));
+  assert.equal(peak,1);
+});
+
 test('local query cancellation releases the runtime only after transport dispatch', async t => {
   let authorizing, allow, sent, respond;
   const authorizationStarted = new Promise(resolve => { authorizing = resolve; });

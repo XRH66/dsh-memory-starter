@@ -70,6 +70,16 @@ test('invalid rerank ratio configuration falls back to the default',()=>{
   assert.deepEqual(selected.lines.map(line=>line.split(' ').at(-1)),['top']);
 });
 
+test('one- and two-character originals never occupy prefetch candidates',()=>{
+  const records=[
+    {kind:'original',role:'user',text:'好的',signals:{lexical:1,lanes:['text']}},
+    {kind:'original',role:'assistant',text:'😀😀',signals:{lexical:1,lanes:['text']}},
+  ];
+  const selected=selectPrefetch({records,options:{minLexical:0,maxRecords:4}});
+  assert.deepEqual(selected.lines,[]);
+  assert.equal(selected.stats.candidates,0);
+});
+
 async function queryFixture(t,overrides={}){
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'prefetch-noise-'));
   const memory=new RawMemoryStore(path.join(directory,'raw.sqlite'),{warn(){}});

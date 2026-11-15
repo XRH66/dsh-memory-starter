@@ -491,12 +491,27 @@ test('bounded reference query scans past historical and incompatible records wit
   const query = { query: 'query', grant: f.g, limit: 8 };
   const ordinary = await f.api.query(query);
   assert.deepEqual(ordinary.records.map(row => row.id), history.map(row => row.id));
+  assert.equal(ordinary.degraded, false);
   assert.equal(ordinary.candidatesExamined, 16);
   const references = await f.api.query({ ...query, referenceOnly: true, minSimilarity: 0.2 });
   assert.deepEqual(references.records.map(row => row.id), eligible.map(row => row.id));
-  assert.equal(references.degraded, true);
+  assert.equal(references.degraded, false);
   assert.equal(references.candidateLimit, 18);
   assert.equal(references.candidatesExamined, 18);
+});
+
+test('bounded reference query is degraded only when the deadline leaves eligible candidates unexamined', async t => {
+  const f = await fixture(t, { queryCandidateLimit: 120 });
+  const rows = Array.from({length: 120}, (_, index) => referenceDoc(`row-${index}`,
+    index % 4 === 0 ? 'current' : 'historical'));
+  f.setRows(rows); await f.choose();
+  setQueryCosines(f, new Map(rows.map((row, index) => [row.text, 1 - index * 0.001])));
+  await f.api.prepare({ grant: f.g });
+  f.hooks.resolve = async () => { await new Promise(resolve => setTimeout(resolve, 10)); };
+  const result = await f.api.query({ query: 'query', grant: f.g, limit: 10, deadline: Date.now() + 55 });
+  assert.ok(result.records.length > 0);
+  assert.ok(result.candidatesExamined < 120);
+  assert.equal(result.degraded, true);
 });
 
 test('bounded query filters on cosine and exposes it separately from the weighted score', async t => {
@@ -1002,34 +1017,51 @@ test('raw context reaches the real embedding backend for long chunks and keeps o
   assert.equal(record.text, text.slice(0, 699));
 });
 
-test('queued foreground timeout and cancellation leave the incremental backend warm', async t => {
+test('queued foreground timeout and cancellation leave the cloud backend warm', async t => {
   const f = await sourceBoundaryFixture(t, { singleBackend: true });
   f.rows.set('one', doc('one')); await f.api.prepare({ grant: f.grant });
-  const backend = f.backend, entered = defer(), release = defer();
+  const backend = f.backend, documentEntered = defer(), documentRelease = defer();
+  const slotsEntered = defer(), slotsRelease = defer();
   f.rows.set('two', doc('two'));
-  f.hooks.sent = async texts => { if (texts.includes('two')) { entered.resolve(); await release.promise; } };
+  let slots=0;
+  f.hooks.sent = async texts => {
+    if (texts.includes('two')) { documentEntered.resolve(); await documentRelease.promise; }
+    if (texts[0]?.startsWith('active-slot-')) {
+      if(++slots===4)slotsEntered.resolve();
+      await slotsRelease.promise;
+    }
+  };
   const incremental = f.api.incremental({ grant: f.grant });
   try {
-    await entered.promise;
+    await documentEntered.promise;
+    const active=Array.from({length:4},(_,index)=>
+      f.api.query({query:`active-slot-${index}`,grant:f.grant}));
+    await slotsEntered.promise;
+    assert.equal(backend.status().activeQueries,4);
     for (const reason of [new DOMException('query expired', 'TimeoutError'), new DOMException('query cancelled', 'AbortError')]) {
       const controller = new AbortController(), submitted = defer(), query = `queued-${reason.name}`;
       f.hooks.submitted = texts => { if (texts[0] === query) submitted.resolve(); };
       const reading = f.api.query({ query, grant: f.grant, signal: controller.signal });
       const rejected = assert.rejects(reading, error => error === reason);
       await submitted.promise;
-      assert.equal(backend.status().queued, 1);
+      assert.equal(backend.status().queuedQueries, 1);
       if (reason.name === 'TimeoutError') setTimeout(() => controller.abort(reason), 1);
       else controller.abort(reason);
       await rejected;
-      assert.equal(backend.status().queued, 0);
+      assert.equal(backend.status().queuedQueries, 0);
       assert.equal((await f.api.status({ grant: f.grant })).profiles[0].releasing, false);
       assert.ok(!f.requests.some(texts => texts.includes(query)));
     }
-  } finally { release.resolve(); await incremental; }
+    slotsRelease.resolve();
+    await Promise.all(active);
+  } finally {
+    slotsRelease.resolve();
+    documentRelease.resolve();
+    await incremental;
+  }
   assert.equal((await f.api.query({ query: 'next-query', grant: f.grant })).records[0].id, 'one');
   assert.equal(f.backend, backend);
   assert.equal(backend.disposed, false);
-  assert.equal((await f.api.status({ grant: f.grant })).profiles[0].embeddingUsage.calls, 3);
 });
 
 test('a query cancelled while waiting on shared preparation leaves the loader running', async t => {
@@ -1073,7 +1105,7 @@ for (const change of ['revise','revoke']) for (const window of ['queued','loaded
     }
     if(window==='queued'){
       f.hooks.sent=async texts=>{if(texts[0]==='BUSY-QUERY'){entered.resolve();await release.promise;}};
-      f.hooks.planned=async text=>{if(text===oldText&&!once){once=true;blocking=f.backend.embed(['BUSY-QUERY'],{kind:'query',timeoutMs:3000});await entered.promise;}};
+      f.hooks.planned=async text=>{if(text===oldText&&!once){once=true;blocking=f.backend.embed(['BUSY-QUERY'],{kind:'query',timeoutMs:3000});await entered.promise;await blocking;}};
     }
     const work=f.api.prepare({grant:f.grant});
     if(window!=='between-batches'){try{await entered.promise;await new Promise(r=>setImmediate(r));mutate();}finally{release.resolve();}}
