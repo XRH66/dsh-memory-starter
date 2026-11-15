@@ -2,38 +2,39 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {readBootstrap,createBootstrap,registerBootstrapRoutes,stageBootstrapActivation,readScheduledBootstrap,recordBootstrapActivation,updateBootstrapSessions,updateBootstrapOptions} from '../lib/bootstrap-host.js';
+import {readBootstrap,createBootstrap,stageBootstrapActivation,readScheduledBootstrap,recordBootstrapActivation,updateBootstrapSessions} from '../lib/bootstrap-host.js';
 import {deploymentFingerprint} from '../lib/deployment-config.js';
-import {Readable} from 'node:stream';
 import {scratchDirectory} from './helpers.js';
 
 test('bootstrap uses the current profile and refuses existing or overlapping memory',async()=>{
   const root=await scratchDirectory('bootstrap-test-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture'),old=path.join(root,'daily','vault');
   await fs.mkdir(dir,{recursive:true});await fs.mkdir(old,{recursive:true});await fs.writeFile(path.join(old,'keep.md'),'unchanged');
-  const profile={name:'fixture',dir,home},raw={vaultPath:old},input={directory:path.join(root,'daily'),captureProvider:'fixture',captureModel:'fixture'};
+  const profile={name:'fixture',dir,home},raw={vaultPath:old},input={directory:path.join(root,'daily')};
   const initial=await readBootstrap(profile,raw);assert.equal(initial.configured,false);assert.equal(initial.profile,'fixture');
-  await assert.rejects(createBootstrap(profile,raw,{...input,captureModel:' '}),/请填写独立记忆目录、整理服务和模型/);await assert.rejects(fs.access(path.join(dir,'basic-memory-bridge','configuration.json')),{code:'ENOENT'});
+  await assert.rejects(createBootstrap(profile,raw,{directory:''}),/请填写独立记忆目录/);await assert.rejects(fs.access(path.join(dir,'basic-memory-bridge','configuration.json')),{code:'ENOENT'});
   await assert.rejects(createBootstrap(profile,raw,input),/必须与现有/);assert.equal(await fs.readFile(path.join(old,'keep.md'),'utf8'),'unchanged');
   const configFile=path.join(dir,'basic-memory-bridge','configuration.json');await fs.writeFile(configFile,'{"untouched":true}');await assert.rejects(createBootstrap(profile,raw,{...input,directory:path.join(root,'new')}),/已存在/);assert.equal(await fs.readFile(configFile,'utf8'),'{"untouched":true}');
   await assert.rejects(readBootstrap({...profile,name:'other'},raw),/profile 路径/);
 });
-test('bootstrap model suggestions only query a registered provider on explicit request',async()=>{
-  const root=await scratchDirectory('bootstrap-models-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture');await fs.mkdir(dir,{recursive:true});const profile={name:'fixture',dir,home};let handler,calls=0;
-  const ctx={get:key=>key==='profileContext'?profile:undefined,llm:{listProviders:()=>[{id:'local-fixture',name:'本地测试'}],async listModels(id){calls++;assert.equal(id,'local-fixture');return [{id:'mock-model',name:'测试模型',secret:'must-not-return'}];}},inject(_names,fn){fn({get:()=>undefined,effect(run){run();},webServer:{register(value){handler=value.handler;}}});}};registerBootstrapRoutes(ctx,{});
-  async function get(url,headers={}){const req=Readable.from([]);req.method='GET';req.url=url;req.socket={remoteAddress:'127.0.0.1'};req.headers={host:'127.0.0.1:15680',...headers};const res={setHeader(){},end(text){this.body=JSON.parse(text);}};await handler(req,res);return res;}
-  const initial=await get('/api/basic-memory-bootstrap');assert.deepEqual(initial.body.providers,[{id:'local-fixture',name:'本地测试'}]);assert.equal(calls,0);assert.equal((await get('/api/basic-memory-bootstrap/models?provider=unknown')).statusCode,400);assert.equal((await get('/api/basic-memory-bootstrap/models?provider=local-fixture',{origin:'https://attacker.invalid'})).statusCode,403);assert.equal(calls,0);const result=await get('/api/basic-memory-bootstrap/models?provider=local-fixture');assert.deepEqual(result.body.models,[{id:'mock-model',name:'测试模型'}]);assert.equal(calls,1);
+test('first setup no longer requires an organizer model and old config fields remain readable',async()=>{
+  const root=await scratchDirectory('bootstrap-no-organizer-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture');
+  await fs.mkdir(dir,{recursive:true});
+  const profile={name:'fixture',dir,home},directory=path.join(root,'personal'),old=path.join(root,'old-vault');
+  await fs.mkdir(old,{recursive:true});
+  const created=await createBootstrap(profile,{vaultPath:old},{directory});
+  assert.equal(created.configured,true);
+  const file=path.join(dir,'basic-memory-bridge','configuration.json'),cfg=JSON.parse(await fs.readFile(file,'utf8'));
+  assert.equal(Object.hasOwn(cfg,'memory'),false);
+  await fs.writeFile(file,JSON.stringify({...cfg,memory:{autoCapture:true,organizerReasoningEffort:'high',
+    captureProvider:'retired-provider',captureModel:'retired-model'}}));
+  const loaded=await readBootstrap(profile);
+  assert.equal(loaded.configured,true);assert.equal(loaded.personalDirectory,directory);
+  await assert.rejects(fs.access(path.join(directory,'management','pipeline')),{code:'ENOENT'});
 });
-test('prepared organizer options can be corrected without moving memory or changing other configuration',async()=>{
-  const root=await scratchDirectory('bootstrap-options-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture'),base=path.join(dir,'basic-memory-bridge');
-  await fs.mkdir(base,{recursive:true});const cfg={ownerDirectory:path.join(root,'personal'),dshSessionIds:['chosen'],backend:{command:process.execPath},memory:{captureProvider:'old',captureModel:'old',keep:true},other:'unchanged'},file=path.join(base,'configuration.json'),profile={name:'fixture',dir,home},input={captureProvider:' new ',captureModel:' model '};await fs.writeFile(file,JSON.stringify(cfg));
-  await assert.rejects(updateBootstrapOptions(profile,input,'stale'),/刷新/);
-  await fs.writeFile(path.join(base,'activation.json'),JSON.stringify({state:'failed'}));await assert.rejects(updateBootstrapOptions(profile,input,deploymentFingerprint(cfg)),/先取消/);await fs.rm(path.join(base,'activation.json'));
-  await updateBootstrapOptions(profile,input,deploymentFingerprint(cfg));const saved=JSON.parse(await fs.readFile(file,'utf8'));assert.equal(saved.ownerDirectory,cfg.ownerDirectory);assert.deepEqual(saved.dshSessionIds,['chosen']);assert.equal(saved.other,'unchanged');assert.equal(Object.hasOwn(saved,'backend'),false,'the retired backend section is dropped on save');assert.deepEqual(saved.memory,{captureProvider:'new',captureModel:'model',keep:true});
-});
-test('next-start activation preserves the current process and checks the selected isolated library',async()=>{
+test('next-start activation preserves the current process and only checks the selected isolated library',async()=>{
   const root=await scratchDirectory('bootstrap-activation-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture'),base=path.join(dir,'basic-memory-bridge'),vault=path.join(base,'personal','vault'),state=path.join(base,'personal','basic-memory-state'),old=path.join(root,'old','vault');
   await fs.mkdir(vault,{recursive:true});await fs.mkdir(state,{recursive:true});await fs.mkdir(old,{recursive:true});await fs.mkdir(path.join(home,'storages'),{recursive:true});await fs.writeFile(path.join(home,'storages','workspace.json'),JSON.stringify({unit:{name:'workspace',version:2},global:{},tables:{workspaces:{w:{title:'测试',sessionIds:['session-one']}}}}));
-  await fs.writeFile(path.join(state,'config.json'),JSON.stringify({projects:{main:{path:vault,mode:'local'}}}));await fs.writeFile(path.join(state,'memory.db'),'fixture');const file=path.join(base,'configuration.json'),cfg={ownerDirectory:path.dirname(vault),socialRoot:path.join(base,'social'),dshHome:home,dshSessionIds:['session-one'],backend:{command:process.execPath},memory:{captureProvider:'fixture',captureModel:'fixture'}};await fs.writeFile(file,JSON.stringify(cfg));const profile={name:'fixture',dir,home},raw={vaultPath:old};
+  await fs.writeFile(path.join(state,'config.json'),JSON.stringify({projects:{main:{path:vault,mode:'local'}}}));await fs.writeFile(path.join(state,'memory.db'),'fixture');const file=path.join(base,'configuration.json'),cfg={ownerDirectory:path.dirname(vault),socialRoot:path.join(base,'social'),dshHome:home,dshSessionIds:['session-one'],memory:{autoCapture:true,captureProvider:'retired',captureModel:'retired'}};await fs.writeFile(file,JSON.stringify(cfg));const profile={name:'fixture',dir,home},raw={vaultPath:old};
   await stageBootstrapActivation(profile,raw,deploymentFingerprint(cfg));assert.equal(await readScheduledBootstrap(profile,raw),null);await assert.rejects(updateBootstrapSessions(profile,[],deploymentFingerprint(cfg)),/先取消/);
   const marker=path.join(base,'activation.json'),saved=JSON.parse(await fs.readFile(marker));saved.scheduledPid=999999999;await fs.writeFile(marker,JSON.stringify(saved));const plan=await readScheduledBootstrap(profile,raw);assert.ok(plan);
   const receipt=plan.configFile+'.runtime.json';await fs.writeFile(receipt,JSON.stringify({pid:process.pid,state:'starting'}));await assert.rejects(recordBootstrapActivation(plan,'failed'),/已有 DSH 进程正在加载/);assert.equal(JSON.parse(await fs.readFile(marker)).state,'scheduled');await fs.rm(receipt);

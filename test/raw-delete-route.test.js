@@ -82,8 +82,9 @@ test('withdrawing a searched original removes its text index and notifies vector
   const deleted=await request(f.handler,{method:'POST',url:'/api/basic-memory-settings/raw-messages',
     body:{action:'withdraw',id:saved.id,revision:saved.revision},headers:{'x-basic-memory-settings':'1'}});
   assert.equal(deleted.statusCode,200,deleted.body.error);
-  assert.deepEqual({withdrawn:deleted.body.withdrawn,removed:deleted.body.removed,entries:deleted.body.entries},
-    {withdrawn:true,removed:true,entries:null});
+  assert.deepEqual({withdrawn:deleted.body.withdrawn,removed:deleted.body.removed},
+    {withdrawn:true,removed:true});
+  assert.equal(Object.hasOwn(deleted.body,'entries'),false);
   assert.equal(removed.length,1);
   assert.equal(removed[0].kind,'message');
   assert.equal(removed[0].operation,'withdrawn');

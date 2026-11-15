@@ -8,7 +8,6 @@ import vm from 'node:vm';
 import {Readable} from 'node:stream';
 import {RawMemoryStore} from '../lib/raw-rag/store.js';
 import {createRawRecall} from '../lib/raw-rag/index.js';
-import {createMemoryEntryAccess} from '../lib/memory-entry-access.js';
 import {createMemoryQueryAnswer,rerankDocumentText} from '../lib/memory-query.js';
 import {createMemoryReranker} from '../lib/memory-rerank.js';
 import {requestRerank,rerankServiceUrl} from '../lib/raw-rag/rerank-http.js';
@@ -38,7 +37,6 @@ async function queryFixture(t,options={}){
     withGrant:(_grant,work)=>work(),
   };
   const raw=createRawRecall({config,store:memory,ownerSubject:'owner'});
-  const entries=createMemoryEntryAccess({access,raw,tools:notes.tools,config});
   const save=(id,text,sequence)=>{
     const source={ownerSubject:'owner',project:'main',sessionId:agent.session.id,messageId:id,role:'user',
       sequence,turn:sequence,rootTurn:sequence,text,content:[{type:'text',text}],time:sequence*1000,
@@ -47,7 +45,7 @@ async function queryFixture(t,options={}){
   };
   const answers=[];
   const answer=(reranker,extra={})=>{
-    const value=createMemoryQueryAnswer({access,agent,raw,entries,tools:notes.tools,config,
+    const value=createMemoryQueryAnswer({access,agent,raw,tools:notes.tools,config,
       ...(reranker?{reranker}:{}),...(options.now?{now:options.now}:{}),...extra});
     answers.push(value);
     return value;
@@ -57,7 +55,7 @@ async function queryFixture(t,options={}){
     await raw.dispose();
     await fs.rm(directory,{recursive:true,force:true});
   });
-  return {directory,config,agent,notes,access,raw,entries,save,answer};
+  return {directory,config,agent,notes,access,raw,save,answer};
 }
 
 const response=(payload,status=200)=>({ok:status>=200&&status<300,status,headers:{get:()=>null},json:async()=>payload});
@@ -319,16 +317,11 @@ test('originals still visible in the conversation are skipped so older lines fil
 });
 
 test('rerank is skipped when the remaining query budget is under 200 milliseconds',async t=>{
-  const f=await queryFixture(t,{config:{rawRecallQueryWaitMs:1000}});
+  const f=await queryFixture(t);
   for(let index=1;index<=4;index++)f.save('no-time-'+index,'虚构剩余预算候选 '+index,index);
-  const forGrant=f.entries.forGrant.bind(f.entries);
-  f.entries.forGrant=(...args)=>{const reader=forGrant(...args);return {...reader,async search(...searchArgs){
-    await new Promise(resolve=>setTimeout(resolve,850));
-    return reader.search(...searchArgs);
-  }};};
   let calls=0;
   const reranker=await fixtureReranker(f,{fetchImpl:async()=>{calls++;return response({results:[]});}});
-  const found=await f.answer(reranker).search({query:'虚构剩余预算候选',limit:4});
+  const found=await f.answer(reranker,{searchWaitMs:350}).search({query:'虚构剩余预算候选',limit:4});
   assert.equal(found.channels.rerank.state,'no_time');assert.equal(calls,0);
 });
 

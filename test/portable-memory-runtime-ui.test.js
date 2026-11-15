@@ -171,33 +171,6 @@ test('cloud expert settings keep only environment and timing fields and preserve
   assert.equal(call.body.apiKey,undefined);assert.equal(call.body.reuseApiKey,undefined);
 });
 
-test('review screen sends the displayed revision and allows comparison again after conflict',async t=>{
-  let changed=false,applied=false;
-  const env=environment((url,body)=>{
-    if(url===BASE+'/runtime')return runtime();
-    if(url===BASE+'/reviews'&&!body)return {ok:true,items:applied?[]:[{operationId:'op-one',type:'plan',reason:'target-revision-changed'}]};
-    if(url.startsWith(BASE+'/reviews?operationId='))return {ok:true,review:{operationId:'op-one',revision:changed?'new':'old',
-      current:{type:'plan',content:changed?'人工修改':'原正文'},proposed:{type:'plan',content:'整理建议正文'},sources:[{id:'origin',revision:1,role:'user',text:'原文证据'}],canApprove:true,canReject:true}};
-    if(url===BASE+'/reviews'&&body){
-      if(body.revision==='old'){changed=true;return {status:409,body:{ok:false,error:'条目版本已变化，请刷新并重新对照。'}};}
-      assert.equal(body.revision,'new');applied=true;return {ok:true,result:{state:'committed'}};
-    }
-    return snapshot();
-  });t.after(()=>env.close());
-  const page=env.page();await page.flush();button(page.tree,'状态').props.onClick();await page.flush();
-  const review=env.component(component(page.tree,'MemoryReviewSettings'));await review.flush();
-  await button(review.tree,'读取待审核').props.onClick();await review.flush();
-  await button(review.tree,'plan · 条目已被修改').props.onClick();await review.flush();
-  assert.match(text(review.tree),/原正文.*整理建议正文.*原文证据/);
-  await button(review.tree,'接受建议').props.onClick();await review.flush();
-  assert.match(text(review.tree),/版本已变化/);
-  await button(review.tree,'刷新当前条目').props.onClick();await review.flush();
-  assert.match(text(review.tree),/人工修改/);
-  await button(review.tree,'接受建议').props.onClick();await review.flush();
-  assert.match(text(review.tree),/已接受.*写入记忆库/);
-  assert.deepEqual(writes(env).filter(call=>call.path===BASE+'/reviews').map(call=>call.body.revision),['old','new']);
-});
-
 test('settings page recognizes the active Include entry at a frozen version file URI',async t=>{
   const frozen={entryId:'include:basic-memory-bridge',moduleName:'file:///fixture/dsh-basic-memory-bridge/.local/runtime/versions/memory-pipeline-4b-fixture/lib/bundle-entry.js',enabled:true,fiberPhase:'active'};
   const env=environment(()=>snapshot(),[frozen]);t.after(()=>env.close());
@@ -316,27 +289,26 @@ test('cloud models never show local device, path or lifecycle controls in the ex
   assert.equal(writes(env).length,0);
 });
 
-test('status page connects pending turns and the live pipeline without a dead recovery field',async t=>{
+test('status page reports pending turns without organizer fields',async t=>{
   const info=snapshot();
   info.pendingTurns=3;
   info.memoryRuntime={pipeline:{pending:2}};
   const env=environment(url=>url===BASE+'/runtime'?runtime():info);t.after(()=>env.close());
   const page=env.page();await page.flush();button(page.tree,'状态').props.onClick();await page.flush();
-  assert.equal(rowOf(page.tree,'待处理').value,'2 项');
-  assert.equal(rowOf(page.tree,'待处理').meta,'3 个对话的开关将在下一回合生效');
+  assert.equal(rowOf(page.tree,'待生效对话').value,'3 个');
+  assert.equal(rowOf(page.tree,'待生效对话').meta,'对话开关将在下一回合生效');
+  assert.doesNotMatch(text(page.tree),/待处理|后台整理|整理批次/u);
   assert.doesNotMatch(text(page.tree),/暂时无法读取/);
 
   info.pendingTurns=0;
   info.memoryRuntime={pipeline:{pending:0}};
   await button(page.tree,'刷新').props.onClick();await page.flush();
-  assert.equal(rowOf(page.tree,'待处理').value,'0 项');
-  assert.equal(rowOf(page.tree,'待处理').meta,'');
+  assert.equal(nodes(page.tree,node=>node.type==='div'&&node.props.className==='memory-row'&&text(node).startsWith('待生效对话')).length,0);
 
   delete info.pendingTurns;
   info.memoryRuntime={};
   await button(page.tree,'刷新').props.onClick();await page.flush();
-  assert.equal(rowOf(page.tree,'待处理').value,'暂无数据');
-  assert.equal(rowOf(page.tree,'待处理').meta,'');
+  assert.doesNotMatch(text(page.tree),/待处理|后台整理/u);
   assert.doesNotMatch(text(page.tree),/暂时无法读取/);
   assert.equal(writes(env).length,0);
 });
@@ -358,7 +330,7 @@ test('status page owns runtime controls and shows the pending model, current clo
   assert.equal(rowOf(view.tree,'当前模型').meta,'fictional-embed');
   assert.equal(rowOf(view.tree,'索引').value,'未建立');
   assert.equal(rowOf(view.tree,'索引').meta,'点「准备索引」建立；云端模型会按量计费');void runtimeText;
-  assert.ok(nodes(page.tree,n=>n.type?.name==='MemoryReviewSettings').length<=1);
+  assert.equal(nodes(page.tree,n=>n.type?.name==='MemoryReviewSettings').length,0);
   button(page.tree,'维护').props.onClick();await page.flush();
   assert.equal(nodes(page.tree,n=>n.type?.name==='MemoryRuntimeSettings').length,0);
   assert.equal(writes(env).length,0);
@@ -395,26 +367,15 @@ test('runtime status is read-only, keeps actual CPU fallback separate and dispat
   assert.ok(env.calls.filter(call=>call.path===BASE+'/runtime').every(call=>call.options.cache==='no-store'));
 });
 
-test('runtime errors do not simulate success and blocked actions never send force or authorization overrides',async t=>{
+test('runtime errors do not simulate success and blocked vector actions never send overrides',async t=>{
   const held=deferred();let attempts=0;
   const env=environment((url,body)=>url===BASE+'/runtime'?body?(attempts++,held.promise):runtime():snapshot());t.after(()=>env.close());
   const {view}=await statusRuntime(env);
-  const trigger=button(view.tree,'尝试整理待办'),pending=trigger.props.onClick();trigger.props.onClick();await view.flush();
+  const trigger=button(view.tree,'加载／预热'),pending=trigger.props.onClick();trigger.props.onClick();await view.flush();
   assert.equal(attempts,1);
   held.resolve({status:403,body:{ok:false,error:'原始会话授权已撤销'}});await pending;await view.flush();
   assert.match(text(view.tree),/原始会话授权已撤销/);assert.doesNotMatch(text(view.tree),/操作已返回/);
-  assert.deepEqual(writes(env)[0].body,{action:'flush'});
-});
-
-test('scheduling resume and selected-batch retry use real runtime requests',async t=>{
-  const env=environment((url,body)=>url===BASE+'/runtime'?body?{ok:true}:runtime():snapshot());t.after(()=>env.close());
-  const {view}=await statusRuntime(env);
-  assert.match(text(view.tree),/foreground-busy/);assert.ok(helpTexts(view.tree).some(value=>/授权和前台是否占用/.test(value)));
-  assert.equal(button(view.tree,'重试所选批次').props.disabled,true);
-  await button(view.tree,'恢复后台任务').props.onClick();await view.flush();
-  select(view.tree,'重试批次').props.onChange({target:{value:'batch-one'}});await view.flush();
-  await button(view.tree,'重试所选批次').props.onClick();await view.flush();
-  assert.deepEqual(writes(env).map(call=>call.body),[{action:'resume'},{action:'retry',batchId:'batch-one'}]);
+  assert.deepEqual(writes(env)[0].body,{action:'load',profileId:MODEL,profileRevision:2});
 });
 
 test('missing runtime callbacks remain visibly unconnected, with unknown counts and disabled model actions',async t=>{
@@ -422,7 +383,8 @@ test('missing runtime callbacks remain visibly unconnected, with unknown counts 
   const {view}=await statusRuntime(env);
   assert.match(text(view.tree),/尚未接入记忆运行管理/);assert.equal(rowOf(view.tree,'索引').value,'未建立');
   assert.doesNotMatch(text(view.tree),/统一向量服务已接入/);
-  assert.equal(button(view.tree,'加载／预热').props.disabled,true);assert.equal(button(view.tree,'尝试整理待办').props.disabled,true);
+  assert.equal(button(view.tree,'加载／预热').props.disabled,true);
+  assert.equal(nodes(view.tree,node=>node.type==='button'&&text(node)==='尝试整理待办').length,0);
   assert.equal(writes(env).length,0);
 });
 
@@ -439,16 +401,15 @@ function httpFixture(t,controls={},ctx={}){
 test('runtime HTTP status only calls the supplied read callback; actions preserve started/error receipts',async t=>{
   let reads=0;const operations=[];
   const request=httpFixture(t,{getMemoryRuntime:()=>{reads++;return runtime();},runMemoryRuntime:async input=>{
-    operations.push(input);if(input.action==='flush')throw Error('foreground-busy');return {started:input.action==='prepare',state:'queued'};
+    operations.push(input);return {started:input.action==='prepare',state:'queued'};
   }});
   const status=await request('GET');assert.equal(status.statusCode,200);assert.equal(reads,1);assert.equal(operations.length,0);
   assert.equal(status.headers['cache-control'],'no-store');assert.equal(status.body.vectors.activeProfileId,MODEL);
-  for(const action of ['load','release','prepare','cancel','resume','retry']){
+  for(const action of ['load','release','prepare','cancel','resume','flush']){
     const result=await request('POST',{action,batchId:'batch-one',profileId:MODEL,profileRevision:2,force:true,authorization:'ignored'});
     assert.equal(result.statusCode,action==='prepare'?202:200);
-    assert.deepEqual(operations.at(-1),{action,batchId:'batch-one',profileId:MODEL,profileRevision:2});
+    assert.deepEqual(operations.at(-1),{action,profileId:MODEL,profileRevision:2});
   }
-  const failed=await request('POST',{action:'flush'});assert.equal(failed.statusCode,400);assert.equal(failed.body.ok,false);assert.match(failed.body.error,/foreground-busy/);
   assert.equal(reads,1,'POST never starts a second status or model path implicitly');
 });
 
@@ -457,7 +418,7 @@ test('runtime HTTP rejects untrusted requests and unsupported actions before dis
   assert.equal((await request('POST',{action:'load'},{headers:{'x-basic-memory-settings':'0'}})).statusCode,403);
   assert.equal((await request('GET',undefined,{headers:{origin:'https://other.example'}})).statusCode,403);
   assert.equal((await request('GET',undefined,{remoteAddress:'192.0.2.1'})).statusCode,403);
-  for(const input of [{action:'remove'},{action:'load',profileId:''},{action:'retry',batchId:[]},{action:'load',profileRevision:{}},null,[],'not json'])assert.equal((await request('POST',input)).statusCode,400);
+  for(const input of [{action:'remove'},{action:'load',profileId:''},{action:'retry'},{action:'load',profileRevision:{}},null,[],'not json'])assert.equal((await request('POST',input)).statusCode,400);
   assert.equal(calls,0);
 });
 
@@ -493,7 +454,7 @@ test('started operations poll read-only receipts, disable competing actions and 
   });t.after(()=>env.close());const {view}=await statusRuntime(env);
   await button(view.tree,'准备索引').props.onClick();await view.flush();
   assert.match(text(view.tree),/操作已启动/);assert.match(text(view.tree),/准备索引：进行中/);
-  assert.equal(button(view.tree,'尝试整理待办').props.disabled,true);
+  assert.equal(nodes(view.tree,node=>node.type==='button'&&text(node)==='尝试整理待办').length,0);
   assert.equal(env.timers.size,1);const before=writes(env).length;
   for(const tick of [...env.timers.values()])await tick();await view.flush();assert.equal(writes(env).length,before);
   await button(view.tree,'取消向量操作').props.onClick();await view.flush();

@@ -132,23 +132,19 @@ test('controller persists read-only independently from memory enablement',async 
   assert.equal((await f.reload()).isReadOnly(agent.session.id),false);
 });
 
-test('a read-only turn cannot admit originals, authorize sources, notify queues, complete handoff, observe targets or mark changes',async t=>{
+test('a read-only turn cannot admit originals, authorize sources, notify vectors or complete handoff',async t=>{
   const f=await fixture(t,{recentContext:false,rawRecall:true});
   const agent=f.actor(),raw=new RawMemoryStore(f.config.rawRecallDbPath,logger);
-  const organizer={async prepare(){throw Error('must not organize');},async commit(){throw Error('must not commit');}};
-  const bridge=f.bridge({raw,extra:{semanticOrganizer:organizer,pipelineResources:()=>({allowed:false,reason:'fixture'})}});
+  const bridge=f.bridge({raw});
   await bridge.waitForIdle();
   const handoffCalls=[],observedTargets=[];
   bridge.handoff.finish=async()=>{handoffCalls.push('finish');};
   bridge.handoff.failed=async()=>{handoffCalls.push('failed');};
   bridge.handoff.observeTarget=target=>observedTargets.push(target);
-  const semantic=[],vector=[];
-  const pipelineNotify=bridge.pipeline.notify.bind(bridge.pipeline);
-  bridge.pipeline.notify=notice=>{semantic.push(notice);return pipelineNotify(notice);};
+  const vector=[];
   bridge.vectors.notifyChanged=notice=>{vector.push(notice);return {accepted:true};};
   const before={
     raw:raw.messages.list(scope).sources.length,
-    jobs:bridge.pipeline.status().jobs.length,
     handoff:await bridge.handoff.status(),
   };
 
@@ -156,25 +152,20 @@ test('a read-only turn cannot admit originals, authorize sources, notify queues,
   await f.access.setReadOnly(agent.session.id,true);
   const user=f.begin(agent,1,bridge,'READ_ONLY_ORIGINAL');
   const decision=await runPreStep(bridge,{agent,turn:1,messages:[user.data]});
-  assert.ok(agent.denied.has('memory_mark_change'));
   assert.ok(agent.denied.has('soften_memory'));
   assert.ok(!decision.messages.some(message=>message.source?.kind==='dafeiyu-memory-control'));
   const rules=decision.messages.filter(message=>message.source?.kind==='memory-answer-rules');
   assert.equal(rules.length,1);
   assert.doesNotMatch(rules[0].content[0].text,/soften_memory/u);
-  assert.throws(()=>bridge.memoryChangeTool.execute({kind:'remember'},{agent}),/只读/);
-  await assert.rejects(bridge.markSoftened(agent.session.id,{softenedAt:new Date().toISOString(),permalink:'fixture'}),{code:'MEMORY_READ_ONLY'});
   await bridge.onRequest({agent,turn:1,step:1,signal:new AbortController().signal},
     async()=>({provider:'fixture',model:'fixture'}));
   f.finish(agent,1,bridge,'READ_ONLY_ANSWER');
   await bridge.waitForIdle();
 
   assert.equal(raw.messages.list(scope).sources.length,before.raw);
-  assert.equal(bridge.pipeline.status().jobs.length,before.jobs);
   assert.deepEqual(await bridge.handoff.status(),before.handoff);
   assert.deepEqual(handoffCalls,[]);
   assert.deepEqual(observedTargets,[]);
-  assert.deepEqual(semantic,[]);
   assert.deepEqual(vector,[]);
   const journal=await fs.readFile(path.join(f.directory,'management','session-memory','policy.json.grants.jsonl'),'utf8');
   assert.equal(journal.split('\n').filter(Boolean).some(line=>{
@@ -278,7 +269,6 @@ test('changing read-only during a turn takes effect on the next turn',async t=>{
   assert.equal(raw.messages.list(scope).sources.length,2);
 
   f.begin(agent,2,bridge,'SECOND_READ_ONLY');
-  assert.ok(agent.denied.has('memory_mark_change'));
   assert.ok(agent.denied.has('soften_memory'));
   await f.access.setReadOnly(agent.session.id,false);
   assert.ok(agent.denied.has('soften_memory'));
@@ -287,7 +277,6 @@ test('changing read-only during a turn takes effect on the next turn',async t=>{
   assert.equal(raw.messages.list(scope).sources.length,2);
 
   f.begin(agent,3,bridge,'THIRD_WRITABLE');
-  assert.equal(agent.denied.has('memory_mark_change'),false);
   assert.equal(agent.denied.has('soften_memory'),false);
   f.finish(agent,3,bridge,'THIRD_WRITABLE_ANSWER');
   await bridge.waitForIdle();

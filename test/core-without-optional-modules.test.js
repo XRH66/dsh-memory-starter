@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {DatabaseSync} from 'node:sqlite';
+import {RawMemoryStore} from '../lib/raw-rag/store.js';
 
 test('ordinary core loads without optional modules and rejects removed runtime entry points', async t => {
   const sourceRoot = path.resolve(import.meta.dirname, '..');
@@ -26,4 +28,30 @@ test('ordinary core loads without optional modules and rejects removed runtime e
   const { createBridge } = await import(pathToFileURL(path.join(target, 'index.js')).href);
   assert.equal(typeof createBridge, 'function');
   assert.throws(() => createBridge({ config: {}, tools: {}, llm: {} }), /对话记忆授权未接入/);
+});
+
+test('an existing raw library with the retired entry table still opens without migration', async t => {
+  const root = await fs.mkdtemp(path.join(path.dirname(import.meta.dirname), '.local', 'raw-old-entry-'));
+  let reopened;
+  t.after(async () => {
+    reopened?.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const file = path.join(root, 'raw.sqlite');
+  const first = new RawMemoryStore(file, { warn() {} });
+  first.close();
+  const db = new DatabaseSync(file);
+  db.exec('CREATE TABLE entries (id TEXT PRIMARY KEY, body TEXT NOT NULL)');
+  db.prepare('INSERT INTO entries(id,body) VALUES(?,?)').run('old-entry', 'fictional old entry');
+  db.close();
+
+  reopened = new RawMemoryStore(file, { warn() {} });
+  assert.equal(reopened.messages.list({ ownerSubject: 'fictional-owner', project: 'main', limit: 1 }).sources.length, 0);
+  assert.equal(reopened.entries, undefined);
+  const check = new DatabaseSync(file, { readOnly: true });
+  try {
+    assert.equal(check.prepare('SELECT body FROM entries WHERE id=?').get('old-entry').body, 'fictional old entry');
+  } finally {
+    check.close();
+  }
 });
