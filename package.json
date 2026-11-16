@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-basic-memory-bridge",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "dsh-memory-starter: installation entry, deployment generator and personal long-term memory for DeepSeek Harness with per-conversation opt-in, verbatim transcripts, on-demand recall and optional vector search.",
   "type": "module",
