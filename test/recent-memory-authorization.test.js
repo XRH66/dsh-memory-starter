@@ -91,7 +91,7 @@ test('portable handoff samples only its existing first page and never rebuilds t
   await request();
   await request();
   await f.bridge.waitForIdle();
-  assert.deepEqual(f.listCalls.map(({limit,beforePosition})=>[limit,beforePosition===undefined]),[[24,true],[24,false]]);
+  assert.deepEqual(f.listCalls.map(({limit,beforePosition})=>[limit,beforePosition===undefined]),[[24,true]]);
   assert.equal(f.appended.length,0,'originals from the current conversation are not handed off to itself');
   const stats=await f.readStats();
   assert.equal(stats.sampledMessages,24);

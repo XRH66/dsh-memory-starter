@@ -491,7 +491,8 @@ test('archive cannot write a management list when the Vault backend is unavailab
       { agent: { session: { id: 'session-test' } } },
     );
     assert.equal(result.ok, false);
-    assert.match(result.errorMessage, /vault|unavailable/i);
+    assert.match(result.errorMessage, /这次没能读写记忆/u);
+    assert.doesNotMatch(result.errorMessage, /vault|unavailable/i);
     const reviewPath = path.join(path.dirname(vault), 'management', '待审清单.md');
     assert.equal(await fs.stat(reviewPath).catch(() => null), null, 'a failed Vault read must not create a management list');
   } finally {

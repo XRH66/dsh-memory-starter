@@ -125,6 +125,7 @@
   "test/memory-query-session.test.js",
   "test/memory-query-lanes.test.js",
   "test/memory-query.test.js",
+  "test/tool-errors-and-handoff-age.test.js",
   "test/assistant-provenance.test.js",
   "test/current-state-recency.test.js",
   "test/monotonic.test.js",
