@@ -245,10 +245,17 @@ test('an open page waiting at step 3 polls and moves to step 4 once DSH has rest
   assert.ok(env.calls.filter(call => call.path === '/api/basic-memory-bootstrap' && !call.options.method).length > before, 'step 3 must keep polling before the restart');
   assert.match(text(wizard.tree), /第 3 步 \/ 共 5 步/);
 
+  // A chat page is also open and still says memory is not enabled.
+  const header = env.header(); await header.flush();
+  assert.match(text(header.tree), /记忆未启用/);
+
   // DSH restarts with memory loaded; the same open page notices without a reload.
   env.state.bootstrap = bootstrap({ configured: true, frameworkLoaded: true, activation: 'active', revision: 'r1', personalDirectory: '/fictional/memory', consent: env.state.bootstrap.consent });
   env.tick(); await wizard.flush(); await page.flush();
   assert.match(text(wizard.tree), /第 4 步 \/ 共 5 步/);
+  // The open chat refreshes too, without a window focus or a reload.
+  await header.flush();
+  assert.doesNotMatch(text(header.tree), /记忆未启用/);
 });
 
 test('loaded users with an available retrieval model keep the existing settings page', async t => {

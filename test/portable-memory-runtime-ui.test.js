@@ -549,6 +549,35 @@ test('a fresh cloud default keeps local models collapsed and makes no install re
   assert.equal(env.calls.some(call=>call.path===BASE+'/model-install'),false);
 });
 
+test('an unfinished cloud service is not shown as in use and its built-in default address is not prefilled',async t=>{
+  const customModel={id:'custom-api',label:'自定义 API（OpenAI 兼容）',tier:'cloud',engine:'api',cloud:true,custom:true,dimensions:1024};
+  let info=snapshot();
+  info.rawModel={fields:{rawRecallModel:'custom-api',rawRecallApiBase:'https://built-in-default.example/v1',
+    rawRecallApiModel:'',rawRecallDimensions:1024,rawRecallAllowCloud:false}};
+  info.rawModels=[...info.rawModels,customModel];
+  const env=environment(()=>info);t.after(()=>env.close());
+  const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+  const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();
+  assert.equal(field(picker.tree,'API 地址').props.value,'');
+  assert.equal(field(picker.tree,'API 地址').props.placeholder,'https://api.siliconflow.cn/v1');
+  assert.match(text(picker.tree),/还没配好/);assert.doesNotMatch(text(picker.tree),/使用中/);
+  const option=nodes(select(picker.tree,'检索模型'),n=>n.type==='option'&&n.props.value==='custom-api')[0];
+  assert.match(text(option),/当前选择，还没配好/);
+  // Nothing typed yet: saving stays off, so the empty address is never written over the saved fallback.
+  assert.equal(button(picker.tree,'保存').props.disabled,true);
+  assert.equal(writes(env).length,0);
+
+  // A finished service keeps its saved address and is shown as in use.
+  info=snapshot();
+  info.rawModel={fields:{rawRecallModel:'custom-api',rawRecallApiBase:'https://fictional-done.example/v1',
+    rawRecallApiModel:'fictional-embed',rawRecallDimensions:1024,rawRecallAllowCloud:true},hasSavedApiKey:true};
+  info.rawModels=[...info.rawModels,customModel];
+  const page2=env.page();await page2.flush();button(page2.tree,'检索模型').props.onClick();await page2.flush();
+  const done=env.component(component(page2.tree,'ModelPicker'));await done.flush();
+  assert.equal(field(done.tree,'API 地址').props.value,'https://fictional-done.example/v1');
+  assert.match(text(done.tree),/使用中/);assert.doesNotMatch(text(done.tree),/还没配好/);
+});
+
 test('a custom API model needs an address and a model name, and vendor presets are not offered',async t=>{
   const env=environment(()=>{const info=snapshot();info.rawModels=[...info.rawModels,
     {id:'custom-api',label:'自定义 API（OpenAI 兼容）',tier:'cloud',engine:'api',cloud:true,custom:true,dimensions:1024},

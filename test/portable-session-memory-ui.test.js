@@ -24,6 +24,9 @@ function deferred() {
 function environment(handler) {
   let rendering, plugin, timerId = 0;
   const registrations = new Map(), calls = [], timers = new Map(), hosts = [];
+  // A controllable clock and page visibility for the pending-refresh tests; other tests never touch them.
+  const clock = { now: Date.now(), hidden: false };
+  class FixtureDate extends Date { static now() { return clock.now; } }
   const same = (a, b) => a && b && a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
   const cell = () => { const host = rendering, index = host.index++; return { host, index, previous: host.hooks[index] }; };
   const React = {
@@ -48,8 +51,8 @@ function environment(handler) {
   const window = new EventTarget();
   window.__ModuleLoader__ = { load(value) { plugin = value.factory(name => { assert.equal(name, 'react'); return React; }); } };
   vm.runInNewContext(source, {
-    window, Event, console,
-    document: { getElementById: () => null },
+    window, Event, console, Date: FixtureDate,
+    document: { getElementById: () => null, get hidden() { return clock.hidden; } },
     setInterval(fn) { const id = ++timerId; timers.set(id, fn); return id; },
     clearInterval(id) { timers.delete(id); },
     async fetch(path, options = {}) {
@@ -82,7 +85,7 @@ function environment(handler) {
     close() { for (const hook of this.hooks) hook?.cleanup?.(); }
   }
   return {
-    calls, timers, registrations, window,
+    calls, timers, registrations, window, clock,
     header: (sessionId = 'session-a', slot = 'conversation.session.header.utilities') => new Host(registrations.get(slot), { sessionId }),
     page() { const tree = registrations.get('settings.section')(); return new Host(tree.type, tree.props); },
     component:node=>new Host(node.type,node.props),
@@ -228,6 +231,32 @@ test('pending activation refreshes into actual active permission', async t => {
   for (const tick of [...env.timers.values()]) await tick(); await header.flush();
   assert.match(text(header.tree), /本回合允许使用记忆/);
   assert.equal(env.timers.size, 0);
+});
+
+test('a pending chat refreshes quickly at first, then at most every 10 seconds, and not while the page is hidden', async t => {
+  const info = snapshot(['session-a'], { pendingTurns: 1 });
+  Object.assign(info.sessionMemory.states[0], { active: false, pending: true });
+  const env = environment(() => info), header = env.header(); t.after(() => env.close()); await header.flush();
+  const reads = () => env.calls.filter(call => call.path === path).length;
+  const tick = async seconds => { env.clock.now += seconds * 1000; for (const fn of [...env.timers.values()]) await fn(); await header.flush(); };
+  assert.equal(env.timers.size, 1);
+  let before = reads();
+  await tick(1.5); await tick(1.5);
+  assert.equal(reads(), before + 2, 'the first seconds refresh on every tick');
+  env.clock.now += 20000; before = reads();
+  await tick(1.5);
+  assert.equal(reads(), before + 1, 'the first slow tick refreshes');
+  for (let i = 0; i < 5; i++) await tick(1.5);
+  assert.equal(reads(), before + 1, 'later ticks within 10 seconds do not refresh');
+  await tick(3);
+  assert.equal(reads(), before + 2, 'ten seconds later it refreshes again');
+  env.clock.hidden = true; before = reads();
+  await tick(15); await tick(15);
+  assert.equal(reads(), before, 'a hidden page does not refresh');
+  env.clock.hidden = false;
+  await tick(1.5);
+  assert.equal(reads(), before + 1);
+  assert.match(text(header.tree), /下一新回合生效/);
 });
 
 test('a conversation switch saves through bind and respects runtime states instead of old bound fields', async t => {
