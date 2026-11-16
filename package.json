@@ -27,6 +27,7 @@
     "lib/deployment-config.js",
     "lib/entry-priority.js",
     "lib/handoff.js",
+    "lib/host-compat.js",
     "lib/index.js",
     "lib/inherit/batches.js",
     "lib/inherit/cli.js",
