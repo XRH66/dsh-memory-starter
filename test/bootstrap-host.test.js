@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {readBootstrap,createBootstrap,stageBootstrapActivation,readScheduledBootstrap,recordBootstrapActivation,updateBootstrapSessions,registerLoadedBootstrapRoute} from '../lib/bootstrap-host.js';
+import {readBootstrap,createBootstrap,stageBootstrapActivation,readScheduledBootstrap,recordBootstrapActivation,updateBootstrapSessions,registerLoadedBootstrapRoute,checkBootstrapLocation} from '../lib/bootstrap-host.js';
 import {apply as applyBundle} from '../lib/bundle-entry.js';
-import {deploymentFingerprint} from '../lib/deployment-config.js';
+import {apply as applyPlatform} from '../lib/platform-host.js';
+import {deploymentFingerprint,deploymentStaticFingerprint} from '../lib/deployment-config.js';
+import {memoryStore} from './fake-memory.js';
 import {scratchDirectory} from './helpers.js';
 
-function loadedRouteFixture(){
+function loadedRouteFixture(profile){
   const active=new Map();let next=1;
   const cleanups=[];
   const child={
@@ -15,7 +17,7 @@ function loadedRouteFixture(){
     effect(factory){const cleanup=factory();cleanups.push(cleanup);return cleanup;},
     webServer:{register(route){const id=next++;active.set(id,route);return()=>active.delete(id);}},
   };
-  registerLoadedBootstrapRoute({inject(names,callback){assert.deepEqual(names,['webServer']);callback(child);}});
+  registerLoadedBootstrapRoute({inject(names,callback){assert.deepEqual(names,['webServer']);callback(child);}},profile);
   return {
     active,
     async request({method='GET',url='/api/basic-memory-bootstrap',headers={}}={}){
@@ -84,6 +86,16 @@ test('loaded bootstrap route reports status without reading configuration and re
   const denied=await fixture.request({headers:{'sec-fetch-site':'cross-site'}});
   assert.equal(denied.status,403);assert.equal(denied.body.error,'访问被拒绝');
 });
+test('loaded bootstrap status exposes persisted first-run consent without reading the configuration',async t=>{
+  const root=await scratchDirectory('bootstrap-loaded-consent-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture'),base=path.join(dir,'basic-memory-bridge');
+  await fs.mkdir(base,{recursive:true});
+  await fs.writeFile(path.join(base,'activation.json'),JSON.stringify({version:1,state:'active',profile:'fixture',configFile:path.join(base,'configuration.json'),activePid:process.pid,
+    consent:{sessionIds:['session-a'],autoEnableNewSessions:true},consentPendingSessionIds:['session-a'],firstRunExistingSessionIds:['session-a','session-b']}));
+  const fixture=loadedRouteFixture({name:'fixture',dir,home});t.after(()=>fixture.dispose());
+  const loaded=await fixture.request();
+  assert.deepEqual(loaded.body,{ok:true,configured:true,frameworkLoaded:true,activation:'active',
+    consent:{sessionIds:['session-a'],autoEnableNewSessions:true},consentPendingSessionIds:['session-a'],firstRunExistingSessionIds:['session-a','session-b']});
+});
 test('a failed scheduled portable start removes the loaded route and leaves full first-run setup',async t=>{
   const root=await scratchDirectory('bootstrap-start-failure-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture'),old=path.join(root,'old-vault'),memoryDirectory=path.join(root,'memory');
   await fs.mkdir(dir,{recursive:true});await fs.mkdir(old,{recursive:true});await fs.mkdir(path.join(home,'storages'),{recursive:true});
@@ -151,4 +163,104 @@ test('next-start activation preserves the current process and only checks the se
   const statusDir=path.join(cfg.ownerDirectory,'management','memory-status');await fs.mkdir(statusDir,{recursive:true});await fs.writeFile(path.join(statusDir,'recovery.json'),JSON.stringify({version:1,project:'main',jobs:[{id:'retained'}],pending:[]}));const recoveryPlan=await readScheduledBootstrap(profile,raw);assert.ok(recoveryPlan&&!recoveryPlan.error,'active configuration must allow recovery jobs');
   const active=JSON.parse(await fs.readFile(marker));active.activePid=process.ppid;await fs.writeFile(marker,JSON.stringify(active));const otherProcessPlan=await readScheduledBootstrap(profile,raw);assert.match(otherProcessPlan.error,/已有 DSH 进程/);await assert.rejects(recordBootstrapActivation(otherProcessPlan,'failed'),/已有 DSH 进程/);
   active.activePid=999999999;await fs.writeFile(marker,JSON.stringify(active));const retryPlan=await readScheduledBootstrap(profile,raw);await recordBootstrapActivation(retryPlan,'failed');const failed=JSON.parse(await fs.readFile(marker));assert.equal(failed.state,'failed');assert.equal(failed.activePid,undefined);assert.ok((await readBootstrap(profile,raw)).activationError);await stageBootstrapActivation(profile,raw,deploymentFingerprint(cfg),'cancel');assert.equal(await readScheduledBootstrap(profile,raw),null);
+});
+
+test('location inspection reports the create-compatible states without creating anything',async()=>{
+  const root=await scratchDirectory('bootstrap-location-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture'),old=path.join(root,'daily','vault');
+  await fs.mkdir(dir,{recursive:true});await fs.mkdir(old,{recursive:true});await fs.writeFile(path.join(old,'keep.md'),'fixture');
+  const profile={name:'fixture',dir,home},raw={vaultPath:old},missing=path.join(root,'missing'),empty=path.join(root,'empty'),busy=path.join(root,'busy');
+  await fs.mkdir(empty);await fs.mkdir(busy);await fs.writeFile(path.join(busy,'keep.txt'),'fixture');
+  assert.equal((await checkBootstrapLocation(profile,raw,{directory:'relative'})).status,'invalid');
+  const absent=await checkBootstrapLocation(profile,raw,{directory:missing});
+  assert.equal(absent.status,'missing');assert.equal(absent.usable,true);await assert.rejects(fs.access(missing),{code:'ENOENT'});
+  assert.equal((await checkBootstrapLocation(profile,raw,{directory:empty})).status,'empty');
+  const other=await checkBootstrapLocation(profile,raw,{directory:busy});
+  assert.equal(other.status,'not-empty');assert.equal(other.usable,false);assert.equal(path.dirname(other.suggestedDirectory),busy);assert.equal(path.basename(other.suggestedDirectory),'dsh-memory');
+  const linked=path.join(root,'linked');await fs.symlink(empty,linked,'junction');
+  assert.equal((await checkBootstrapLocation(profile,raw,{directory:linked})).status,'linked');
+  assert.equal((await checkBootstrapLocation(profile,raw,{directory:path.join(old,'inside')})).status,'overlap');
+  await createBootstrap(profile,raw,{directory:missing});
+  const initialized=await checkBootstrapLocation(profile,raw,{directory:missing});
+  assert.equal(initialized.status,'initialized');
+  const replacement=path.join(root,'replacement');
+  await createBootstrap(profile,raw,{directory:replacement,replace:true});
+  assert.equal(JSON.parse(await fs.readFile(path.join(dir,'basic-memory-bridge','configuration.json'),'utf8')).ownerDirectory,replacement);
+  await fs.access(missing);
+});
+
+test('activation stores only explicit consent and never treats legacy bindings as consent',async()=>{
+  const root=await scratchDirectory('bootstrap-consent-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture'),memory=path.join(root,'memory');
+  await fs.mkdir(dir,{recursive:true});await fs.mkdir(path.join(home,'storages'),{recursive:true});
+  await fs.writeFile(path.join(home,'storages','workspace.json'),JSON.stringify({unit:{name:'workspace',version:2},global:{},tables:{workspaces:{w:{title:'测试',sessionIds:['session-old','session-a']}}}}));
+  const profile={name:'fixture',dir,home};
+  await createBootstrap(profile,{}, {directory:memory});
+  const file=path.join(dir,'basic-memory-bridge','configuration.json');
+  const cfg={...JSON.parse(await fs.readFile(file,'utf8')),dshSessionIds:['session-old']};
+  await fs.writeFile(file,JSON.stringify(cfg));
+  await stageBootstrapActivation(profile,{},deploymentFingerprint(cfg),'schedule',{sessionIds:['session-a'],autoEnableNewSessions:true});
+  const marker=JSON.parse(await fs.readFile(path.join(dir,'basic-memory-bridge','activation.json'),'utf8'));
+  assert.deepEqual(marker.consent,{sessionIds:['session-a'],autoEnableNewSessions:true});
+  assert.deepEqual((await readBootstrap(profile,{})).consent,marker.consent);
+  marker.scheduledPid=999999999;
+  await fs.writeFile(path.join(dir,'basic-memory-bridge','activation.json'),JSON.stringify(marker));
+  const plan=await readScheduledBootstrap(profile,{});
+  assert.deepEqual(plan.consent,marker.consent);
+  await recordBootstrapActivation(plan,'active');
+  const active=JSON.parse(await fs.readFile(path.join(dir,'basic-memory-bridge','activation.json'),'utf8'));
+  assert.equal(active.state,'active');
+
+  await fs.rm(path.join(dir,'basic-memory-bridge','activation.json'));
+  await stageBootstrapActivation(profile,{},deploymentFingerprint(cfg),'schedule');
+  const implicit=JSON.parse(await fs.readFile(path.join(dir,'basic-memory-bridge','activation.json'),'utf8'));
+  assert.deepEqual(implicit.consent,{sessionIds:[],autoEnableNewSessions:false});
+  implicit.scheduledPid=999999999;
+  await fs.writeFile(path.join(dir,'basic-memory-bridge','activation.json'),JSON.stringify(implicit));
+  const implicitPlan=await readScheduledBootstrap(profile,{});
+  assert.deepEqual(implicitPlan.consent,{sessionIds:[],autoEnableNewSessions:false});
+});
+
+test('first-run consent saves the default, waits for a cold chat, then applies through the live switch once',async t=>{
+  const root=await scratchDirectory('bootstrap-consent-apply-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture'),memory=path.join(root,'memory');
+  await fs.mkdir(dir,{recursive:true});await fs.mkdir(path.join(home,'storages'),{recursive:true});
+  await fs.writeFile(path.join(home,'storages','workspace.json'),JSON.stringify({unit:{name:'workspace',version:2},global:{},tables:{workspaces:{w:{title:'测试',sessionIds:['session-old','session-a','session-b']}}}}));
+  const profile={name:'fixture',dir,home};await createBootstrap(profile,{}, {directory:memory});
+  const file=path.join(dir,'basic-memory-bridge','configuration.json');
+  const cfg={...JSON.parse(await fs.readFile(file,'utf8')),dshSessionIds:['session-old'],autoEnableNewSessions:false,
+    memory:{autoCapture:false,autoRecall:false,recentContext:false,rawRecall:false}};
+  await fs.writeFile(file,JSON.stringify(cfg));
+  const sessions=new Map(),agents=new Map(),callbacks=new Map(),effects=[],applied=[],pendingWrites=[];
+  const ctx={llm:{},logger:{warn(){}},
+    sessions:{get:id=>sessions.get(id)},
+    agents:{get:id=>agents.get(id),list:()=>[...agents.values()],isOwnedBy:()=>false},
+    tools:{register(){return()=>{};},guard(){return()=>{};},view(){return {restrictableNames:new Set()};}},
+    get(){return undefined;},provide(){},effect(fn){effects.push(fn());},on(name,fn){callbacks.set(name,[...(callbacks.get(name)??[]),fn]);}};
+  t.after(async()=>{for(const dispose of effects.reverse())await dispose?.();});
+  const service=await applyPlatform(ctx,{directory:memory,sessionIds:cfg.dshSessionIds,ownerSubject:'fixture-owner',sessionMemory:true,
+    configurationFile:file,configurationFingerprint:deploymentFingerprint(cfg),configurationStaticFingerprint:deploymentStaticFingerprint(cfg),
+    deployment:{async markApplied(revision){applied.push(revision);}},memory:cfg.memory},
+    {acquire:async()=>memoryStore()});
+  service.setFirstRunPendingHandler(async ids=>{pendingWrites.push(ids);});
+  const appliedConsent=await service.applyFirstRunConsent({sessionIds:['session-a'],autoEnableNewSessions:true});
+  assert.deepEqual(appliedConsent.pendingSessionIds,['session-a']);
+  assert.deepEqual(new Set(appliedConsent.existingSessionIds),new Set(['session-old','session-a','session-b']));
+  assert.equal(service.sessionMemory.status('session-old').requested,false);
+  assert.equal(service.sessionMemory.status('session-a').requested,false);
+  assert.equal(service.sessionMemory.status('session-b').requested,false);
+  const saved=JSON.parse(await fs.readFile(file,'utf8'));
+  assert.deepEqual(saved.dshSessionIds,['session-a']);
+  assert.equal(saved.autoEnableNewSessions,true);
+  assert.equal(applied.length,2);
+  const events=[],session={id:'session-a',get seq(){return events.length;},snapshotEvents:(from=0,to)=>events.slice(from,to),deriveMessages:()=>[]};
+  const agent={id:'session-a',session,status:'idle',ctx:{}};sessions.set(session.id,session);agents.set(agent.id,agent);
+  for(const listener of callbacks.get('agent/created')??[])await listener({agent});
+  assert.equal(service.sessionMemory.status('session-a').requested,true);
+  assert.deepEqual(pendingWrites.at(-1),[]);
+  const existingEvents=[],existingSession={id:'session-b',get seq(){return existingEvents.length;},snapshotEvents:(from=0,to)=>existingEvents.slice(from,to),deriveMessages:()=>[]};
+  const existingAgent={id:'session-b',session:existingSession,status:'idle',ctx:{}};sessions.set(existingSession.id,existingSession);agents.set(existingAgent.id,existingAgent);
+  for(const listener of callbacks.get('agent/created')??[])await listener({agent:existingAgent});
+  assert.equal(service.sessionMemory.status('session-b').requested,false);
+  const newEvents=[],newSession={id:'session-c',get seq(){return newEvents.length;},snapshotEvents:(from=0,to)=>newEvents.slice(from,to),deriveMessages:()=>[]};
+  const newAgent={id:'session-c',session:newSession,status:'idle',ctx:{}};sessions.set(newSession.id,newSession);agents.set(newAgent.id,newAgent);
+  for(const listener of callbacks.get('agent/created')??[])await listener({agent:newAgent});
+  assert.equal(service.sessionMemory.status('session-c').requested,true);
 });

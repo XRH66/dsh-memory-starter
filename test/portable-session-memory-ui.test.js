@@ -90,6 +90,14 @@ function environment(handler) {
   };
 }
 const path = '/api/basic-memory-settings/sessions';
+const readyModel = {
+  rawModel: { fields: { rawRecallModel: 'custom-api', rawRecallApiBase: 'https://fixture.invalid/v1', rawRecallApiModel: 'fixture-embedding', rawRecallApiKeyEnv: '' }, hasSavedApiKey: true },
+  rawModels: [{ id: 'custom-api', label: '自定义 API', cloud: true }],
+};
+const readyLocalModel = {
+  rawModel: { fields: { rawRecallModel: 'BAAI/bge-small-zh-v1.5', rawRecallInstallReceipt: '/fixture/model-install.json' }, hasSavedApiKey: false },
+  rawModels: [{ id: 'BAAI/bge-small-zh-v1.5', label: 'BGE-small', cloud: false }],
+};
 const snapshot = (enabled = [], extra = {}) => ({
   ok: true, revision: 'r1', runtime: 'loaded', directory: '/fixture/memory', pendingTurns: 0,
   // Deliberately retained old bindings must never count as new consent in the UI.
@@ -99,6 +107,7 @@ const snapshot = (enabled = [], extra = {}) => ({
   ],
   sessionMemory: { defaultEnabled: false, effective: 'next-user-turn', enabledSessions: enabled,
     states: ['session-a', 'session-b'].map(sessionId => ({ sessionId, requested: enabled.includes(sessionId), active: enabled.includes(sessionId), pending: false })) },
+  ...readyModel,
   ...extra,
 });
 const autoSnapshot = (enabled = false, extra = {}) => {
@@ -311,12 +320,12 @@ test('unloaded runtime is shown as saved or pending, never as an active memory t
 });
 
 test('existing model settings save refreshes the opt-in receipt without changing authorization', async t => {
-  let info = snapshot(['session-a'], { rawModel: { model: 'fixture' } });
+  let info = snapshot(['session-a'], readyLocalModel);
   const env = environment(() => info), page = env.page(); t.after(() => env.close()); await page.flush();
   button(page.tree, '维护').props.onClick(); await page.flush();
   const modelSettings = nodes(page.tree, n => n.type?.name === 'RawModelSettings')[0];
   assert.ok(modelSettings);
-  info = snapshot(['session-a'], { revision: 'r2', rawModel: { model: 'fixture' } });
+  info = snapshot(['session-a'], { revision: 'r2', ...readyLocalModel });
   const savedConfiguration = structuredClone(info); delete savedConfiguration.sessionMemory;
   modelSettings.props.onSaved(savedConfiguration); await page.flush();
   button(page.tree, '记忆').props.onClick(); await page.flush();
