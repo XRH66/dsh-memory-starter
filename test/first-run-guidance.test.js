@@ -39,7 +39,7 @@ const loadedMemory = (extra = {}) => ({
 
 function environment({ bootstrapValue = bootstrap(), settingsValue = loadedMemory(), uiWorkspace = null, fetchHandler = null } = {}) {
   let rendering, plugin, timerId = 0;
-  const registrations = new Map(), calls = [], hosts = [], storage = new Map();
+  const registrations = new Map(), calls = [], hosts = [], storage = new Map(), intervals = new Map();
   const state = { bootstrap: structuredClone(bootstrapValue), settings: structuredClone(settingsValue) };
   const same = (a, b) => a && b && a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
   const cell = () => { const host = rendering, index = host.index++; return { host, index, previous: host.hooks[index] }; };
@@ -81,8 +81,8 @@ function environment({ bootstrapValue = bootstrap(), settingsValue = loadedMemor
   vm.runInNewContext(source, {
     window, Event, AbortController, console,
     document: { getElementById: () => null },
-    setInterval(fn) { const id = ++timerId; queueMicrotask(fn); return id; },
-    clearInterval() {},
+    setInterval(fn) { const id = ++timerId; intervals.set(id, fn); queueMicrotask(fn); return id; },
+    clearInterval(id) { intervals.delete(id); },
     setTimeout(fn) { const id = ++timerId; queueMicrotask(fn); return id; },
     clearTimeout() {},
     async fetch(path, options = {}) {
@@ -141,6 +141,7 @@ function environment({ bootstrapValue = bootstrap(), settingsValue = loadedMemor
   }
   return {
     calls, registrations, window, state, storage,
+    tick() { for (const fn of [...intervals.values()]) fn(); },
     page() { const tree = registrations.get('settings.section')(); return new Host(tree.type, tree.props); },
     wizard(page) {
       const node = nodes(page.tree, value => typeof value.type === 'function' && value.type.name === 'FirstRunWizard')[0];
@@ -229,6 +230,25 @@ test('wizard creates the library, records explicit chat consent and resumes at s
   button(modelStep.tree, '完成，返回记忆设置').props.onClick(); await modelStep.flush(); await refreshed.flush();
   assert.match(text(refreshed.tree), /记忆框架已加载/);
   assert.match(text(refreshed.tree), /测试对话 A/);
+});
+
+test('an open page waiting at step 3 polls and moves to step 4 once DSH has restarted', async t => {
+  const env = environment(); t.after(() => env.close());
+  const page = env.page(); await page.flush();
+  const wizard = env.wizard(page); await wizard.flush();
+  button(wizard.tree, '下一步').props.onClick(); await wizard.flush();
+  button(wizard.tree, '下一步').props.onClick(); await wizard.flush();
+  button(wizard.tree, '启用').props.onClick(); await wizard.flush();
+  assert.match(text(wizard.tree), /已安排下次 DSH 启动时启用/);
+  const before = env.calls.filter(call => call.path === '/api/basic-memory-bootstrap' && !call.options.method).length;
+  env.tick(); await wizard.flush();
+  assert.ok(env.calls.filter(call => call.path === '/api/basic-memory-bootstrap' && !call.options.method).length > before, 'step 3 must keep polling before the restart');
+  assert.match(text(wizard.tree), /第 3 步 \/ 共 5 步/);
+
+  // DSH restarts with memory loaded; the same open page notices without a reload.
+  env.state.bootstrap = bootstrap({ configured: true, frameworkLoaded: true, activation: 'active', revision: 'r1', personalDirectory: '/fictional/memory', consent: env.state.bootstrap.consent });
+  env.tick(); await wizard.flush(); await page.flush();
+  assert.match(text(wizard.tree), /第 4 步 \/ 共 5 步/);
 });
 
 test('loaded users with an available retrieval model keep the existing settings page', async t => {
