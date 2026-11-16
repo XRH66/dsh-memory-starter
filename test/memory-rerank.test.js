@@ -114,7 +114,8 @@ function uiEnvironment(handler){
   const context={window,Event,AbortController,console,document:{getElementById:()=>null},
     setInterval(){return ++timerId;},clearInterval(){},setTimeout(fn){const id=++timerId;queueMicrotask(fn);return id;},clearTimeout(){},
     async fetch(path,options={}){
-      const body=options.body?JSON.parse(options.body):undefined,value=handler(path,body);
+      const body=options.body?JSON.parse(options.body):undefined,
+        value=path==='/api/basic-memory-bootstrap'?{ok:true,configured:true,frameworkLoaded:true,activation:'active'}:handler(path,body);
       calls.push({path,body});
       return {ok:true,status:200,json:async()=>structuredClone(value)};
     }

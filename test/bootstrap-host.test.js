@@ -2,9 +2,33 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {readBootstrap,createBootstrap,stageBootstrapActivation,readScheduledBootstrap,recordBootstrapActivation,updateBootstrapSessions} from '../lib/bootstrap-host.js';
+import {readBootstrap,createBootstrap,stageBootstrapActivation,readScheduledBootstrap,recordBootstrapActivation,updateBootstrapSessions,registerLoadedBootstrapRoute} from '../lib/bootstrap-host.js';
+import {apply as applyBundle} from '../lib/bundle-entry.js';
 import {deploymentFingerprint} from '../lib/deployment-config.js';
 import {scratchDirectory} from './helpers.js';
+
+function loadedRouteFixture(){
+  const active=new Map();let next=1;
+  const cleanups=[];
+  const child={
+    get(){return undefined;},
+    effect(factory){const cleanup=factory();cleanups.push(cleanup);return cleanup;},
+    webServer:{register(route){const id=next++;active.set(id,route);return()=>active.delete(id);}},
+  };
+  registerLoadedBootstrapRoute({inject(names,callback){assert.deepEqual(names,['webServer']);callback(child);}});
+  return {
+    active,
+    async request({method='GET',url='/api/basic-memory-bootstrap',headers={}}={}){
+      const handler=[...active.values()][0]?.handler;assert.equal(typeof handler,'function');
+      return new Promise(resolve=>{
+        const req={method,url,socket:{remoteAddress:'127.0.0.1'},headers:{host:'127.0.0.1:15680',...headers}};
+        const res={statusCode:200,headers:{},setHeader(name,value){this.headers[name]=value;},end(value){resolve({status:this.statusCode,headers:this.headers,body:JSON.parse(value)});}};
+        handler(req,res);
+      });
+    },
+    dispose(){for(const cleanup of cleanups.splice(0).reverse())cleanup?.();},
+  };
+}
 
 test('bootstrap uses the current profile and refuses existing or overlapping memory',async()=>{
   const root=await scratchDirectory('bootstrap-test-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture'),old=path.join(root,'daily','vault');
@@ -30,6 +54,91 @@ test('first setup no longer requires an organizer model and old config fields re
   const loaded=await readBootstrap(profile);
   assert.equal(loaded.configured,true);assert.equal(loaded.personalDirectory,directory);
   await assert.rejects(fs.access(path.join(directory,'management','pipeline')),{code:'ENOENT'});
+});
+test('bootstrap reports loaded only for the current process ready runtime receipt',async()=>{
+  const root=await scratchDirectory('bootstrap-loaded-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture');
+  await fs.mkdir(dir,{recursive:true});
+  const profile={name:'fixture',dir,home},directory=path.join(root,'personal');
+  await createBootstrap(profile,{}, {directory});
+  const configFile=path.join(dir,'basic-memory-bridge','configuration.json'),cfg=JSON.parse(await fs.readFile(configFile,'utf8'));
+  assert.equal((await readBootstrap(profile)).frameworkLoaded,false);
+  const receipt=configFile+'.runtime.json';
+  await fs.writeFile(receipt,JSON.stringify({pid:process.pid,state:'starting',fingerprint:deploymentFingerprint(cfg)}));
+  assert.equal((await readBootstrap(profile)).frameworkLoaded,false);
+  await fs.writeFile(receipt,JSON.stringify({pid:process.pid,state:'ready',fingerprint:'stale'}));
+  assert.equal((await readBootstrap(profile)).frameworkLoaded,false);
+  await fs.writeFile(receipt,JSON.stringify({pid:process.pid+1,state:'ready',fingerprint:deploymentFingerprint(cfg)}));
+  assert.equal((await readBootstrap(profile)).frameworkLoaded,false);
+  await fs.writeFile(receipt,JSON.stringify({pid:process.pid,state:'ready',fingerprint:deploymentFingerprint(cfg)}));
+  assert.equal((await readBootstrap(profile)).frameworkLoaded,true);
+});
+test('loaded bootstrap route reports status without reading configuration and rejects changes',async t=>{
+  const fixture=loadedRouteFixture();
+  t.after(()=>fixture.dispose());
+  const loaded=await fixture.request();
+  assert.equal(loaded.status,200);assert.deepEqual(loaded.body,{ok:true,configured:true,frameworkLoaded:true});
+  const post=await fixture.request({method:'POST',headers:{'content-type':'application/json','x-basic-memory-settings':'1'}});
+  assert.equal(post.status,409);assert.deepEqual(post.body,{ok:false,error:'记忆框架已在运行，请在设置页「记忆框架」里调整。'});
+  const child=await fixture.request({url:'/api/basic-memory-bootstrap/activation'});
+  assert.equal(child.status,409);assert.deepEqual(child.body,post.body);
+  const denied=await fixture.request({headers:{'sec-fetch-site':'cross-site'}});
+  assert.equal(denied.status,403);assert.equal(denied.body.error,'访问被拒绝');
+});
+test('a failed scheduled portable start removes the loaded route and leaves full first-run setup',async t=>{
+  const root=await scratchDirectory('bootstrap-start-failure-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture'),old=path.join(root,'old-vault'),memoryDirectory=path.join(root,'memory');
+  await fs.mkdir(dir,{recursive:true});await fs.mkdir(old,{recursive:true});await fs.mkdir(path.join(home,'storages'),{recursive:true});
+  const profile={name:'fixture',dir,home};
+  await createBootstrap(profile,{vaultPath:old},{directory:memoryDirectory});
+  const configFile=path.join(dir,'basic-memory-bridge','configuration.json'),cfg={...JSON.parse(await fs.readFile(configFile,'utf8')),dshSessionIds:['session-one'],memory:{rawRecall:false,autoCapture:false,autoRecall:false,recentContext:false}};
+  await fs.writeFile(configFile,JSON.stringify(cfg));
+  await fs.writeFile(path.join(home,'storages','workspace.json'),JSON.stringify({unit:{name:'workspace',version:2},global:{},tables:{workspaces:{w:{title:'测试',sessionIds:['session-one']}}}}));
+  const activationFile=path.join(dir,'basic-memory-bridge','activation.json');
+  await fs.writeFile(activationFile,JSON.stringify({version:1,state:'scheduled',profile:'fixture',configFile,fingerprint:deploymentFingerprint(cfg),scheduledPid:999999999}));
+
+  let next=1;const active=new Map(),rootCleanups=[];
+  const webServer={register(route){const id=next++;active.set(id,route);return()=>active.delete(id);}};
+  function context({failBundleEffect=false}={}){
+    const services=new Map(),cleanups=[];
+    const value={
+      llm:{},logger:{warn(){}},
+      sessions:{get(){return undefined;}},
+      agents:{get(){return undefined;},list(){return [];},isOwnedBy(){return false;}},
+      tools:{register(){return()=>{};},guard(){return()=>{};},view(){return {restrictableNames:new Set()};}},
+      get:key=>key==='profileContext'?profile:services.get(key),
+      provide(key,service){services.set(key,service);},
+      on(){},
+      inject(_names,callback){return callback(value);},
+      effect(factory,label){
+        if(failBundleEffect&&String(factory).includes('personalServiceKey'))throw Error('fixture failure after loaded route');
+        const cleanup=factory();cleanups.push(cleanup);return cleanup;
+      },
+      webServer,
+    };
+    return {value,cleanups};
+  }
+  const rootContext=context();
+  rootContext.value.effect=(factory)=>{const cleanup=factory();rootCleanups.push(cleanup);return cleanup;};
+  rootContext.value.plugin=callback=>{
+    const child=context({failBundleEffect:true}),task=Promise.resolve().then(()=>callback(child.value));
+    const fiber={
+      then:(resolve,reject)=>task.then(resolve,reject),
+      catch:reject=>task.catch(reject),
+      async dispose(){for(const cleanup of child.cleanups.splice(0).reverse())await cleanup?.();},
+    };
+    return fiber;
+  };
+  t.after(async()=>{for(const cleanup of rootCleanups.reverse())await cleanup?.();});
+
+  await applyBundle(rootContext.value,{});
+  const bootstrapRoutes=[...active.values()].filter(route=>route.path==='/api/basic-memory-bootstrap');
+  assert.equal(bootstrapRoutes.length,1,'the loaded route must be removed before full setup is registered');
+  const response=await new Promise(resolve=>{
+    const req={method:'GET',url:'/api/basic-memory-bootstrap',socket:{remoteAddress:'127.0.0.1'},headers:{host:'127.0.0.1:15680'}};
+    const res={setHeader(){},end(value){resolve(JSON.parse(value));}};
+    bootstrapRoutes[0].handler(req,res);
+  });
+  assert.equal(response.configured,true);assert.equal(response.frameworkLoaded,false);assert.equal(response.activation,'failed');
+  assert.equal(JSON.parse(await fs.readFile(activationFile,'utf8')).state,'failed');
 });
 test('next-start activation preserves the current process and only checks the selected isolated library',async()=>{
   const root=await scratchDirectory('bootstrap-activation-'),home=path.join(root,'home'),dir=path.join(home,'profiles','fixture'),base=path.join(dir,'basic-memory-bridge'),vault=path.join(base,'personal','vault'),state=path.join(base,'personal','basic-memory-state'),old=path.join(root,'old','vault');

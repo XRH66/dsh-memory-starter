@@ -101,7 +101,14 @@ DSH 在本机 8931 端口启动，打开启动日志给出的登录地址。端�
 
 `vault/` 保存人设笔记、想法、日记、图片和手选 Markdown。可以用 Obsidian 把它当作 Vault 打开，但当前检索不会自动扫描整个 Vault：只有 `dafeiyu/thoughts`、`dafeiyu/diary` 和「维护 → 手选检索资料」中明确选择的文件会进入向量检索。
 
-0.3～0.6 的旧聊天笔记不会从 `vault/` 直接进入当前搜索，升级时必须运行 `scripts/inherit-memory.mjs`。
+0.3～0.6 的旧聊天笔记不会从 `vault/` 直接进入当前搜索，升级时从已安装的插件目录运行继承脚本：
+
+```powershell
+$memoryPlugin = '<DSH 主目录>\profiles\<档案名>\node_modules\@local\dsh-basic-memory-bridge'
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') check --deployment <配置文件>
+```
+
+确认后再用同一入口执行 `apply`。也可以回到仓库检出目录，直接运行 `node scripts/inherit-memory.mjs ...`。
 
 ## 新开终端时
 

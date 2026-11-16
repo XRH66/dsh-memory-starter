@@ -25,7 +25,7 @@ function deferred() {
   const promise = new Promise(done => { resolve = done; });
   return { promise, resolve };
 }
-function environment(handler, plugins = [{ moduleName: '@local/dsh-basic-memory-bridge', enabled: true, fiberPhase: 'active' }]) {
+function environment(handler, plugins = [{ moduleName: '@local/dsh-basic-memory-bridge', enabled: true, fiberPhase: 'active' }], bootstrapValue = { ok: true, configured: true, frameworkLoaded: true, activation: 'active' }) {
   let rendering, plugin, timerId = 0;
   const registrations = new Map(), calls = [], timers = new Map(), hosts = [];
   const same = (a, b) => a && b && a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
@@ -61,7 +61,9 @@ function environment(handler, plugins = [{ moduleName: '@local/dsh-basic-memory-
     async fetch(path, options = {}) {
       const body = options.body ? JSON.parse(options.body) : undefined;
       calls.push({ path, body, options });
-      const result = await handler(path, body, options), status = result.status || 200;
+      const result = path === '/api/basic-memory-bootstrap'
+        ? bootstrapValue
+        : await handler(path, body, options), status = result.status || 200;
       return { ok: status >= 200 && status < 300, status, json: async () => structuredClone(result.body || result) };
     },
   }, { filename: 'portable/client.js' });
@@ -173,29 +175,20 @@ test('settings page recognizes the active Include entry at a frozen version file
   const line=nodes(page.tree,node=>node.type==='div'&&node.props.className==='memory-group-head'&&text(children(node)[0])==='记忆框架')[0];
   assert.ok(line);assert.equal(text(line),'记忆框架已加载');
   assert.equal(nodes(line,node=>typeof node.type==='function'&&node.type.name==='Help')[0].props.text,'记忆框架已加载，设置已生效。');
-  assert.equal(writes(env).length,0);assert.ok(env.calls.every(call=>call.path===BASE+'/sessions'));
+  assert.equal(writes(env).length,0);assert.ok(env.calls.every(call=>call.path===BASE+'/sessions'||call.path==='/api/basic-memory-bootstrap'));
 });
 
-test('core status requires enabled active identity and retains legacy aliases and paths',async t=>{
-  const included={entryId:'include:basic-memory-bridge',moduleName:'file:///fixture/versions/memory-pipeline-4b-fixture/lib/bundle-entry.js',enabled:true,fiberPhase:'active'};
-  const legacy={moduleName:'@local/dsh-basic-memory-bridge',enabled:true,fiberPhase:'active'};
+test('bootstrap frameworkLoaded controls the core status instead of plugin list guesses',async t=>{
   const cases=[
-    [[{...included,enabled:false}],false],
-    [[{...included,fiberPhase:'inactive'}],false],
-    [[{...included,entryId:'include:another-plugin'}],false],
-    [[{...included,enabled:false},legacy],false],
-    [[legacy],true],
-    [[{...legacy,moduleName:'@local/dsh-basic-memory-bridge/bundle-entry'}],true],
-    [[{...legacy,moduleName:'@local/dsh-basic-memory-bridge/platform-host'}],true],
-    [[{...legacy,moduleName:'file:///fixture/dsh-basic-memory-bridge/lib/bundle-entry.js'}],true],
-    [[{...legacy,enabled:false}],false],
-    [[{...legacy,fiberPhase:'inactive'}],false],
+    [{ok:true,configured:true,frameworkLoaded:false,activation:'scheduled'},false],
+    [{ok:true,configured:true,frameworkLoaded:true,activation:'active'},true],
+    [{ok:true,configured:true,frameworkLoaded:'true',activation:'active'},false],
   ];
-  for(const [plugins,loaded] of cases){
-    const env=environment(()=>snapshot(),plugins);t.after(()=>env.close());
+  for(const [bootstrapValue,loaded] of cases){
+    const env=environment(()=>snapshot(),undefined,bootstrapValue);t.after(()=>env.close());
     const page=env.page();await page.flush();
     const line=nodes(page.tree,node=>node.type==='div'&&node.props.className==='memory-group-head'&&text(children(node)[0])==='记忆框架')[0];
-    assert.ok(line);assert.equal(text(line),'记忆框架'+(loaded?'已加载':'未加载'),JSON.stringify(plugins));
+    assert.ok(line);assert.equal(text(line),'记忆框架'+(loaded?'已加载':'未加载'),JSON.stringify(bootstrapValue));
     assert.equal(writes(env).length,0);
   }
 });

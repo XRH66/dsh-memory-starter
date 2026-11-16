@@ -106,8 +106,14 @@ test('same-turn assistant vectors without source metadata fold into the user row
   assert.equal(record.text,user.text);
   assert.match(record.label,/用户说/u);
   assert.equal(Object.hasOwn(record,'assistantReply'),false);
-  assert.equal(Array.from(record['助手当时回复']).length,121);
-  assert.equal(record['助手当时回复'],Array.from(firstReply).slice(0,120).join('')+'…');
+  const reply=record['同一回合助手的回复'];
+  assert.equal(typeof reply,'object');
+  assert.equal(reply.label,record.label.replace('用户说','助手说'));
+  assert.match(reply.label,/助手说/u);
+  assert.notEqual(reply.label,record.label);
+  assert.equal(Object.hasOwn(reply,'text'),true);
+  assert.equal(Array.from(reply.text).length,121);
+  assert.equal(reply.text,Array.from(firstReply).slice(0,120).join('')+'…');
 
   const opened=await answer.expand({ref:record.ref});
   assert.deepEqual(opened.records.map(item=>item.label.match(/(用户说|助手说)/u)?.[0]),
@@ -131,11 +137,11 @@ test('pairing stays inside one session and turn and leaves an assistant standalo
 
   const split=await answer.search({query:'分轮甲乙丙丁',limit:4});
   assert.deepEqual(new Set(resultIds(answer,split)),new Set([sameSessionUser.id,sameSessionAssistant.id]));
-  assert.ok(split.records.every(record=>!Object.hasOwn(record,'助手当时回复')));
+  assert.ok(split.records.every(record=>!Object.hasOwn(record,'同一回合助手的回复')));
 
   const cross=await answer.search({query:'跨会戊己庚辛',limit:4});
   assert.deepEqual(new Set(resultIds(answer,cross)),new Set([crossSessionUser.id,crossSessionAssistant.id]));
-  assert.ok(cross.records.every(record=>!Object.hasOwn(record,'助手当时回复')));
+  assert.ok(cross.records.every(record=>!Object.hasOwn(record,'同一回合助手的回复')));
 
   const lone=await answer.search({query:'单独壬癸子丑',limit:4});
   assert.deepEqual(resultIds(answer,lone),[loneAssistant.id]);
@@ -161,7 +167,7 @@ test('an assistant that fails current source validation is not attached',async t
   const found=await answer.search({query:marker,limit:4});
 
   assert.deepEqual(resultIds(answer,found),[user.id]);
-  assert.equal(Object.hasOwn(found.records[0],'助手当时回复'),false);
+  assert.equal(Object.hasOwn(found.records[0],'同一回合助手的回复'),false);
 });
 
 test('prefetch skips standalone assistant originals and never emits the paired reply',async t=>{
@@ -184,7 +190,7 @@ test('prefetch skips standalone assistant originals and never emits the paired r
   const pairAnswer=f.answer({keepSignals:true,searchKind:'prefetch'});
   const pairFound=await pairAnswer.search({query:pairMarker,limit:4});
   assert.equal(pairFound.records.length,1);
-  assert.match(pairFound.records[0]['助手当时回复'],/助手回复只作为配对上下文/u);
+  assert.match(pairFound.records[0]['同一回合助手的回复'].text,/助手回复只作为配对上下文/u);
   const pairSelected=selectPrefetch({records:pairFound.records,minSimilarity:.45,
     options:{maxRecords:3,minLexical:0}});
   assert.deepEqual(pairSelected.lines,[`- [${pairFound.records[0].label}] ${pairFound.records[0].text}`]);
@@ -217,7 +223,7 @@ test('imported notes and persona documents do not pair and keep their existing r
   assert.equal(SUMMARY_RERANK_WEIGHT,.7);
   assert.ok(ids.includes(user.id)&&ids.includes(persona.id));
   assert.ok(ids.indexOf(persona.id)<ids.indexOf(user.id),JSON.stringify(found.records));
-  assert.ok(found.records.every(record=>!Object.hasOwn(record,'助手当时回复')));
+  assert.ok(found.records.every(record=>!Object.hasOwn(record,'同一回合助手的回复')));
   const summaryRecord=found.records.find(record=>/旧笔记（整理摘要）/u.test(record.label));
   assert.ok(summaryRecord);
 });

@@ -55,7 +55,9 @@ function environment(handler) {
     async fetch(path, options = {}) {
       const body = options.body ? JSON.parse(options.body) : undefined;
       calls.push({ path, body, options });
-      const result = await handler(path, body, options), status = result.status || 200;
+      const result = path === '/api/basic-memory-bootstrap'
+        ? { ok: true, configured: true, frameworkLoaded: true, activation: 'active' }
+        : await handler(path, body, options), status = result.status || 200;
       return { ok: status >= 200 && status < 300, status, json: async () => structuredClone(result.body || result) };
     },
   }, { filename: 'portable/client.js' });
@@ -136,7 +138,7 @@ test('portable registers the same opt-in control before the first message and in
   assert.ok(button(header.tree, '启用本对话记忆'));
   assert.match(text(header.tree), /已关闭：不读不记/);
   assert.equal(writes(env).length, 0);
-  assert.ok(env.calls.every(call => call.path === path && call.options.cache === 'no-store'));
+  assert.ok(env.calls.every(call => ['/api/basic-memory-bootstrap', path].includes(call.path) && call.options.cache === 'no-store'));
   assert.doesNotMatch(source, /纯净模式|api\/dsh-memory|api\/dsh-pure-mode/);
 });
 

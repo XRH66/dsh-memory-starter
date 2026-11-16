@@ -10,10 +10,11 @@
 
 1. 备份 DSH 档案配置和记忆目录。正在写入的 SQLite 应使用在线一致快照，或先停写再复制。
 2. 换上要安装的 0.7.0 标签或提交，按本页末尾的「重启约定」重启 DSH。
-3. 在仓库目录检查旧笔记：
+3. 从已安装的插件目录检查旧笔记：
 
    ```powershell
-   node scripts/inherit-memory.mjs check --deployment <配置文件>
+   $memoryPlugin = '<DSH 主目录>\profiles\<档案名>\node_modules\@local\dsh-basic-memory-bridge'
+   node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') check --deployment <配置文件>
    ```
 
    `<配置文件>` 通常是首次配置页生成的 `<DSH 主目录>/profiles/<档案名>/basic-memory-bridge/configuration.json`。
@@ -21,7 +22,7 @@
 4. 看清检查结果后导入：
 
    ```powershell
-   node scripts/inherit-memory.mjs apply --deployment <配置文件>
+   node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') apply --deployment <配置文件>
    ```
 
 5. 打开向量检索时，确认新内容进入当前模型档案。全文检索和 `memory_open` 不依赖向量；向量索引需要在「状态」页准备或继续追平。
@@ -32,18 +33,19 @@
 默认读取部署配置对应的当前记忆库 Vault。旧 Vault 在别处时：
 
 ```powershell
-node scripts/inherit-memory.mjs check --deployment <配置文件> --vault <旧 Vault>
-node scripts/inherit-memory.mjs apply --deployment <配置文件> --vault <旧 Vault>
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') check --deployment <配置文件> --vault <旧 Vault>
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') apply --deployment <配置文件> --vault <旧 Vault>
 ```
 
 也可以从标准 JSONL 导入，或让 `check` 写出标准 JSONL：
 
 ```powershell
-node scripts/inherit-memory.mjs check --deployment <配置文件> --file <导入文件.jsonl>
-node scripts/inherit-memory.mjs check --deployment <配置文件> --vault <旧 Vault> --out <检查结果.jsonl>
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') check --deployment <配置文件> --file <导入文件.jsonl>
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') check --deployment <配置文件> --vault <旧 Vault> --out <检查结果.jsonl>
 ```
 
 `--vault` 和 `--file` 不能同时给出。`--include-derived` 只适用于 Vault 输入。
+也可以在仓库检出目录直接运行 `node scripts/inherit-memory.mjs ...`。
 
 ### 会导入、跳过和不导入什么
 
@@ -79,9 +81,9 @@ node scripts/inherit-memory.mjs check --deployment <配置文件> --vault <旧 V
 ### 查看、撤回和恢复批次
 
 ```powershell
-node scripts/inherit-memory.mjs list --deployment <配置文件>
-node scripts/inherit-memory.mjs undo --deployment <配置文件> --batch <批次号>
-node scripts/inherit-memory.mjs restore --deployment <配置文件> --batch <批次号>
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') list --deployment <配置文件>
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') undo --deployment <配置文件> --batch <批次号>
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') restore --deployment <配置文件> --batch <批次号>
 ```
 
 `undo` 用原话控制记录排除整批导入内容，`restore` 再用同一机制恢复。原话版本和批次记录不会被物理删除。

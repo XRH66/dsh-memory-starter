@@ -75,12 +75,15 @@
 0.7.0 不再直接搜索 Vault 中的旧聊天笔记，也没有旧版「维护 → 旧记忆迁移」的后台整理流程。旧笔记要用继承命令搬进原话库。
 
 ```powershell
-node scripts/inherit-memory.mjs check --deployment <配置文件>
-node scripts/inherit-memory.mjs apply --deployment <配置文件>
-node scripts/inherit-memory.mjs list --deployment <配置文件>
-node scripts/inherit-memory.mjs undo --deployment <配置文件> --batch <批次号>
-node scripts/inherit-memory.mjs restore --deployment <配置文件> --batch <批次号>
+$memoryPlugin = '<DSH 主目录>\profiles\<档案名>\node_modules\@local\dsh-basic-memory-bridge'
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') check --deployment <配置文件>
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') apply --deployment <配置文件>
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') list --deployment <配置文件>
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') undo --deployment <配置文件> --batch <批次号>
+node (Join-Path $memoryPlugin 'scripts\inherit-memory.mjs') restore --deployment <配置文件> --batch <批次号>
 ```
+
+也可以在仓库检出目录直接运行 `node scripts/inherit-memory.mjs ...`。
 
 `<配置文件>` 通常是首次配置页生成的 `<DSH 主目录>/profiles/<档案名>/basic-memory-bridge/configuration.json`。
 

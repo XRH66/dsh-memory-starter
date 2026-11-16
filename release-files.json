@@ -127,6 +127,7 @@
   "test/memory-query.test.js",
   "test/tool-errors-and-handoff-age.test.js",
   "test/assistant-provenance.test.js",
+  "test/first-run-guidance.test.js",
   "test/current-state-recency.test.js",
   "test/monotonic.test.js",
   "test/host-stall-timing.test.js",

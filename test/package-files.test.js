@@ -40,7 +40,7 @@ function trackedFiles() {
 }
 
 function entrypoints(pkg) {
-  const values = [pkg.main, pkg.dsh?.bundle?.patch];
+  const values = [pkg.main, pkg.dsh?.bundle?.patch, 'scripts/inherit-memory.mjs'];
   const visit = (value) => {
     if (typeof value === 'string') {
       if (value.startsWith('./')) values.push(value.slice(2));
@@ -97,6 +97,12 @@ test('npm package is self-contained and contains only tracked files', () => {
   const files = new Set(output.flatMap((entry) => entry.files.map((file) => file.path)));
   const required = [
     'NOTICE.md',
+    'scripts/inherit-memory.mjs',
+    'lib/inherit/batches.js',
+    'lib/inherit/cli.js',
+    'lib/inherit/format.js',
+    'lib/inherit/importer.js',
+    'lib/inherit/vault.js',
     'scripts/install/configure.mjs',
     'scripts/install/dsh-cli.mjs',
     'scripts/install/optional-patches.mjs',

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { beginDeploymentConfiguration } from '../lib/deployment-config.js';
+import { beginDeploymentConfiguration, deploymentFingerprint, readDeploymentSettings } from '../lib/deployment-config.js';
 import { resolveConfig } from '../lib/config.js';
 
 const LOCAL = 'BAAI/bge-small-zh-v1.5';
@@ -13,6 +13,7 @@ async function fixture(t, memory, { selectedProfile = null } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'local-vector-optional-'));
   const dshHome = path.join(directory, 'dsh-home');
   await fs.mkdir(path.join(dshHome, 'storages'), { recursive: true });
+  await fs.writeFile(path.join(dshHome, 'storages', 'workspace.json'), JSON.stringify({unit:{name:'workspace',version:2},global:{},tables:{workspaces:{}}}));
   if (selectedProfile) {
     const vectors = path.join(directory, 'management', 'vectors');
     await fs.mkdir(vectors, { recursive: true });
@@ -64,6 +65,43 @@ test('a fresh deployment keeps the cloud default without writing a local model',
   const result = await load(t, { project: 'main' });
   assert.equal(resolveConfig(result.cfg.memory).rawRecallModel, CLOUD);
   assert.equal(Object.hasOwn(result.saved.memory, 'rawRecallModel'), false);
+});
+
+test('a first-run config without memory stays byte-identical and reports loaded', async t => {
+  const f = await fixture(t);
+  const before = await fs.readFile(f.file, 'utf8');
+  const runtime = await beginDeploymentConfiguration(f.file);
+  try {
+    await runtime.ready();
+    const after = await fs.readFile(f.file, 'utf8');
+    const saved = JSON.parse(after);
+    const settings = await readDeploymentSettings(f.file);
+    assert.equal(after, before);
+    assert.deepEqual(runtime.cfg, saved);
+    assert.equal(deploymentFingerprint(runtime.cfg), deploymentFingerprint(saved));
+    assert.equal(settings.runtime, 'loaded');
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('a required local-model migration still writes back and reports loaded', async t => {
+  const f = await fixture(t, { project: 'main', rawRecallInstallReceipt: '/fictional/receipt.json' });
+  const before = await fs.readFile(f.file, 'utf8');
+  const runtime = await beginDeploymentConfiguration(f.file);
+  try {
+    await runtime.ready();
+    const after = await fs.readFile(f.file, 'utf8');
+    const saved = JSON.parse(after);
+    const settings = await readDeploymentSettings(f.file);
+    assert.notEqual(after, before);
+    assert.equal(saved.memory.rawRecallModel, LOCAL);
+    assert.deepEqual(runtime.cfg, saved);
+    assert.equal(deploymentFingerprint(runtime.cfg), deploymentFingerprint(saved));
+    assert.equal(settings.runtime, 'loaded');
+  } finally {
+    await runtime.close();
+  }
 });
 
 test('a default-local install receipt migrates to an explicit local model', async t => {
