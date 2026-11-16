@@ -1,7 +1,5 @@
 # dsh-memory-starter
 
-> **0.7.0 尚未发布。** 本分支按 0.7.0 准备说明；公开发布标签仍是 `v0.6.0`，0.7.0 打标签前不要假设 `v0.7.0` 已经存在。
-
 给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）用的个人长期记忆插件，也是一个可复制、可修改的起点。非官方插件，MIT 许可。
 
 安装从[安装说明](docs/install/setup.md)开始，升级从[升级说明](docs/install/upgrade.md)开始。整体原理见[记忆系统整体说明](docs/记忆系统整体说明.md)，一轮对话的细节见[运行流程](docs/记忆系统运行流程.md)，完整入口见[功能清单](docs/记忆系统功能清单.md)。
@@ -25,10 +23,10 @@
 
 需要 DSH `0.2.1-rc.5` 及以上、Node.js `22.19+` 或 `24+`。
 
-1. 把插件装进 DSH 档案，`<标签或提交>` 换成实际要安装的版本：
+1. 把插件装进 DSH 档案（固定到 `v0.7.0` 标签）：
 
    ```powershell
-   dsh plugin --profile web add "github:XRH66/dsh-memory-starter#<标签或提交>"
+   dsh plugin --profile web add "github:XRH66/dsh-memory-starter#v0.7.0"
    ```
 
 2. 重启 DSH，打开设置里的「记忆框架」。首次使用会按五步引导：选择只存在本机的记忆库位置，再选择哪些聊天打开记忆；新对话自动打开记忆默认不勾。
@@ -148,7 +146,7 @@ npm run release:check
 
 ## 版本
 
-**0.7.0（未发布）**
+**0.7.0（2026-11-16）**
 
 - 去掉整理层、结构化条目、待确认清单、主题页维护、Vault 监视和后台旧记忆迁移。
 - 检索改为原话全文、原话向量和可选重排；不再直接读 Vault 旧聊天笔记。
@@ -157,6 +155,7 @@ npm run release:check
 - 每个开启记忆的回合都携带回答规则。
 - 增加助手原话降权与配对、当前状态偏向新记录、宿主卡顿不计检索时间、超时保留已有结果。
 - 短期接续增加 72 小时默认时间上限，配置项为 `handoffMaxAgeHours`。
+- 首次使用改为五步向导，可以选择记忆库位置；修复 0.6.0 首次配置后原话保存失败。
 
 0.6.0 及以前的完整更新见 [CHANGELOG.md](CHANGELOG.md)。
 

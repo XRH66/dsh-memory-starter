@@ -4,7 +4,7 @@
 
 0.5.0 起，记忆插件、安装入口和固定版本组合统一放在 `dsh-memory-starter`。0.5.0 及以前，记忆插件与安装组合曾分别放在 `dsh-memory-starter`（原名 `dsh-basic-memory-bridge`）和 `codex-deepseek-starter`；下表保留合并前的用户更新记录。
 
-## 0.7.0（未发布）
+## 0.7.0（2026-11-16）
 
 - 去掉了整理层，不再生成结构化条目、主题页、待确认清单或更正建议。
 - 不再监视 Vault 或后台迁移旧记忆，旧笔记改用 `scripts/inherit-memory.mjs` 检查、导入、撤回和恢复。
