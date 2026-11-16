@@ -303,17 +303,17 @@ test('default Vault, include-derived and source exclusivity follow the command c
   assert.match(INHERIT_HELP,/--include-derived 只对 --vault 有效/u);
 });
 
-test('a first-run configuration without owner or vectors still imports, and a renamed entry is not imported twice',async t=>{
+test('a first-run configuration without owner or vector model still imports, and a renamed entry is not imported twice',async t=>{
   const f=await fixture(t);
-  // The first-run page writes only these fields: no ownerSubject and no memory settings.
-  await write(f.directory,'deployment.json',JSON.stringify({ownerDirectory:f.owner,socialRoot:path.join(f.directory,'social'),dshSessionIds:[]}));
+  // The first-run page writes only these fields: no ownerSubject, 「原话检索」 on, and no vector model yet (the cloud default without a model name).
+  await write(f.directory,'deployment.json',JSON.stringify({ownerDirectory:f.owner,socialRoot:path.join(f.directory,'social'),dshSessionIds:[],memory:{rawRecall:true}}));
   await entryNote(f.ownerVault,'chats/entries/书架.md',{title:'书架',managed:'条目正文：翡翠书架在北墙。'});
 
   const applied=await f.cli('apply');
   assert.equal(applied.exitCode,0,JSON.stringify(applied));
   assert.equal(applied.output[0].inserted,2);
-  assert.deepEqual(applied.output[0].indexing,{embedded:0,reason:'vectors-off'});
-  assert.match(applied.output[0].indexingNotice,/没有开启向量检索/u);
+  assert.deepEqual(applied.output[0].indexing,{embedded:0,reason:'vector-model-not-configured'});
+  assert.match(applied.output[0].indexingNotice,/向量模型还没配好/u);
   assert.equal(applied.output[0].verification.passed,true);
 
   // The records belong to the owner the running plugin uses when the configuration names none.
@@ -328,6 +328,17 @@ test('a first-run configuration without owner or vectors still imports, and a re
   assert.equal(again.exitCode,0,JSON.stringify(again));
   assert.equal(again.output[0].inserted,0);
   assert.equal(again.output[0].skipped,2);
+});
+
+test('a configuration with vector search turned off imports without encoding',async t=>{
+  const f=await fixture(t);
+  // First-run files from 0.7.0 and earlier wrote no memory settings, which leaves 「原话检索」 off.
+  await write(f.directory,'deployment.json',JSON.stringify({ownerDirectory:f.owner,socialRoot:path.join(f.directory,'social'),dshSessionIds:[]}));
+  const applied=await f.cli('apply');
+  assert.equal(applied.exitCode,0,JSON.stringify(applied));
+  assert.ok(applied.output[0].inserted>0);
+  assert.deepEqual(applied.output[0].indexing,{embedded:0,reason:'vectors-off'});
+  assert.match(applied.output[0].indexingNotice,/没有开启向量检索/u);
 });
 
 test('check preview reads pending WAL records from a live SQLite writer',async t=>{

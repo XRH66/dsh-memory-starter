@@ -232,6 +232,22 @@ test('wizard creates the library, records explicit chat consent and resumes at s
   assert.match(text(refreshed.tree), /测试对话 A/);
 });
 
+test('a model saved in step 4 is summarised as taking effect after one more restart', async t => {
+  const env = environment({ bootstrapValue: bootstrap({ configured: true, frameworkLoaded: true, activation: 'active', revision: 'r1' }) });
+  t.after(() => env.close());
+  const page = env.page(); await page.flush();
+  const wizard = env.wizard(page); await wizard.flush();
+  assert.match(text(wizard.tree), /第 4 步 \/ 共 5 步/);
+  const picker = nodes(wizard.tree, node => typeof node.type === 'function' && node.type.name === 'ModelPicker')[0];
+  assert.ok(picker);
+  // Saving stages the model for the next start; the page passes the new settings back down.
+  const saved = loadedMemory({ ...unavailableModel, pendingRawModel: availableModel.rawModel });
+  picker.props.onSaved(saved);
+  wizard.props = { ...wizard.props, sessionInfo: saved }; wizard.dirty = true; await wizard.flush();
+  assert.match(text(wizard.tree), /第 5 步 \/ 共 5 步/);
+  assert.match(text(wizard.tree), /再重启一次 DSH 后生效，并自动开始建索引/);
+});
+
 test('an open page waiting at step 3 polls and moves to step 4 once DSH has restarted', async t => {
   const env = environment(); t.after(() => env.close());
   const page = env.page(); await page.flush();

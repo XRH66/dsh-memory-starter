@@ -50,7 +50,8 @@ test('first setup no longer requires an organizer model and old config fields re
   const created=await createBootstrap(profile,{vaultPath:old},{directory});
   assert.equal(created.configured,true);
   const file=path.join(dir,'basic-memory-bridge','configuration.json'),cfg=JSON.parse(await fs.readFile(file,'utf8'));
-  assert.equal(Object.hasOwn(cfg,'memory'),false);
+  // The only memory setting first setup writes is 「原话检索」 on, so the model chosen in the wizard actually searches.
+  assert.deepEqual(cfg.memory,{rawRecall:true});
   await fs.writeFile(file,JSON.stringify({...cfg,memory:{autoCapture:true,organizerReasoningEffort:'high',
     captureProvider:'retired-provider',captureModel:'retired-model'}}));
   const loaded=await readBootstrap(profile);

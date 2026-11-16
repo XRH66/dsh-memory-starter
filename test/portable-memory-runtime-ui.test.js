@@ -578,6 +578,32 @@ test('an unfinished cloud service is not shown as in use and its built-in defaul
   assert.match(text(done.tree),/使用中/);assert.doesNotMatch(text(done.tree),/还没配好/);
 });
 
+test('a configured model is not shown as in use while 原话检索 is off',async t=>{
+  const customModel={id:'custom-api',label:'自定义 API（OpenAI 兼容）',tier:'cloud',engine:'api',cloud:true,custom:true,dimensions:1024};
+  const configured=()=>{const info=snapshot();
+    info.rawModel={fields:{rawRecallModel:'custom-api',rawRecallApiBase:'https://fictional-done.example/v1',
+      rawRecallApiModel:'fictional-embed',rawRecallDimensions:1024,rawRecallAllowCloud:true},hasSavedApiKey:true};
+    info.rawModels=[...info.rawModels,customModel];return info;};
+  let info=configured();info.flags={autoRecall:true,recentContext:true,rawRecall:false};
+  const env=environment(()=>info);t.after(()=>env.close());
+  const open=async()=>{const page=env.page();await page.flush();button(page.tree,'检索模型').props.onClick();await page.flush();
+    const picker=env.component(component(page.tree,'ModelPicker'));await picker.flush();return picker;};
+  let picker=await open();
+  assert.match(text(picker.tree),/原话检索没开/);assert.match(text(picker.tree),/「原话检索」关着/);
+  assert.doesNotMatch(text(picker.tree),/使用中/);
+  assert.match(text(nodes(select(picker.tree,'检索模型'),n=>n.type==='option'&&n.props.value==='custom-api')[0]),/当前选择，原话检索没开/);
+
+  // Turned on but not restarted yet.
+  info=configured();info.flags={autoRecall:true,recentContext:true,rawRecall:false};info.pendingFlags={autoRecall:true,recentContext:true,rawRecall:true};
+  picker=await open();
+  assert.match(text(picker.tree),/重启后启用/);assert.match(text(picker.tree),/重启 DSH 后开始使用/);assert.doesNotMatch(text(picker.tree),/使用中/);
+
+  // On: in use, and no notice about the switch.
+  info=configured();info.flags={autoRecall:true,recentContext:true,rawRecall:true};
+  picker=await open();
+  assert.match(text(picker.tree),/使用中/);assert.doesNotMatch(text(picker.tree),/原话检索没开|「原话检索」/);
+});
+
 test('a custom API model needs an address and a model name, and vendor presets are not offered',async t=>{
   const env=environment(()=>{const info=snapshot();info.rawModels=[...info.rawModels,
     {id:'custom-api',label:'自定义 API（OpenAI 兼容）',tier:'cloud',engine:'api',cloud:true,custom:true,dimensions:1024},
