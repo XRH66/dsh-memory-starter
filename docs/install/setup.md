@@ -4,7 +4,7 @@
 
 ## 1. 准备 DSH 和本仓库
 
-当前源码支持 DSH `0.2.1-rc.5` 和 `0.2.2-rc.3`。DSH 0.2.2 需要 Node.js 24.9 以上；DSH 0.2.1 可用 Node.js 22.19 或 24。公开标签 `v0.7.1` 只支持 0.2.1-rc.5；0.2.2-rc.3 的兼容修复尚未发布，验证 rc.3 时要使用当前源码或完整提交号，不要用 `v0.7.1`。另需 Git 和 npm。还没有 DSH 的话，按[官方项目](https://github.com/deepseek-ai/deepseek-harness)安装适配版本；下面默认安装仍在日常使用的 0.2.1，也可以改用 0.2.2：
+`v0.7.2` 支持 DSH `0.2.1-rc.5` 和 `0.2.2-rc.3`。DSH 0.2.2 需要 Node.js 24.9 以上；DSH 0.2.1 可用 Node.js 22.19 或 24。`v0.7.1` 及更早的标签只支持 0.2.1-rc.5。另需 Git 和 npm。还没有 DSH 的话，按[官方项目](https://github.com/deepseek-ai/deepseek-harness)安装适配版本；下面默认安装仍在日常使用的 0.2.1，也可以改用 0.2.2：
 
 ```powershell
 npm install --global @deepseek-ai/dsh@0.2.1-rc.5
@@ -40,7 +40,7 @@ $paths = Get-Content (Join-Path $deploy 'paths.json') -Raw | ConvertFrom-Json
 
 ## 3. 安装插件
 
-> **版本**：下面固定安装 `v0.7.1` 标签。要验证还没打标签的源码时，把 `$memoryRef` 换成完整提交号，并记录未提交的修改，不要把工作树当成公开发布版。
+> **版本**：下面固定安装 `v0.7.2` 标签。要验证还没打标签的源码时，把 `$memoryRef` 换成完整提交号，并记录未提交的修改，不要把工作树当成公开发布版。
 
 先让当前终端指向这套部署（只设置环境变量，不启动服务）：
 
@@ -51,7 +51,7 @@ $paths = Get-Content (Join-Path $deploy 'paths.json') -Raw | ConvertFrom-Json
 再安装固定版本的两个插件：
 
 ```powershell
-$memoryRef = 'v0.7.1'                                        # dsh-memory-starter 0.7.1
+$memoryRef = 'v0.7.2'                                        # dsh-memory-starter 0.7.2
 $settingsCommit = 'f5778e8a7ddcf2be5ba83f895db587b384455a78' # dsh-global-settings 0.2.0
 dsh plugin --profile web add "github:XRH66/dsh-memory-starter#$memoryRef"
 dsh plugin --profile web add "github:XRH66/dsh-global-settings#$settingsCommit"
