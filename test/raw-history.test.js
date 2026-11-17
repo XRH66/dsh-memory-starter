@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import {fileURLToPath} from 'node:url';
 import {zstdCompressSync} from 'node:zlib';
 import {Context} from '@deepseek-ai/cordis';
 import {SessionStore} from '@deepseek-ai/dsh-session';
@@ -13,6 +14,8 @@ import {resolveConfig} from '../lib/config.js';
 import {readSessionHistory,completedHistoryTurns,previewHistory,applyHistory,historyMode} from '../lib/raw-rag/history.js';
 import {syncFactualPriorities} from '../lib/raw-rag/fact-priority.js';
 import {embeddingContract,seedTurnVectors} from './embedding-fixture.js';
+
+const historyFixture=name=>fileURLToPath(new URL('./fixtures/raw-history/'+name,import.meta.url));
 
 async function temp(t){
   const base=path.resolve(os.tmpdir()),dir=await fs.mkdtemp(path.join(base,'raw-history-test-'));
@@ -85,6 +88,47 @@ test('native multi-frame history excludes injected context and aborted turns',as
   assert.equal(historyMode(undefined,false),'default-mode-unconfirmed');
   const routed=await nativeFixture(dir,'session-fixture-relay',['[SessionRelay Task: fixture-job] Delivery ID: fixture-delivery\n执行工程任务。']);
   assert.equal(completedHistoryTurns((await readSessionHistory(routed.file)).artifact,'owner:a').turns.length,0);
+});
+
+test('history reads rc5 and rc3 v4 fixtures through the strict format path',async()=>{
+  for(const [name,question,answer] of [
+    ['rc5-session.jsonl','rc5 fixture question','rc5 fixture answer'],
+    ['rc3-session.jsonl','rc3 fixture question','rc3 fixture answer'],
+  ]){
+    const read=await readSessionHistory(historyFixture(name)),parsed=completedHistoryTurns(read.artifact,'owner:a');
+    assert.equal(read.parse.mode,'strict');assert.equal(read.skippedRows,0);
+    assert.equal(parsed.turns.length,1);assert.equal(parsed.turns[0].turn,1);
+    assert.deepEqual(parsed.turns[0].messages.map(message=>[message.role,message.text]),[
+      ['user',question],['assistant',answer],
+    ]);
+    assert.equal(parsed.turns[0].completedAt,read.artifact.events.find(event=>event.type==='turn/end').time);
+  }
+});
+
+test('history skips unknown, malformed, duplicate, out-of-range, and incomplete rows without dropping complete turns',async t=>{
+  const read=await readSessionHistory(historyFixture('recoverable-session.jsonl')),parsed=completedHistoryTurns(read.artifact,'owner:a');
+  assert.equal(read.parse.mode,'lenient');assert.equal(read.skippedRows,6);
+  assert.equal(parsed.turns.length,1);assert.equal(parsed.skipped.empty,1);
+  assert.match(parsed.turns[0].docText,/recoverable fixture question/);
+  assert.match(parsed.turns[0].docText,/recoverable fixture answer/);
+
+  const home=path.join(await temp(t),'home'),id='session-fixture-recoverable';
+  const source=path.join(home,'sessions','--fixture--',id);
+  await fs.mkdir(source,{recursive:true});
+  await fs.copyFile(historyFixture('recoverable-session.jsonl'),path.join(source,'session.v4.jsonl'));
+  const deployment=path.join(home,'deployment.json');
+  await fs.writeFile(deployment,JSON.stringify({ownerDirectory:path.join(home,'owner'),ownerSubject:'owner:a',dshHome:home,dshSessionIds:[id],memory:{rawRecall:true,rawRecallModel:'BAAI/bge-small-zh-v1.5'}}));
+  const plan=await previewHistory(deployment,{normalDefaultConfirmed:true});
+  assert.equal(plan.summary.sourceSkippedRows,6);assert.equal(plan.summary.turns,1);
+  assert.equal(plan.sources[0].parse.mode,'lenient');assert.equal(plan.sources[0].skippedRows,6);
+  const store=new RawMemoryStore(path.join(home,'raw.sqlite'));
+  const recall={modelKey:null,async indexPending(){return {embedded:0,pending:0};},async dispose(){}};
+  try{
+    const imported=await applyHistory(plan,{store,recall});
+    assert.equal(imported.inserted,1);assert.equal(imported.sourceSkippedRows,6);assert.equal(imported.complete,true);
+  }finally{
+    await recall.dispose();store.close();
+  }
 });
 
 test('import resumes missing vectors, preserves user-only policy, edits only changed turns, and stays idempotent',async t=>{

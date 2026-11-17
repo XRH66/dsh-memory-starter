@@ -1,0 +1,7 @@
+{"type":"session","version":4,"id":"session-fixture-rc5","createdAt":1000,"cwd":"/fixture-rc5","isSeeded":false,"delegationDepth":0,"agentPreset":"standard"}
+{"type":"turn/start","seq":0,"time":1000,"data":{"turn":1}}
+{"type":"step/start","seq":1,"time":1001,"data":{"turn":1,"step":1}}
+{"type":"user/message","seq":2,"time":1002,"data":{"id":"fixture-rc5-user","role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"rc5 fixture question"}]},"surfaceOp":"append"}
+{"type":"assistant/message","seq":3,"time":1003,"data":{"turn":1,"step":1,"stream":[],"message":{"id":"fixture-rc5-assistant","role":"assistant","source":{"kind":"model","provider":"fixture","model":"fixture"},"content":[{"type":"text","text":"rc5 fixture answer"}]}},"surfaceOp":"append"}
+{"type":"step/end","seq":4,"time":1004,"data":{"turn":1,"step":1}}
+{"type":"turn/end","seq":5,"time":1005,"data":{"turn":1,"reason":{"kind":"completed"}}}

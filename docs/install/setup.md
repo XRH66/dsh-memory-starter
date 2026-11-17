@@ -4,10 +4,11 @@
 
 ## 1. 准备 DSH 和本仓库
 
-需要 Git、Node.js 22.19+ 或 24+、npm。还没有 DSH 的话，按[官方项目](https://github.com/deepseek-ai/deepseek-harness)安装本版适配的版本：
+当前源码支持 DSH `0.2.1-rc.5` 和 `0.2.2-rc.3`。DSH 0.2.2 需要 Node.js 24.9 以上；DSH 0.2.1 可用 Node.js 22.19 或 24。公开标签 `v0.7.1` 只支持 0.2.1-rc.5；0.2.2-rc.3 的兼容修复尚未发布，验证 rc.3 时要使用当前源码或完整提交号，不要用 `v0.7.1`。另需 Git 和 npm。还没有 DSH 的话，按[官方项目](https://github.com/deepseek-ai/deepseek-harness)安装适配版本；下面默认安装仍在日常使用的 0.2.1，也可以改用 0.2.2：
 
 ```powershell
 npm install --global @deepseek-ai/dsh@0.2.1-rc.5
+# 或：npm install --global @deepseek-ai/dsh@0.2.2-rc.3
 dsh --version
 ```
 
