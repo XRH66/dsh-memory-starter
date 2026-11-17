@@ -15,6 +15,8 @@ test('native isOwnedBy remains the authoritative runtime ownership API',()=>{
   assert.equal(compatibility.hasNativeOwnership,true);
   assert.deepEqual(compatibility.ownersOf(child,[root,child]),[root]);
   assert.deepEqual(compatibility.ownersOf(root,[root,child]),[]);
+  assert.equal(compatibility.isRoot(root,[root,child]),true);
+  assert.equal(compatibility.isRoot(child,[root,child]),false);
   assert.equal(compatibility.observeAgentCreated({agent:child}),false);
 });
 
@@ -27,6 +29,17 @@ test('agent creation captures and validates currentInitiator when isOwnedBy is a
   assert.equal(compatibility.observeAgentCreated({agent:child,source:'startup'}),true);
   assert.deepEqual(compatibility.ownersOf(child,[root,child]),[root]);
   assert.deepEqual(compatibility.ownersOf(root,[root,child]),[]);
+  assert.equal(compatibility.isRoot(root,[root,child]),true);
+  assert.equal(compatibility.isRoot(child,[root,child]),false);
+});
+
+test('durable fork lineage without subagent origin remains a root',()=>{
+  const root=actor('session-root'),fork=actor('session-fork',{parentSession:'session-root',isSeeded:true});
+  const agents={get:id=>id===root.id?root:id===fork.id?fork:undefined,list:()=>[root,fork],
+    currentInitiator:()=>undefined};
+  const compatibility=createHostCompatibility({agents,logger:{warn(){throw Error('unexpected warning');}}});
+  assert.deepEqual(compatibility.ownersOf(fork,[root,fork]),[]);
+  assert.equal(compatibility.isRoot(fork,[root,fork]),true);
 });
 
 test('missing ownership APIs fail closed to an independent session and warn once',()=>{
@@ -38,6 +51,8 @@ test('missing ownership APIs fail closed to an independent session and warn once
   assert.deepEqual(compatibility.ownersOf(child,[root,child]),[]);
   assert.deepEqual(compatibility.ownersOf(child,[root,child]),[]);
   assert.deepEqual(compatibility.ownersOf(root,[root,child]),[]);
+  assert.equal(compatibility.isRoot(root,[root,child]),true);
+  assert.equal(compatibility.isRoot(child,[root,child]),false);
   assert.equal(warnings.length,1);
   assert.match(warnings[0],/独立会话/);
 });

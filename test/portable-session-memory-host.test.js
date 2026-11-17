@@ -133,7 +133,7 @@ test('portable tool scopes refresh only for the affected family, except on tool 
   const cfg={ownerDirectory:directory,dshSessionIds:[]};
   const service=await apply(ctx,{directory,sessionIds:[],ownerSubject:'fixture-owner',sessionMemory:true,
     configurationStaticFingerprint:deploymentStaticFingerprint(cfg),deployment:{async markApplied(){}},
-    memory:{autoCapture:false,autoRecall:false,recentContext:false,rawRecall:false}},
+    memory:{autoCapture:false,autoRecall:false,recentContext:false,rawRecall:false,subagentMemory:true}},
     {acquire:async()=>{throw Error('scope changes must not open the memory backend');}});
   const {sessionMemory:control}=service;
   const observe=t.mock.method(control,'observe'),check=t.mock.method(control,'check');
@@ -223,6 +223,80 @@ test('portable tool scopes refresh only for the affected family, except on tool 
   assert.deepEqual(new Set(viewed),new Set(agents.keys()));
   assert.equal(viewed.length,agents.size);
   assert.ok([...agents.values()].every(agent=>agent.denied.has('mcp__basic_memory__late_tool')));
+});
+
+test('native and rc.3 ownership paths keep descendants closed by default',async t=>{
+  for(const [label,native] of [['rc.5 isOwnedBy',true],['rc.3 currentInitiator',false]]){
+    await t.test(label,async t=>{
+      const directory=await fs.mkdtemp(path.join(os.tmpdir(),'subagent-memory-default-'));
+      const agents=new Map(),sessions=new Map(),owners=new Map(),callbacks=new Map(),registered=new Map();
+      const effects=[],guards=[];
+      let currentInitiator;
+      const fire=async(name,...args)=>{
+        for(const fn of callbacks.get(name)??[])await fn(...args);
+      };
+      function actor(id,header={}){
+        const events=[],denied=new Set(),restrictions=[];
+        const session={id,header:{id,...header},get seq(){return events.length;},
+          snapshotEvents:(from=0,to=events.length)=>events.slice(from,to),deriveMessages:()=>[]};
+        const scope={restrict({deny}){restrictions.push([...deny]);for(const name of deny)denied.add(name);
+          return()=>deny.forEach(name=>denied.delete(name));}};
+        const agent={id,session,status:'idle',denied,events,restrictions,ctx:{get:()=>scope}};
+        agents.set(id,agent);sessions.set(id,session);return agent;
+      }
+      const root=actor('session-root'),other=actor('session-other');
+      const agentService={get:id=>agents.get(id),list:()=>[...agents.values()]};
+      if(native)agentService.isOwnedBy=(id,owner)=>owners.get(id)===owner;
+      else agentService.currentInitiator=()=>currentInitiator;
+      const ctx={llm:{},logger:{warn(){}},sessions:{get:id=>sessions.get(id)},
+        agents:agentService,
+        tools:{register(tool){registered.set(tool.name,tool);return()=>registered.delete(tool.name);},
+          guard(fn){guards.push(fn);return()=>{};},view(){return {restrictableNames:new Set([...registered.keys(),'ordinary_tool'])}}},
+        effect(fn){effects.push(fn());},provide(){},on(name,fn){callbacks.set(name,[...(callbacks.get(name)??[]),fn]);}};
+      t.after(async()=>{
+        for(const dispose of effects.reverse())await dispose?.();
+        await fs.rm(directory,{recursive:true,force:true});
+      });
+      const cfg={ownerDirectory:directory,dshSessionIds:[]};
+      const service=await apply(ctx,{directory,sessionIds:[],ownerSubject:'fixture-owner',sessionMemory:true,
+        configurationStaticFingerprint:deploymentStaticFingerprint(cfg),deployment:{async markApplied(){}},
+        memory:{autoCapture:false,autoRecall:true,recentContext:true,rawRecall:false,subagentMemory:false}},
+        {acquire:async()=>memoryStore()});
+      await service.applySessionSelection({...cfg,dshSessionIds:[root.id]},'open-root',{action:'bind',value:root.id});
+      await new Promise(resolve=>setImmediate(resolve));
+      const start={type:'turn/start',seq:0,time:Date.now(),data:{turn:1}};
+      root.events.push(start);
+      await fire('session/event',root.session,start);
+      assert.equal(service.sessionMemory.check(root).allowed,true);
+      assert.equal(root.denied.has('memory_search'),false,JSON.stringify(root.restrictions));
+
+      await t.test('child and grandchild',async()=>{
+        const child=actor('session-child',{origin:'subagent',parentSession:root.id});
+        if(native)owners.set(child.id,root);
+        else currentInitiator=root;
+        await fire('agent/created',{agent:child,source:'fresh'});
+        currentInitiator=undefined;
+        const grandchild=actor('session-grandchild',{origin:'subagent',parentSession:child.id});
+        if(native)owners.set(grandchild.id,child);
+        else currentInitiator=child;
+        await fire('agent/created',{agent:grandchild,source:'fresh'});
+        currentInitiator=undefined;
+
+        for(const agent of [child,grandchild]){
+          assert.equal(service.sessionMemory.check(agent).allowed,false);
+          assert.equal(agent.denied.has('memory_search'),true);
+          assert.match(guards.map(guard=>guard({name:'memory_search',agent})).find(Boolean)??'',/尚未开启记忆/);
+          await assert.rejects(registered.get('memory_search').execute({query:'fixture'},{agent,signal:new AbortController().signal}),
+            /尚未开启记忆/);
+          const prompt=await callbacks.get('system-prompt/assemble')[0]({}, {agent},
+            async()=>({sections:[],tools:[{name:'memory_search'},{name:'ordinary_tool'}]}));
+          assert.deepEqual(prompt.tools.map(tool=>tool.name),['ordinary_tool']);
+        }
+        assert.equal(service.sessionMemory.check(other).allowed,false);
+        assert.equal(root.denied.has('memory_search'),false);
+      });
+    });
+  }
 });
 
 test('default owner is shared by session grants and raw memory queries',async t=>{

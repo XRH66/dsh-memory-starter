@@ -10,6 +10,10 @@ test('config defaults apply the product limits without a session allowlist', () 
   assert.equal(config.project, 'personal');
   assert.equal(config.timeZone, 'Asia/Shanghai');
   assert.equal(config.autoRecall, true);
+  assert.equal(config.subagentMemory, false);
+  assert.equal(resolveConfig({subagentMemory:true}).subagentMemory,true);
+  assert.equal(resolveConfig({subagentMemory:'yes'}).subagentMemory,false);
+  assert.throws(()=>Config({subagentMemory:'yes'}));
   assert.equal(config.rawRecallMinScore, null);
   assert.equal(config.rawRecallQueryWaitMs, 0);
   assert.equal(config.rawRecallModel, 'custom-api');

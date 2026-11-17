@@ -181,6 +181,24 @@ test('new conversations can default to memory on through the dedicated setting',
   assert.match(text(page.tree), /新对话自动开启记忆已开启/);
 });
 
+test('subagent memory is a default-off feature flag saved for the next reload',async t=>{
+  const flags={autoRecall:true,recentContext:true,rawRecall:false,subagentMemory:false};
+  const info=snapshot([], {flags}),env=environment((url,body)=>{
+    if(url.endsWith('/flags')&&body)return snapshot([],{revision:'r2',flags,pendingFlags:body.flags});
+    return info;
+  });t.after(()=>env.close());
+  const page=env.page();await page.flush();
+  const toggle=nodes(page.tree,node=>node.type==='input'&&node.props.id==='memory-flag-subagentMemory')[0];
+  assert.ok(toggle);assert.equal(toggle.props.checked,false);
+  assert.ok(helpTexts(page).some(value=>/子对话可以查你的记忆/.test(value)&&/默认关/.test(value)));
+  toggle.props.onChange({target:{checked:true}});await page.flush();
+  await button(page.tree,'保存记忆功能设置').props.onClick();await page.flush();
+  const write=writes(env).find(call=>call.path.endsWith('/flags'));
+  assert.deepEqual(write.body.flags,{...flags,subagentMemory:true});
+  assert.match(text(page.tree),/重新加载后生效/);
+  assert.match(text(page.tree),/下次重新加载后生效/);
+});
+
 test('old bound sessions remain unselected without new authorization', async t => {
   const env = environment(() => snapshot()), page = env.page(); t.after(() => env.close()); await page.flush();
   assert.equal(checkbox(page).props.checked, false);

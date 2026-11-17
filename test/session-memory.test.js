@@ -6,12 +6,12 @@ import path from 'node:path';
 import { createSessionMemory } from '../lib/session-memory.js';
 import { Session } from '@deepseek-ai/dsh-session';
 
-async function fixture(t) {
+async function fixture(t,{subagentMemory=false}={}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-session-memory-'));
   const actors = new Map(), records = new Map(), owners = new Map();
   const agents = { get: id => actors.get(id), list: () => [...actors.values()], isOwnedBy: (id, owner) => owners.get(id) === owner };
   const sessions = { get: id => records.get(id) };
-  const options = { directory, ownerSubject: '测试用户', agents, sessions, logger: { warn() {} } };
+  let options = { directory, ownerSubject: '测试用户', agents, sessions, logger: { warn() {} }, subagentMemory };
   let memory = await createSessionMemory(options);
   t.after(async () => {
     memory.close();
@@ -46,7 +46,7 @@ async function fixture(t) {
     job(source, grant) { return { sessionId: source.sessionId, sourceMessageId: source.messageId, sourceEventSeq: source.sequence,
       turn: source.turn, memoryAuthorization: JSON.parse(JSON.stringify(grant)) }; },
     async enable(agent) { await memory.set(agent.id, true); },
-    async reload() { memory.close(); memory = await createSessionMemory(options); return memory; },
+    async reload(overrides={}) { memory.close(); options={...options,...overrides}; memory = await createSessionMemory(options); return memory; },
   };
   return f;
 }
@@ -75,7 +75,7 @@ test('current original messages admit both roles without widening legacy history
 });
 
 test('message recording excludes synthetic context, inherited history and owned child output',async t=>{
-  const f=await fixture(t),a=f.actor('root');
+  const f=await fixture(t,{subagentMemory:true}),a=f.actor('root');
   await f.enable(a);f.begin(a,1);
   const context=f.user(a,'injected',{kind:'recent-conversation-context'});
   assert.equal(f.memory.admitMessage(a.session,context),null);
@@ -163,7 +163,7 @@ test('close immediately aborts original signals; reopening does not revive a lat
 });
 
 test('only runtime-owned children inherit; fork lineage and child outputs cannot authorize sources', async t => {
-  const f = await fixture(t), a = f.actor('root');
+  const f = await fixture(t,{subagentMemory:true}), a = f.actor('root');
   await f.enable(a); f.begin(a, 1); const user = f.user(a), source = f.source(a, user, 1);
   const child = f.actor('child', { parent: a }), grandchild = f.actor('grandchild', { parent: child });
   const branch = f.actor('branch', { header: { parentSessionId: 'root', rootSessionId: 'root' },
@@ -180,6 +180,27 @@ test('only runtime-owned children inherit; fork lineage and child outputs cannot
   f.owners.delete(a.id);
   f.records.delete(a.id);
   assert.equal(f.memory.check(child).allowed, false);
+});
+
+test('subagent memory defaults off for owned children and grandchildren until an explicit reload',async t=>{
+  const f=await fixture(t),root=f.actor('root');
+  await f.enable(root);f.begin(root,1);f.user(root);
+  const child=f.actor('child',{parent:root,header:{origin:'subagent',parentSession:root.id}});
+  const grandchild=f.actor('grandchild',{parent:child,header:{origin:'subagent',parentSession:child.id}});
+  assert.equal(f.memory.check(root).allowed,true);
+  assert.equal(f.memory.isRootAgent(root),true);
+  assert.equal(f.memory.check(child).allowed,false);
+  assert.equal(f.memory.check(grandchild).allowed,false);
+  assert.equal(f.memory.isRootAgent(child),false);
+  assert.equal(f.memory.isRootAgent(grandchild),false);
+  assert.throws(()=>f.memory.grant(child),{code:'MEMORY_DISABLED'});
+
+  await f.reload({subagentMemory:true});
+  assert.equal(f.memory.check(root).allowed,true);
+  assert.equal(f.memory.check(child).allowed,true);
+  assert.equal(f.memory.check(grandchild).allowed,true);
+  assert.equal(f.memory.grant(child).rootSessionId,root.id);
+  assert.equal(f.memory.grant(grandchild).rootSessionId,root.id);
 });
 
 test('source grants reject assistant, synthetic, replacement and mismatched coordinate material', async t => {

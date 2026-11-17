@@ -9,9 +9,11 @@ import {apply} from '../lib/platform-host.js';
 import {createSettingsHandler} from '../lib/settings-host.js';
 import {
   applyDeploymentSessionChange,
+  beginDeploymentConfiguration,
   deploymentFingerprint,
   deploymentStaticFingerprint,
   readDeploymentSettings,
+  stageDeploymentFlags,
   stageDeploymentSessionDefault,
 } from '../lib/deployment-config.js';
 
@@ -231,6 +233,35 @@ test('deployment settings reject a non-boolean persisted default',async t=>{
   const f=await deploymentFixture(t);
   await fs.writeFile(f.file,JSON.stringify({...f.cfg,autoEnableNewSessions:'yes'}));
   await assert.rejects(readDeploymentSettings(f.file),/新对话记忆设置无效/);
+});
+
+test('subagent memory stages for reload and legacy pending flags inherit the safe default',async t=>{
+  const f=await deploymentFixture(t),flags={autoRecall:true,recentContext:true,rawRecall:false,subagentMemory:true};
+  const staged=await stageDeploymentFlags(f.file,flags,f.revision);
+  assert.equal(staged.flags.subagentMemory,false);
+  assert.deepEqual(staged.pendingFlags,flags);
+
+  const reloaded=await beginDeploymentConfiguration(f.file);
+  try{
+    await reloaded.ready();
+    assert.equal(reloaded.cfg.memory.subagentMemory,true);
+  }finally{await reloaded.close();}
+
+  const saved=JSON.parse(await fs.readFile(f.file,'utf8'));
+  saved.memory.subagentMemory=false;
+  saved.pendingMemoryFlags={autoRecall:false,recentContext:false,rawRecall:true};
+  await fs.writeFile(f.file,JSON.stringify(saved));
+  const legacy=await beginDeploymentConfiguration(f.file);
+  try{
+    await legacy.ready();
+    assert.deepEqual({
+      autoRecall:legacy.cfg.memory.autoRecall,
+      recentContext:legacy.cfg.memory.recentContext,
+      rawRecall:legacy.cfg.memory.rawRecall,
+      subagentMemory:legacy.cfg.memory.subagentMemory,
+    },{autoRecall:false,recentContext:false,rawRecall:true,subagentMemory:false});
+  }finally{await legacy.close();}
+  assert.equal((await readDeploymentSettings(f.file)).flags.subagentMemory,false);
 });
 
 test('session-default route saves the default and returns the session receipt',async t=>{

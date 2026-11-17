@@ -31,7 +31,8 @@ async function fixture(t,overrides={}) {
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'portable-session-memory-'));
   const actors=new Map(),sessions=new Map();
   const agents={get:id=>actors.get(id),list:()=>[...actors.values()],isOwnedBy};
-  const options={directory,ownerSubject:'用户',agents,sessions:{get:id=>sessions.get(id)},logger};
+  const options={directory,ownerSubject:'用户',agents,sessions:{get:id=>sessions.get(id)},logger,
+    subagentMemory:configOverrides.subagentMemory===true};
   let access=await createSessionMemory(options);
   const config=resolveConfig({project:'main',vaultPath:path.join(directory,'vault'),rawRecallDbPath:path.join(directory,'raw.sqlite'),autoRecall:false,personalRecall:false,recentContext:false,maxTimelineEntries:0,maxIndexNotes:0,rawRecall:false,...configOverrides});
   await fs.mkdir(config.vaultPath,{recursive:true});
@@ -384,7 +385,8 @@ test('three consecutive deferred handoffs warn once per session and reset after 
 
 test('child-agent requests neither inject handoffs nor change the root conversation baseline',async t=>{
   const rootId='session-primary',childId='session-child';
-  const f=await fixture(t,{recentContext:true,autoCapture:false,isOwnedBy:(id,other)=>id===childId&&other.session.id===rootId});
+  const f=await fixture(t,{recentContext:true,autoCapture:false,subagentMemory:true,
+    isOwnedBy:(id,other)=>id===childId&&other.session.id===rootId});
   const root=f.actor(rootId),other=f.actor('session-other'),child=f.actor(childId),bridge=f.bridge();
   for(const agent of [root,other,child])attachSurface(f,bridge,agent);
   const request=(agent,turn)=>bridge.onRequest({agent,turn,step:1,signal:new AbortController().signal},async()=>({provider:'fixture',model:'fixture'}));
@@ -407,6 +409,46 @@ test('child-agent requests neither inject handoffs nor change the root conversat
   f.emit(root,'step/start',{turn:2,step:1},bridge);await request(root,2);
   assert.equal(handoffs(root).length,1);
   assert.equal((await bridge.handoff.status()).sessions[root.session.id].generation,generation);
+});
+
+test('subagent memory defaults off without changing prefetch or rules for the root conversation',async t=>{
+  const rootId='session-primary',childId='session-child';
+  const f=await fixture(t,{autoRecall:true,recentContext:true,isOwnedBy:(id,other)=>id===childId&&other.session.id===rootId});
+  const root=f.actor(rootId),child=f.actor(childId),bridge=f.bridge();
+  await f.access.set(root.session.id,true);
+  const rootUser=f.begin(root,1,bridge,'我平时喜欢用什么杯子？','root-default-u1');
+  const rootDecision=await runPreStep(bridge,{agent:root,turn:1,messages:[rootUser.data]});
+  assert.ok(rootDecision.messages.some(message=>message.source?.kind==='memory-answer-rules'));
+  f.finish(root,1,bridge);await bridge.waitForIdle();
+
+  const before=(await bridge.getMemoryRuntime()).searches.length;
+  const childUser=f.begin(child,1,bridge,'我平时喜欢用什么杯子？','child-default-u1');
+  const childDecision=await runPreStep(bridge,{agent:child,turn:1,messages:[childUser.data]});
+  assert.equal(f.access.check(child).allowed,false);
+  assert.deepEqual(childDecision.messages,[]);
+  assert.equal(childDecision.messages.some(message=>message.source?.kind==='memory-prefetch'),false);
+  assert.equal((await bridge.getMemoryRuntime()).searches.length,before);
+  f.finish(child,1,bridge);await bridge.waitForIdle();
+});
+
+test('explicit subagent memory restores read prefetch and rules while child output stays out of the original store',async t=>{
+  const rootId='session-primary',childId='session-child';
+  const f=await fixture(t,{autoRecall:true,recentContext:true,subagentMemory:true,
+    isOwnedBy:(id,other)=>id===childId&&other.session.id===rootId});
+  const root=f.actor(rootId),child=f.actor(childId),raw=new RawMemoryStore(f.config.rawRecallDbPath,logger),bridge=f.bridge(undefined,{rawRecallStore:raw});
+  await f.access.set(root.session.id,true);
+  f.begin(root,1,bridge,'根对话先建立一个已开启回合。','root-open-u1');
+  f.finish(root,1,bridge);await bridge.waitForIdle();
+
+  assert.equal(f.access.check(child).allowed,true);
+  const before=(await bridge.getMemoryRuntime()).searches.length;
+  const childUser=f.begin(child,1,bridge,'我平时喜欢用什么杯子？','child-open-u1');
+  const childDecision=await runPreStep(bridge,{agent:child,turn:1,messages:[childUser.data]});
+  assert.ok(childDecision.messages.some(message=>message.source?.kind==='memory-answer-rules'));
+  assert.equal((await bridge.getMemoryRuntime()).searches.length,before+1);
+  f.finish(child,1,bridge);await bridge.waitForIdle();
+  const scope={ownerSubject:'用户',project:'main'};
+  assert.equal(raw.messages.list(scope).sources.filter(source=>source.sessionId===child.session.id).length,0);
 });
 
 test('closing during handoff preparation removes pending memory additions and still admits the actual user message',async t=>{
