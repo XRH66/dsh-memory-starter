@@ -40,7 +40,7 @@ $paths = Get-Content (Join-Path $deploy 'paths.json') -Raw | ConvertFrom-Json
 
 ## 3. 安装插件
 
-> **版本**：下面固定安装 `v0.7.3` 标签。要验证还没打标签的源码时，把 `$memoryRef` 换成完整提交号，并记录未提交的修改，不要把工作树当成公开发布版。
+> **版本**：下面固定安装 `v0.8.0` 标签。要验证还没打标签的源码时，把 `$memoryRef` 换成完整提交号，并记录未提交的修改，不要把工作树当成公开发布版。
 
 先让当前终端指向这套部署（只设置环境变量，不启动服务）：
 
@@ -51,7 +51,7 @@ $paths = Get-Content (Join-Path $deploy 'paths.json') -Raw | ConvertFrom-Json
 再安装固定版本的两个插件：
 
 ```powershell
-$memoryRef = 'v0.7.3'                                        # dsh-memory-starter 0.7.3
+$memoryRef = 'v0.8.0'                                        # dsh-memory-starter 0.8.0
 $settingsCommit = 'f5778e8a7ddcf2be5ba83f895db587b384455a78' # dsh-global-settings 0.2.0
 dsh plugin --profile web add "github:XRH66/dsh-memory-starter#$memoryRef"
 dsh plugin --profile web add "github:XRH66/dsh-global-settings#$settingsCommit"

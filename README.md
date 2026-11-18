@@ -1,7 +1,7 @@
 <h1 align="center">dsh-memory-starter</h1>
 <h3 align="center">DeepSeek Harness 个人长期记忆插件</h3>
 <p align="center">按对话开启，原话原样存在本机；之后用全文、向量和重排帮模型找回你说过的话。</p>
-<p align="center"><strong>v0.7.3 · DSH 0.2.1-rc.5 / 0.2.2-rc.3 · Windows</strong></p>
+<p align="center"><strong>v0.8.0 · DSH 0.2.1-rc.5 / 0.2.2-rc.3 · Windows</strong></p>
 <p align="center">
   <a href="docs/install/setup.md">安装</a> ·
   <a href="MODEL-SETUP.zh-CN.md#推荐硅基流动免费向量和重排">配置检索模型</a> ·
@@ -37,7 +37,7 @@ dsh-memory-starter 是给 [DeepSeek Harness](https://github.com/deepseek-ai/deep
 1. 把插件装进 DSH（DSH 0.2.2 需要 Node.js 24.9 以上）：
 
    ```powershell
-   dsh plugin --profile web add "github:XRH66/dsh-memory-starter#v0.7.3"
+   dsh plugin --profile web add "github:XRH66/dsh-memory-starter#v0.8.0"
    ```
 
 2. 重启 DSH，打开设置里的「记忆框架」，按五步向导选记忆库位置和要打开记忆的对话。
