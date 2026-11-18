@@ -74,12 +74,15 @@ async function fixtureIndex(t){
   const chunk=(start,end,vector)=>({start,end,tokenBound:4,vector});
   // a: contextual and body variants of one span → body wins.
   index.put({scope,snapshotId:snapshot.id,dimensions:4,guard:allow,document:{id:'a',revision:1,domain:'raw',sourceIds:['a'],
-    chunks:[chunk(0,5,[0,1,0,0]),chunk(0,5,[1,0,0,0])]}});
+    anchor:{id:'a',revision:1,ref:{storage:'legacy',id:'a',turnId:'turn-1',messageId:'m1',revision:'v1'}},chunks:[chunk(0,5,[0,1,0,0]),chunk(0,5,[1,0,0,0])]}});
   // b: two spans → averaged.
   index.put({scope,snapshotId:snapshot.id,dimensions:4,guard:allow,document:{id:'b',revision:1,domain:'raw',sourceIds:['b'],
     chunks:[chunk(0,5,[0,0,1,0]),chunk(5,9,[0,0,0,1])]}});
   index.put({scope,snapshotId:snapshot.id,dimensions:4,guard:allow,document:{id:'c',revision:1,domain:'raw',sourceIds:['c'],
     chunks:[chunk(0,3,[1,1,0,0])]}});
+  // A persona note is not an original message and is never drawn.
+  index.put({scope,snapshotId:snapshot.id,dimensions:4,guard:allow,document:{id:'p',revision:1,domain:'note',sourceIds:['p'],
+    chunks:[chunk(0,3,[0,1,1,0])]}});
   const ready=index.finish({scope,snapshotId:snapshot.id,guard:allow});
   return {directory,file,snapshotId:ready.id};
 }
@@ -87,7 +90,9 @@ async function fixtureIndex(t){
 test('layout vectors prefer the body-only variant and average spans',async t=>{
   const {file,snapshotId}=await fixtureIndex(t);
   const members=readLayoutMembers({file,scope,snapshotId});
-  assert.deepEqual(members.members.map(m=>m.id),['a','b','c']);
+  assert.deepEqual(members.members.map(m=>m.id),['a','b','c','p']);
+  assert.deepEqual(members.members[0].ref,{storage:'legacy',id:'a',turnId:'turn-1',messageId:'m1',revision:'v1'});
+  assert.equal(members.members[1].ref,null);
   assert.equal(members.indexIdentity,'identity-1');
   const {vectors,found}=readLayoutVectors({file,scope,snapshotId,ids:['b','a','missing']});
   assert.deepEqual(Array.from(found),[1,1,0]);
@@ -100,14 +105,18 @@ test('map service builds once in a worker, caches to disk and reuses the cache',
   const {directory,file,snapshotId}=await fixtureIndex(t);
   const access={
     source:async()=>({state:'ready',layout:{indexFile:file,scope,snapshotId,profileId:'fictional-profile',modelKey:'fictional-model',dimensions:4,indexIdentity:'identity-1'}}),
-    describe:async ids=>ids.map((id,i)=>({kind:i===0?'user':'assistant',time:1000+i,sessionId:i<2?'s1':'s2',text:'虚构原话 '+id})),
+    describe:async members=>{described=members;return members.map((m,i)=>({kind:i===0?'user':'assistant',time:1000+i,sessionId:i<2?'s1':'s2',text:'虚构原话 '+m.id}));},
   };
+  let described=null;
   const service=createMemoryMapService({directory,access});
   const result=await service.data(allow,{wait:20000});
   assert.equal(result.state,'ready');
   const data=result.entry.data;
   assert.equal(data.format,'dsh-memory-map');assert.equal(data.version,1);
   assert.deepEqual(data.items.map(item=>item.id),['a','b','c']);
+  // describe receives each member's storage locator, so legacy turns can be read back.
+  assert.equal(described[0].ref.storage,'legacy');
+  assert.equal((await service.ref('a')).turnId,'turn-1');assert.equal(await service.ref('p'),null);
   assert.equal(data.stats.sessions,2);assert.equal(data.items[0].session,0);assert.equal(data.items[2].session,1);
   assert.ok(data.items.every(item=>item.pos.length===3&&item.pos2.length===2&&item.depth>=0&&item.depth<=1));
   assert.ok(!JSON.stringify(data).includes('虚构原话'),'map data never carries message text');

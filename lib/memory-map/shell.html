@@ -254,7 +254,7 @@ async function openDetail(i,tell){
   let html=`<div class="meta"><span class="who ${item.kind}">${KIND[item.kind]??'原话'}</span><span>${esc(full?.timeText??fmtTime(item.time))}</span><span>深度 ${Math.round(item.depth*100)}</span></div>`;
   html+=full?.found?`<p class="quote">${esc(full.text)}${full.truncated?'…':''}</p>`:'<p class="note">这条不在原话库里（可能是导入的资料，或已经删除），正文请在记忆库里查看。</p>';
   html+=`<div class="meta">星团：${esc(cluster?.keywords?.join(' · ')||'未命名')}${item.session!==null?` · 对话 ${item.session+1}`:''}</div>`;
-  html+=`<div class="acts"><button class="btn" type="button" id="closeDetail">关闭</button>${full?.found&&full.revision?'<button class="btn danger" type="button" id="withdraw">删除这条原话</button>':''}</div><p class="note" id="detailNote"></p>`;
+  html+=`<div class="acts"><button class="btn" type="button" id="closeDetail">关闭</button>${full?.found&&full.withdrawable?'<button class="btn danger" type="button" id="withdraw">删除这条原话</button>':''}</div><p class="note" id="detailNote">${full?.found&&!full.withdrawable?'这条是旧版本记下的原话，星图里不能删除。':''}</p>`;
   html+=`<h2>向量里最相近的</h2><div class="near" id="near"><p class="note">正在读取…</p></div>`;
   el.innerHTML=html;
   $('closeDetail').onclick=()=>closeDetail(true);
