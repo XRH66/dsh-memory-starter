@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>记忆星图</title>
+<style>
+/* 外层页面：视图铺满全屏（隔离框），左上状态与搜索结果，底部搜索框，右侧原话侧栏。单一深色主题，和星空视图一致。 */
+:root{
+  --void:#05070d;--panel:rgba(12,17,30,.84);--line:rgba(150,180,255,.16);
+  --ink:#e8eefc;--muted:#8e9bb8;--cyan:#8fe9ff;--gold:#ffd27a;--rose:#ff8fb1;--ok:#7dffb2;--violet:#c9a2ff;
+  --body:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+  color-scheme:dark;
+}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;overflow:hidden;background:var(--void);color:var(--ink);font-family:var(--body);font-size:14px;line-height:1.6}
+#view{position:fixed;inset:0;width:100%;height:100%;border:0;display:block;background:var(--void)}
+.panel{position:fixed;background:var(--panel);border:1px solid var(--line);border-radius:10px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);z-index:2}
+.brand{top:calc(env(safe-area-inset-top,0px) + 16px);left:max(16px,env(safe-area-inset-left,0px));width:min(360px,calc(100% - 32px));padding:12px 14px;display:flex;flex-direction:column;gap:8px;max-height:calc(100% - 140px)}
+.brand header{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.brand h1{margin:0;font-size:19px;letter-spacing:.06em}
+.brand p{margin:0;color:var(--muted);font-size:12px}
+.bar{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+select,button,input{font:inherit;color:var(--ink)}
+select,.btn{font-size:13px;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:6px;padding:3px 9px;cursor:pointer}
+select option{background:#0c111e}
+.btn[aria-pressed="true"]{background:rgba(143,233,255,.14);border-color:rgba(143,233,255,.55);color:var(--cyan)}
+.btn.primary{background:rgba(255,210,122,.16);border-color:rgba(255,210,122,.6);color:var(--gold);font-weight:700;padding:6px 16px}
+.btn.danger{border-color:rgba(255,143,177,.5);color:var(--rose)}
+.btn:disabled{opacity:.5;cursor:default}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.chip{font-size:11px;font-weight:700;border-radius:999px;padding:1px 8px;border:1px solid var(--line);color:var(--muted)}
+.chip.work{color:var(--gold);border-color:rgba(255,210,122,.45)}
+.chip.bad{color:var(--rose);border-color:rgba(255,143,177,.45)}
+.note{font-size:12px;color:var(--muted);margin:0}
+.results{overflow:auto;display:flex;flex-direction:column;min-height:0}
+.results h2,.detail h2{margin:0 0 4px;font-size:14px}
+.lanes{display:flex;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-bottom:4px}
+.hit{display:grid;grid-template-columns:20px 1fr;gap:2px 8px;padding:7px 0;border:0;border-top:1px solid var(--line);background:none;text-align:left;cursor:pointer;color:var(--ink)}
+.hit:hover .tx{color:var(--cyan)}
+.hit .rk{color:var(--muted);font-variant-numeric:tabular-nums}
+.hit .tx{font-size:13px}
+.hit .sc{grid-column:2;display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.top{color:#1a1206;background:var(--gold);border-radius:999px;padding:0 7px;font-weight:700}
+.search{bottom:calc(env(safe-area-inset-bottom,0px) + 16px);left:50%;transform:translateX(-50%);width:min(620px,calc(100% - 32px));padding:10px}
+.search form{display:flex;gap:8px}
+.search input{flex:1;min-width:0;font-size:15px;background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:6px;padding:7px 12px}
+.detail{top:calc(env(safe-area-inset-top,0px) + 16px);right:max(16px,env(safe-area-inset-right,0px));width:330px;max-height:calc(100% - 140px);overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;z-index:3}
+.meta{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted);align-items:center}
+.who{font-weight:700;border-radius:999px;padding:0 8px;font-size:11px}
+.who.user{background:rgba(143,233,255,.16);color:var(--cyan)}
+.who.assistant{background:rgba(201,162,255,.16);color:var(--violet)}
+.who.note{background:rgba(255,210,122,.14);color:var(--gold)}
+.quote{font-size:15px;margin:0;line-height:1.75;white-space:pre-wrap;word-break:break-word}
+.near{display:flex;flex-direction:column}
+.near button{display:flex;gap:10px;justify-content:space-between;text-align:left;background:none;border:0;border-top:1px solid var(--line);font-size:13px;padding:6px 0;cursor:pointer}
+.near button:hover{color:var(--cyan)}
+.near em{font-style:normal;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;flex:none}
+.acts{display:flex;gap:6px;flex-wrap:wrap}
+.center{position:fixed;inset:0;display:grid;place-items:center;z-index:1;padding:24px}
+.center .card{max-width:440px;text-align:center;display:flex;flex-direction:column;gap:10px;align-items:center}
+.center h2{margin:0;font-size:18px}
+.bar-progress{width:240px;height:4px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden}
+.bar-progress i{display:block;height:100%;background:var(--cyan);width:0;transition:width .3s}
+@media (max-width:760px){
+  .brand{max-height:42%}
+  .detail{top:auto;bottom:calc(env(safe-area-inset-bottom,0px) + 86px);left:max(16px,env(safe-area-inset-left,0px));right:max(16px,env(safe-area-inset-right,0px));width:auto;max-height:46%}
+}
+@media (prefers-reduced-motion:reduce){.bar-progress i{transition:none}}
+</style>
+</head>
+<body>
+<iframe id="view" title="记忆视图" sandbox="allow-scripts" referrerpolicy="no-referrer" hidden></iframe>
+
+<div class="center" id="center" hidden><div class="card"><h2 id="centerTitle"></h2><p class="note" id="centerText"></p><div class="bar-progress" id="centerBar" hidden><i></i></div></div></div>
+
+<section class="panel brand" aria-label="记忆星图">
+  <header><h1>记忆星图</h1><span class="chip" id="state" hidden></span></header>
+  <p id="stats">正在读取…</p>
+  <div class="bar">
+    <label for="viewSelect" class="note">视图</label>
+    <select id="viewSelect" aria-label="选择视图"></select>
+    <button class="btn" type="button" id="lowPower" aria-pressed="false" title="关掉辉光、流动光点和自动旋转，只在拖动时重画">省电</button>
+    <button class="btn" type="button" id="rebuild" title="不沿用上次的位置，从头算一遍布局">重新布局</button>
+  </div>
+  <p class="note" id="viewNote"></p>
+  <div class="results" id="results" hidden></div>
+</section>
+
+<aside class="panel detail" id="detail" hidden aria-live="polite"></aside>
+
+<div class="panel search">
+  <form id="searchForm" role="search">
+    <input id="query" type="search" placeholder="搜一句话，看它在记忆里落在哪" autocomplete="off" aria-label="搜索记忆" maxlength="200">
+    <button class="btn primary" type="submit" id="searchBtn">查找</button>
+    <button class="btn" type="button" id="clearBtn" hidden>清除</button>
+  </form>
+</div>
+
+<script>
+(function(){
+'use strict';
+const BASE='/api/basic-memory-map';
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store={get(k){try{return localStorage.getItem(k);}catch{return null;}},set(k,v){try{localStorage.setItem(k,v);}catch{}}};
+const reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const frame=$('view');
+let data=null,etag='',indexById=new Map(),views=[],viewId=null,viewReady=false,search=null,selected=-1,pollTimer=0;
+let options={lowPower:store.get('memory-map-low-power')==='1',reducedMotion:reduced};
+
+const KIND={user:'你',assistant:'助手',note:'笔记'};
+const fmtTime=t=>{if(!Number.isFinite(t))return '时间不明';const d=new Date(t),p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;};
+const STAGES={prepare:'准备',vectors:'读取向量',neighbors:'找相近的原话',layout:'计算位置',clusters:'分组和关键词'};
+
+async function api(path,init){
+  const response=await fetch(BASE+path,{credentials:'same-origin',...init});
+  let value=null;try{value=await response.json();}catch{}
+  return {response,value};
+}
+function post(path,payload){
+  return api(path,{method:'POST',headers:{'content-type':'application/json','x-basic-memory-settings':'1'},body:JSON.stringify(payload??{})});
+}
+function center(title,text,progress){
+  $('center').hidden=!title;$('centerTitle').textContent=title??'';$('centerText').textContent=text??'';
+  $('centerBar').hidden=progress==null;if(progress!=null)$('centerBar').firstElementChild.style.width=Math.round(progress*100)+'%';
+}
+function setState(label,kind){const el=$('state');el.hidden=!label;el.textContent=label??'';el.className='chip'+(kind?' '+kind:'');}
+const progressText=p=>p?`${STAGES[p.stage]??'计算'}${p.total?' '+Math.min(100,Math.round(p.done/p.total*100))+'%':''}`:'计算中';
+const progressValue=p=>p&&p.total?Math.min(1,p.done/p.total):0;
+
+/* ---------- 视图 ---------- */
+const BRIDGE=`(function(){'use strict';
+var handlers={},resolveReady,api={options:{lowPower:false,reducedMotion:false},data:null};
+api.ready=new Promise(function(r){resolveReady=r;});
+api.on=function(name,fn){(handlers[name]=handlers[name]||[]).push(fn);};
+api.select=function(i){parent.postMessage({type:'memory-map',action:'select',index:Number.isInteger(i)?i:-1},'*');};
+Object.defineProperty(window,'memoryMap',{value:api,writable:false,configurable:false});
+window.addEventListener('message',function(e){if(e.source!==parent)return;var m=e.data;if(!m||m.type!=='memory-map')return;
+if(m.event==='init'){api.data=m.data;api.options=m.options;resolveReady(m.data);return;}
+if(m.event==='data')api.data=m.payload;if(m.event==='options')api.options=m.payload;
+(handlers[m.event]||[]).forEach(function(fn){try{fn(m.payload);}catch(err){console.error(err);}});});
+parent.postMessage({type:'memory-map',action:'hello'},'*');})();`;
+// 视图完全不联网：它引用的自带库由外层页面读出后直接内嵌进去。
+const VIEW_CSP="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; worker-src blob:; form-action 'none'; base-uri 'none'";
+const LIB_TAG=/<script\s+src=["']\/api\/basic-memory-map\/lib\/([A-Za-z0-9._-]+)["']\s*><\/script>/g;
+const libCache=new Map();
+async function inlineLibraries(html){
+  const names=[...new Set([...html.matchAll(LIB_TAG)].map(m=>m[1]))];
+  for(const name of names)if(!libCache.has(name)){
+    const response=await fetch(BASE+'/lib/'+name,{credentials:'same-origin'});
+    libCache.set(name,response.ok?(await response.text()).replace(/<\/script/gi,'<\\/script'):null);
+  }
+  return html.replace(LIB_TAG,(tag,name)=>{const code=libCache.get(name);return code==null?'<script>console.error("没有这个自带库：'+name+'")<\/script>':'<script>'+code+'<\/script>';});
+}
+async function loadView(id){
+  const {response,value}=await api('/views/'+encodeURIComponent(id));
+  if(!response.ok||!value?.ok){$('viewNote').textContent=value?.error??'视图读取失败';return;}
+  viewId=id;viewReady=false;store.set('memory-map-view',id);
+  const info=views.find(v=>v.id===id);$('viewNote').textContent=info?.description??'';
+  const html=await inlineLibraries(value.html);if(viewId!==id)return;
+  frame.srcdoc=`<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${esc(VIEW_CSP)}"><script>${BRIDGE}<\/script>`+html;
+  frame.hidden=!data;
+}
+function send(event,payload){if(viewReady&&frame.contentWindow)frame.contentWindow.postMessage({type:'memory-map',event,payload},'*');}
+window.addEventListener('message',e=>{
+  if(e.source!==frame.contentWindow)return;const m=e.data;if(!m||m.type!=='memory-map')return;
+  if(m.action==='hello'){
+    viewReady=true;if(!data)return;
+    frame.contentWindow.postMessage({type:'memory-map',event:'init',data,options},'*');
+    if(search)send('search',viewSearch());if(selected>=0)send('focus',selected);
+  }else if(m.action==='select'){const i=Number(m.index);if(Number.isInteger(i)&&i>=0&&data&&i<data.items.length)openDetail(i,false);else closeDetail(false);}
+});
+
+/* ---------- 数据 ---------- */
+function applyData(next){
+  const first=!data;data=next;indexById=new Map(data.items.map((item,i)=>[item.id,i]));
+  const s=data.stats;
+  $('stats').textContent=`${s.items} 条原话 · ${s.sessions} 个对话 · ${s.clusters} 个星团`+(s.truncated?' · 只画了最近的部分':'')+(data.model?.modelKey?` · ${data.model.modelKey}`:'');
+  frame.hidden=false;center(null);
+  if(viewReady){if(first)frame.contentWindow.postMessage({type:'memory-map',event:'init',data,options},'*');else send('data',data);}
+  if(selected>=0&&selected>=data.items.length)closeDetail(true);
+}
+async function loadData(wait=1500){
+  clearTimeout(pollTimer);pollTimer=0;
+  let response;
+  try{response=await fetch(BASE+'/data?wait='+wait,{credentials:'same-origin',headers:etag?{'if-none-match':etag}:{}});}
+  catch{setState('连不上 DSH','bad');pollTimer=setTimeout(()=>loadData(),5000);return;}
+  const state=response.headers.get('x-memory-map-state');
+  if(response.status===304){setState(null);return;}
+  if(response.status===200){
+    const next=await response.json();
+    if(state==='ready'){etag=response.headers.get('etag')??'';setState(null);}
+    applyData(next);
+    if(state==='building'){let p=null;try{p=JSON.parse(decodeURIComponent(response.headers.get('x-memory-map-progress')??''));}catch{}
+      setState('正在更新 · '+progressText(p),'work');pollTimer=setTimeout(()=>loadData(500),1500);}
+    else if(state==='failed'){setState('更新失败，显示的是上一版','bad');}
+    return;
+  }
+  let value=null;try{value=await response.json();}catch{}
+  const st=value?.state;
+  if(st==='building'){setState('正在计算','work');if(!data)center('正在画星图',`${progressText(value.progress)}。记忆多时第一次要等一会儿，之后会快很多。`,progressValue(value.progress));pollTimer=setTimeout(()=>loadData(500),1200);return;}
+  if(st==='disabled'){center('记忆星图已关闭','在 DSH 设置 → 记忆框架 →「记忆」页打开「记忆星图」开关后，刷新这个页面。');frame.hidden=true;return;}
+  if(st==='no-vectors'){center('还没有可画的向量','星图按向量摆放原话。先在 DSH 设置 → 记忆框架里打开「原话检索」并配好向量模型。');return;}
+  if(st==='no-index'){center('向量索引还没建好','配好向量模型后，DSH 会自动给原话建索引，进度在设置页的「状态」里。建好后刷新这个页面。');pollTimer=setTimeout(()=>loadData(),10000);return;}
+  if(response.status===403){center('需要从 DSH 打开','请在已经登录 DSH 的浏览器里，从 DSH 设置 → 记忆框架打开记忆星图。');return;}
+  center('星图暂时打不开',value?.error??('请求失败（'+response.status+'）'));
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&data&&!pollTimer)loadData(0);});
+
+/* ---------- 搜索 ---------- */
+function viewSearch(){
+  if(!search)return null;
+  return {query:search.query,lanes:search.lanes,hits:search.hits.filter(h=>indexById.has(h.id)).map(h=>({index:indexById.get(h.id),vector:h.vector,fulltext:h.fulltext,rerank:h.rerank,top:h.top}))};
+}
+const LANE={ok:'可用',unavailable:'不可用',applied:'已重排',disabled:'未开启',failed:'失败',skipped:'未用'};
+function renderResults(){
+  const el=$('results');
+  if(!search){el.hidden=true;el.innerHTML='';return;}
+  const l=search.lanes;
+  let html=`<h2>「${esc(search.query)}」</h2><div class="lanes"><span>向量 ${LANE[l.vector]??l.vector}</span><span>全文 ${LANE[l.fulltext]??l.fulltext}</span><span>重排 ${LANE[l.rerank]??l.rerank}</span></div>`;
+  if(!search.hits.length)html+='<p class="note">没有找到相关的原话。</p>';
+  search.hits.slice(0,20).forEach((h,k)=>{
+    const sc=[h.vector!==null?`相似度 ${h.vector.toFixed(3)}`:'',h.fulltext?'全文命中':'',h.rerank!==null?`重排 ${h.rerank.toFixed(4)}`:'',h.top?'<span class="top">最相关</span>':'',indexById.has(h.id)?'':'不在图上'].filter(Boolean).join('</span><span>');
+    html+=`<button class="hit" type="button" data-id="${esc(h.id)}"><span class="rk">${k+1}</span><span class="tx">${esc(h.excerpt)}</span><span class="sc"><span>${sc}</span></span></button>`;
+  });
+  html+='<p class="note" style="margin-top:6px">「最相关」按重排分取前几条，只是画图提示；聊天时还会按时间范围、已在上下文里的内容等规则再筛一遍。</p>';
+  el.innerHTML=html;el.hidden=false;
+  el.querySelectorAll('.hit').forEach(b=>b.onclick=()=>{const i=indexById.get(b.dataset.id);if(i!==undefined)openDetail(i,true);});
+}
+$('searchForm').addEventListener('submit',async e=>{
+  e.preventDefault();const query=$('query').value.trim();if(!query)return;
+  $('searchBtn').disabled=true;$('searchBtn').textContent='查找中';
+  try{
+    const {response,value}=await post('/search',{query});
+    if(!response.ok||!value?.ok)throw Error(value?.error??'搜索失败');
+    search={query:value.query,lanes:value.lanes,hits:value.hits};
+    renderResults();send('search',viewSearch());$('clearBtn').hidden=false;
+  }catch(error){search={query,lanes:{vector:'unavailable',fulltext:'unavailable',rerank:'skipped'},hits:[]};renderResults();$('results').insertAdjacentHTML('beforeend',`<p class="note">${esc(error.message)}</p>`);}
+  finally{$('searchBtn').disabled=false;$('searchBtn').textContent='查找';}
+});
+$('clearBtn').onclick=()=>{search=null;$('query').value='';$('clearBtn').hidden=true;renderResults();send('search',null);};
+
+/* ---------- 原话侧栏 ---------- */
+let detailToken=0;
+async function itemText(id){const {response,value}=await api('/item?id='+encodeURIComponent(id));return response.ok&&value?.ok?value:null;}
+async function openDetail(i,tell){
+  selected=i;if(tell)send('focus',i);
+  const item=data.items[i],token=++detailToken,el=$('detail');
+  el.hidden=false;el.innerHTML='<p class="note">正在读取原话…</p>';
+  const full=await itemText(item.id);if(token!==detailToken)return;
+  const cluster=data.clusters[item.cluster];
+  let html=`<div class="meta"><span class="who ${item.kind}">${KIND[item.kind]??'原话'}</span><span>${esc(full?.timeText??fmtTime(item.time))}</span><span>深度 ${Math.round(item.depth*100)}</span></div>`;
+  html+=full?.found?`<p class="quote">${esc(full.text)}${full.truncated?'…':''}</p>`:'<p class="note">这条不在原话库里（可能是导入的资料，或已经删除），正文请在记忆库里查看。</p>';
+  html+=`<div class="meta">星团：${esc(cluster?.keywords?.join(' · ')||'未命名')}${item.session!==null?` · 对话 ${item.session+1}`:''}</div>`;
+  html+=`<div class="acts"><button class="btn" type="button" id="closeDetail">关闭</button>${full?.found&&full.revision?'<button class="btn danger" type="button" id="withdraw">删除这条原话</button>':''}</div><p class="note" id="detailNote"></p>`;
+  html+=`<h2>向量里最相近的</h2><div class="near" id="near"><p class="note">正在读取…</p></div>`;
+  el.innerHTML=html;
+  $('closeDetail').onclick=()=>closeDetail(true);
+  const w=$('withdraw');
+  if(w){let armed=false;w.onclick=async()=>{
+    if(!armed){armed=true;w.textContent='确认删除（不能撤销）';$('detailNote').textContent='删除后，这条原话不会再被检索到，也会从星图上去掉。再点一次确认。';return;}
+    w.disabled=true;
+    const response=await fetch('/api/basic-memory-settings/raw-messages',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','x-basic-memory-settings':'1'},body:JSON.stringify({action:'withdraw',id:item.id,revision:full.revision})});
+    let value=null;try{value=await response.json();}catch{}
+    if(response.ok&&value?.ok){$('detailNote').textContent='已删除。向量索引更新后，星图会自动去掉这颗星。';w.remove();setTimeout(()=>loadData(0),4000);}
+    else{$('detailNote').textContent=value?.error??'删除失败，请刷新后重试';w.disabled=false;}
+  };}
+  const near=item.near.slice(0,5),rows=await Promise.all(near.map(([j])=>itemText(data.items[j].id)));
+  if(token!==detailToken)return;
+  const box=$('near');box.innerHTML='';
+  near.forEach(([j,s],k)=>{const b=document.createElement('button');b.type='button';const t=rows[k]?.found?rows[k].text:'（资料）';
+    b.innerHTML=`<span>${esc(t.length>70?t.slice(0,70)+'…':t)}</span><em>${s.toFixed(2)}</em>`;b.onclick=()=>openDetail(j,true);box.appendChild(b);});
+  if(!near.length)box.innerHTML='<p class="note">没有相近的原话。</p>';
+}
+function closeDetail(tell){selected=-1;detailToken++;$('detail').hidden=true;if(tell)send('focus',-1);}
+window.addEventListener('keydown',e=>{if(e.key==='Escape'&&selected>=0)closeDetail(true);});
+
+/* ---------- 控件 ---------- */
+$('lowPower').setAttribute('aria-pressed',String(options.lowPower));
+$('lowPower').onclick=()=>{options={...options,lowPower:!options.lowPower};store.set('memory-map-low-power',options.lowPower?'1':'0');$('lowPower').setAttribute('aria-pressed',String(options.lowPower));send('options',options);};
+$('viewSelect').onchange=e=>loadView(e.target.value);
+$('rebuild').onclick=async()=>{
+  $('rebuild').disabled=true;
+  try{const {response,value}=await post('/rebuild',{});if(!response.ok||!value?.ok)throw Error(value?.error??'无法开始');setState('正在重新布局','work');etag='';setTimeout(()=>loadData(500),800);}
+  catch(error){setState(error.message,'bad');}
+  finally{setTimeout(()=>{$('rebuild').disabled=false;},3000);}
+};
+
+(async function boot(){
+  const {response,value}=await api('/views').catch(()=>({response:{ok:false},value:null}));
+  if(!response.ok||!value?.ok){
+    if(value?.state==='disabled'){center('记忆星图已关闭','在 DSH 设置 → 记忆框架 →「记忆」页打开「记忆星图」开关后，刷新这个页面。');$('stats').textContent='已关闭';return;}
+    center('星图暂时打不开',value?.error??'请从 DSH 设置页打开');$('stats').textContent='';return;
+  }
+  views=value.views;
+  $('viewSelect').innerHTML=views.map(v=>`<option value="${esc(v.id)}">${esc(v.name)}${v.builtin?'':'（自定义）'}</option>`).join('');
+  const saved=store.get('memory-map-view'),first=views.some(v=>v.id===saved)?saved:views[0]?.id;
+  $('viewSelect').value=first;
+  center('正在读取记忆','');
+  await loadView(first);
+  await loadData();
+})();
+})();
+</script>
+</body>
+</html>

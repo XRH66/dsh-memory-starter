@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>平面</title>
+<meta name="description" content="2D 平面图：同样的分组和深浅，画在一张可以拖动、缩放的平面上，最省资源。">
+<style>
+/* 平面视图：全屏画布，只在交互时重画；右上角是图例。单一深色主题。 */
+:root{--void:#070a12;--panel:rgba(12,17,30,.82);--line:rgba(150,180,255,.16);--ink:#e8eefc;--muted:#8e9bb8;
+  --body:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;color-scheme:dark}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;overflow:hidden;background:var(--void);color:var(--ink);font-family:var(--body);font-size:13px}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:none}
+canvas:active{cursor:grabbing}
+.legend{position:fixed;top:16px;right:16px;width:220px;max-height:calc(100% - 120px);overflow:auto;padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;gap:3px}
+.legend b{font-size:11px;letter-spacing:.1em;color:var(--muted)}
+.row{display:flex;align-items:center;gap:8px}
+.row i{width:9px;height:9px;border-radius:50%;flex:none}
+.row em{font-style:normal;color:var(--muted);font-size:11px;margin-left:auto;font-variant-numeric:tabular-nums}
+.tip{position:fixed;pointer-events:none;padding:5px 9px;background:rgba(8,12,22,.94);border:1px solid var(--line);border-radius:6px;max-width:260px}
+.tip small{display:block;color:var(--muted);font-size:11px}
+.note{color:var(--muted);font-size:11px;margin:4px 0 0}
+@media (max-width:760px){.legend{display:none}}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="记忆平面图：每个点是一条原话"></canvas>
+<div class="legend" id="legend"><b>星团</b></div>
+<div class="tip" id="tip" hidden></div>
+<script>
+(function(){
+'use strict';
+const PALETTE=['#ffb86b','#7ad7ff','#ffe08a','#6effc8','#ff7aa8','#c79bff','#9cff7a','#7aa2ff','#ff9f7a','#7affea','#f3a6ff','#d4ff7a','#ffc4e1','#a8f0ff','#ffe6a8','#b5ffd9'];
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=t=>{if(!Number.isFinite(t))return '时间不明';const d=new Date(t),p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;};
+const canvas=document.getElementById('c'),g=canvas.getContext('2d'),tip=document.getElementById('tip');
+let data=null,view={x:0,y:0,k:1},selected=-1,hovered=-1,search=null,queued=false;
+
+function redraw(){if(!queued){queued=true;requestAnimationFrame(draw);}}
+function size(){const r=Math.min(2,window.devicePixelRatio||1);canvas.width=innerWidth*r;canvas.height=innerHeight*r;g.setTransform(r,0,0,r,0,0);redraw();}
+const scale=()=>Math.min(innerWidth,innerHeight)/150*view.k;
+const toScreen=p=>[innerWidth/2+(p[0]-view.x)*scale(),innerHeight/2+(p[1]-view.y)*scale()];
+function draw(){
+  queued=false;g.clearRect(0,0,innerWidth,innerHeight);if(!data)return;
+  const items=data.items,hits=search?new Set(search.hits.map(h=>h.index)):null,top=search?new Set(search.hits.filter(h=>h.top).map(h=>h.index)):null;
+  g.globalCompositeOperation='lighter';
+  items.forEach((m,i)=>{
+    const [x,y]=toScreen(m.pos2);if(x<-10||y<-10||x>innerWidth+10||y>innerHeight+10)return;
+    let a=.35+.6*m.depth,r=(1.6+2.6*m.depth)*(m.kind==='user'?1.15:1)*Math.sqrt(view.k);
+    if(hits&&!hits.has(i))a*=.25;
+    if(top&&top.has(i)){a=1;r*=2;}
+    if(i===selected||i===hovered){a=1;r*=1.8;}
+    g.globalAlpha=Math.min(1,a);g.fillStyle=top&&top.has(i)?'#ffd27a':PALETTE[m.cluster%PALETTE.length];
+    g.beginPath();g.arc(x,y,r,0,Math.PI*2);g.fill();
+  });
+  g.globalCompositeOperation='source-over';g.globalAlpha=1;
+  if(selected>=0){const [x,y]=toScreen(items[selected].pos2);g.strokeStyle='#ffffff';g.lineWidth=1.5;g.beginPath();g.arc(x,y,10,0,Math.PI*2);g.stroke();}
+  g.font='12px '+getComputedStyle(document.body).fontFamily;g.textAlign='center';
+  data.clusters.forEach((c,k)=>{
+    if(c.size<Math.max(4,items.length*.012)||!c.keywords.length)return;
+    let sx=0,sy=0,n=0;items.forEach(m=>{if(m.cluster===k){sx+=m.pos2[0];sy+=m.pos2[1];n++;}});
+    const [x,y]=toScreen([sx/n,sy/n]);g.fillStyle=PALETTE[k%PALETTE.length];g.globalAlpha=search?.25:.75;g.fillText(c.keywords.slice(0,2).join(' · '),x,y-14);
+  });
+  g.globalAlpha=1;
+}
+function pick(px,py){
+  if(!data)return -1;let best=-1,bd=144;
+  data.items.forEach((m,i)=>{const [x,y]=toScreen(m.pos2),d=(x-px)**2+(y-py)**2;if(d<bd){bd=d;best=i;}});
+  return best;
+}
+let drag=null;
+canvas.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,vx:view.x,vy:view.y,moved:false};canvas.setPointerCapture(e.pointerId);});
+canvas.addEventListener('pointermove',e=>{
+  if(drag){const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.hypot(dx,dy)>4)drag.moved=true;view.x=drag.vx-dx/scale();view.y=drag.vy-dy/scale();redraw();return;}
+  const h=pick(e.clientX,e.clientY);if(h!==hovered){hovered=h;redraw();}
+  if(h>=0){const m=data.items[h],c=data.clusters[m.cluster];tip.innerHTML=`${m.kind==='user'?'你说的':m.kind==='assistant'?'助手说的':'笔记'} · ${esc(fmt(m.time))}<small>${esc(c?.keywords.join(' · ')||'')} · 深度 ${Math.round(m.depth*100)}</small>`;
+    tip.style.left=Math.min(e.clientX+14,innerWidth-270)+'px';tip.style.top=(e.clientY+14)+'px';tip.hidden=false;}else tip.hidden=true;
+});
+canvas.addEventListener('pointerup',e=>{const d=drag;drag=null;if(d&&!d.moved){selected=pick(e.clientX,e.clientY);memoryMap.select(selected);redraw();}});
+canvas.addEventListener('wheel',e=>{e.preventDefault();const f=Math.exp(-e.deltaY*.0015),before=scale();
+  const wx=view.x+(e.clientX-innerWidth/2)/before,wy=view.y+(e.clientY-innerHeight/2)/before;
+  view.k=Math.max(.3,Math.min(20,view.k*f));const after=scale();view.x=wx-(e.clientX-innerWidth/2)/after;view.y=wy-(e.clientY-innerHeight/2)/after;redraw();},{passive:false});
+addEventListener('resize',size);
+
+function legend(){
+  const el=document.getElementById('legend');el.innerHTML='<b>星团</b>';
+  data.clusters.forEach((c,k)=>el.insertAdjacentHTML('beforeend',`<div class="row"><i style="background:${PALETTE[k%PALETTE.length]}"></i>${esc(c.keywords.join(' · ')||'星团 '+(k+1))}<em>${c.size}</em></div>`));
+  el.insertAdjacentHTML('beforeend','<p class="note">点越亮、越大，记忆越深。拖动平移，滚轮缩放。</p>');
+}
+function use(next){data=next;selected=-1;legend();size();}
+memoryMap.ready.then(use);
+memoryMap.on('data',use);
+memoryMap.on('search',result=>{search=result;redraw();});
+memoryMap.on('focus',i=>{selected=i;if(i>=0&&data){view.x=data.items[i].pos2[0];view.y=data.items[i].pos2[1];view.k=Math.max(view.k,2.5);}redraw();});
+})();
+</script>
+</body>
+</html>

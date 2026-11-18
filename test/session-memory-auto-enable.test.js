@@ -120,7 +120,7 @@ async function hostFixture(t,{autoEnable=true,withSettings=false}={}){
     inject(_names,fn){
       if(!configurationFile)return;
       fn({effect(work){const dispose=work();if(typeof dispose==='function')effects.push(dispose);},
-        webServer:{register({handler}){settingsHandler=handler;return()=>{};}}});
+        webServer:{register({path,handler}){if(path==='/api/basic-memory-settings')settingsHandler=handler;return()=>{};}}});
     },
   };
   function actor(id){

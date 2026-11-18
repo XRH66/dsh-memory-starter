@@ -22,6 +22,7 @@ dsh-memory-starter 是给 [DeepSeek Harness](https://github.com/deepseek-ai/deep
 - **回答前自动带上相关记忆**：每轮先查一次，最多附上 3 条相关原话；模型也可以自己再搜。
 - **换对话接得上**：新开对话、换模型或上次回答中断时，自动带上最近聊过的内容。
 - **能删能淡化**：在设置页删除某条原话，或让模型以后少提某件事。
+- **记忆星图**：把原话按意思画成一片星空，可搜索、点开查看或删除；画法可以自己写成网页放进来。
 
 ## 为什么用它
 
@@ -64,6 +65,7 @@ dsh-memory-starter 是给 [DeepSeek Harness](https://github.com/deepseek-ai/deep
 | 导入 0.3～0.6 的旧笔记 | [升级说明 · 旧笔记导入](docs/install/upgrade.md#升级到-07x从-0306) |
 | 查某个功能在哪里设置 | [功能清单](docs/记忆系统功能清单.md) |
 | 了解记忆怎么存、怎么找 | [整体说明](docs/记忆系统整体说明.md) · [运行流程](docs/记忆系统运行流程.md) |
+| 打开记忆星图，或自己写一种画法 | [记忆星图](MEMORY-MAP.zh-CN.md) |
 | 知道哪些内容会离开本机 | [隐私与公开边界](docs/install/privacy.md) |
 | 看验证过什么 | [验证记录](docs/install/validation.md) |
 | 让 Codex 等 Agent 控制 DSH 工程会话 | [工程控制附录](docs/install/control.md) |

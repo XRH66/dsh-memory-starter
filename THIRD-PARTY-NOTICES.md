@@ -33,6 +33,10 @@ DSH 会话开关及按需检索的方案比较也参考了 [eryucheng/dsh-suzu-m
 
 Suzu 固定核心的闭包只使用内部包及 Node 内置模块；内部导入已转换，因此没有要求新装额外 Suzu workspace 包。浏览器 React 与界面模块由 DSH 宿主提供，实际源码导入集合见候选 `candidate-files.json`。
 
+## 记忆星图：three.js
+
+`lib/memory-map/vendor/three-r128.js` 随插件分发，供记忆星图和用户视图在不联网的隔离框里使用。内容是 [three.js r128](https://github.com/mrdoob/three.js/tree/r128)（npm 包 `three@0.128.0`）的 `build/three.min.js`，以及同版本 `examples/js` 下的 `OrbitControls`、`CopyShader`、`LuminosityHighPassShader`、`EffectComposer`、`RenderPass`、`ShaderPass`、`UnrealBloomPass`，按原样拼接，未改动代码。许可为 MIT，原文见 [third-party/three.LICENSE](third-party/three.LICENSE)。
+
 ## 宿主用途路由与 Go 多连接准备工具
 
 `scripts/dsh-memory-routing/` 和 `scripts/prepare-dsh-memory-routing.mjs` 是此前 rc5 候选使用的宿主路由、连接变换和随机身份 helper，继续使用本项目 MIT。上述工具不在当前公开发布白名单内；未来单独发布时须同时提供源码、来源说明和完整许可。

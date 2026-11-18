@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>时间轴</title>
+<meta name="description" content="自定义视图模板：横轴是时间，纵轴是星团，点越大记忆越深。">
+<style>
+  html,body{height:100%;margin:0;background:#0b0d14;color:#dfe6f5;font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// 最小的自定义视图：复制到 <记忆库目录>/views/timeline.html，刷新记忆星图页面后在「视图」里选「时间轴」。
+// 可用的数据和事件见 MEMORY-MAP.zh-CN.md。视图不能联网，也拿不到原话正文。
+const canvas = document.getElementById('c'), g = canvas.getContext('2d');
+let data = null, hits = new Set();
+
+function draw() {
+  if (!data) return;
+  const w = canvas.width = innerWidth, h = canvas.height = innerHeight;
+  const timed = data.items.filter(m => m.time !== null);
+  if (!timed.length) return;
+  const t0 = timed[0].time, t1 = timed[timed.length - 1].time || t0 + 1;
+  const rows = data.clusters.length;
+  g.clearRect(0, 0, w, h);
+  data.items.forEach((m, i) => {
+    if (m.time === null) return;
+    const x = 60 + (w - 120) * (m.time - t0) / Math.max(1, t1 - t0);
+    const y = 60 + (h - 160) * (m.cluster + 0.5) / rows;
+    g.globalAlpha = hits.size && !hits.has(i) ? 0.15 : 0.4 + 0.6 * m.depth;
+    g.fillStyle = `hsl(${(m.cluster * 137) % 360} 80% 65%)`;
+    g.beginPath(); g.arc(x, y, 2 + 5 * m.depth, 0, Math.PI * 2); g.fill();
+  });
+  g.globalAlpha = 1; g.fillStyle = '#8e9bb8'; g.font = '12px sans-serif';
+  data.clusters.forEach((c, k) => g.fillText(c.keywords.slice(0, 2).join(' · '), 8, 64 + (h - 160) * (k + 0.5) / rows));
+}
+
+memoryMap.ready.then(d => { data = d; draw(); });
+memoryMap.on('data', d => { data = d; draw(); });
+memoryMap.on('search', r => { hits = new Set(r ? r.hits.map(x => x.index) : []); draw(); });
+addEventListener('resize', draw);
+canvas.addEventListener('click', e => {
+  // 点到最近的一点：请外层页面在侧栏显示原话
+  if (!data) return;
+  const timed = data.items.filter(m => m.time !== null), t0 = timed[0]?.time, t1 = timed.at(-1)?.time || t0 + 1;
+  let best = -1, bd = 100;
+  data.items.forEach((m, i) => {
+    if (m.time === null) return;
+    const x = 60 + (innerWidth - 120) * (m.time - t0) / Math.max(1, t1 - t0), y = 60 + (innerHeight - 160) * (m.cluster + 0.5) / data.clusters.length;
+    const d = (x - e.clientX) ** 2 + (y - e.clientY) ** 2; if (d < bd) { bd = d; best = i; }
+  });
+  memoryMap.select(best);
+});
+</script>
+</body>
+</html>

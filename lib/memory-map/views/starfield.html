@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>星图</title>
+<meta name="description" content="3D 星空：每颗星是一条原话，越深的记忆越亮，光点沿关联弧线从浅处流向深处。">
+<style>
+/* 星图视图：全屏 3D 星空；右上是视图自己的控制面板（外层页面占左上、底部和右侧侧栏）。单一深色主题。 */
+:root{
+  --void:#05070d;--panel:rgba(12,17,30,.8);--line:rgba(150,180,255,.16);
+  --ink:#e8eefc;--muted:#8e9bb8;--cyan:#8fe9ff;
+  --body:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+  color-scheme:dark;
+}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;overflow:hidden;color:var(--ink);font-family:var(--body);font-size:14px;line-height:1.6;
+  background:radial-gradient(1100px 760px at 72% 18%,rgba(84,64,180,.26),transparent 70%),radial-gradient(900px 700px at 12% 88%,rgba(18,120,150,.20),transparent 70%),var(--void)}
+#sky{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:grab}
+#sky:active{cursor:grabbing}
+#labels{position:fixed;inset:0;pointer-events:none}
+.lab{position:absolute;transform:translate(-50%,-50%);font-size:11px;font-weight:500;letter-spacing:.18em;white-space:nowrap;text-shadow:0 0 10px #000,0 0 4px #000;text-align:center}
+.lab::before{content:"";display:block;width:1px;height:10px;margin:0 auto 4px;background:currentColor;opacity:.5}
+.panel{position:fixed;background:var(--panel);border:1px solid var(--line);border-radius:10px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.ctrl{top:16px;right:16px;width:250px;padding:12px 14px;display:flex;flex-direction:column;gap:12px;max-height:calc(100% - 120px);overflow:auto}
+.ctrl.closed{display:none}
+.grp{display:flex;flex-direction:column;gap:6px}
+.grp>span{font-size:11px;letter-spacing:.1em;color:var(--muted);font-weight:700}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg button,.btn{font:inherit;font-size:13px;color:var(--ink);background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:6px;padding:3px 10px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:rgba(143,233,255,.14);border-color:rgba(143,233,255,.55);color:var(--cyan)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.note{font-size:12px;color:var(--muted);margin:0}
+.chk{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer}
+.chk input{accent-color:#8fe9ff}
+.legend{display:flex;flex-direction:column;gap:3px;max-height:190px;overflow:auto}
+.lg{display:flex;align-items:center;gap:8px;font-size:13px;background:none;border:0;color:var(--ink);padding:2px 0;cursor:pointer;text-align:left;font-family:inherit}
+.lg i{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:0 0 8px currentColor}
+.lg em{font-style:normal;color:var(--muted);font-size:11px;margin-left:auto;font-variant-numeric:tabular-nums}
+.ramp{height:8px;border-radius:4px;background:linear-gradient(90deg,#2f4db8,#7aa8ff,#fff1cf)}
+.rampl{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.toggle{position:fixed;top:16px;right:16px;display:none}
+.tip{position:fixed;pointer-events:none;max-width:280px;padding:6px 10px;font-size:13px;background:rgba(8,12,22,.92);border:1px solid var(--line);border-radius:6px}
+.tip small{display:block;color:var(--muted);font-size:11px}
+.hint{position:fixed;bottom:18px;left:16px;font-size:12px;color:var(--muted);max-width:200px}
+.fail{position:fixed;inset:0;display:grid;place-items:center;color:var(--muted);padding:24px;text-align:center}
+@media (max-width:960px){
+  .hint{display:none}
+  .toggle{display:block}
+  .ctrl{top:56px;max-height:50%}
+}
+</style>
+</head>
+<body>
+<canvas id="sky" aria-label="记忆星空：每颗星是一条原话，位置由向量算出"></canvas>
+<div id="labels"></div>
+<button class="btn toggle" id="toggle" type="button">设置</button>
+<aside class="panel ctrl" id="ctrl">
+  <div class="grp"><span>颜色表示</span>
+    <div class="seg" id="modes">
+      <button type="button" data-c="topic" aria-pressed="true">星团</button>
+      <button type="button" data-c="time" aria-pressed="false">时间</button>
+      <button type="button" data-c="role" aria-pressed="false">说话人</button>
+      <button type="button" data-c="conv" aria-pressed="false">对话</button>
+    </div>
+    <div class="legend" id="legend"></div>
+  </div>
+  <div class="grp"><span>显示</span>
+    <label class="chk"><input type="checkbox" id="optNear" checked> 意思相近的弧线</label>
+    <label class="chk"><input type="checkbox" id="optFlow" checked> 流动的光点</label>
+    <label class="chk"><input type="checkbox" id="optChain"> 同一对话按顺序连成链</label>
+    <label class="chk"><input type="checkbox" id="optLabel" checked> 星团关键词</label>
+    <label class="chk"><input type="checkbox" id="optSpin" checked> 自动旋转</label>
+    <p class="note">越亮的星，和它意思相近、互相指向的原话越多，是记忆里扎得最深的地方。光点沿弧线从浅处流向深处；越相近，流得越快、越亮。</p>
+  </div>
+</aside>
+<div class="tip" id="tip" hidden></div>
+<div class="hint">拖动旋转 · 滚轮缩放 · 点星星看原话。位置由向量降维到 3D，距离是近似的。</div>
+
+<script src="/api/basic-memory-map/lib/three-r128.js"></script>
+<script>
+(function(){
+'use strict';
+if(typeof THREE==='undefined'||!window.memoryMap){document.body.insertAdjacentHTML('beforeend','<div class="fail">星图需要的绘图库没有加载成功，请刷新页面。</div>');return;}
+memoryMap.ready.then(start);
+memoryMap.on('data',()=>location.reload());
+
+function start(DATA){
+const rng=seed=>{let s=seed|0;return()=>{s=s+0x6D2B79F5|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};};
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ITEMS=DATA.items,N=ITEMS.length;
+if(!N){document.body.insertAdjacentHTML('beforeend','<div class="fail">还没有原话可画。</div>');return;}
+const PALETTE=['#ffb86b','#7ad7ff','#ffe08a','#6effc8','#ff7aa8','#c79bff','#9cff7a','#7aa2ff','#ff9f7a','#7affea','#f3a6ff','#d4ff7a','#ffc4e1','#a8f0ff','#ffe6a8','#b5ffd9'];
+const CL=DATA.clusters.map((c,i)=>({...c,color:PALETTE[i%PALETTE.length]}));
+let opts={...memoryMap.options};
+const reduced=()=>opts.reducedMotion,low=()=>opts.lowPower;
+const LABEL_MIN=Math.max(4,Math.round(N*0.012));
+
+/* ---------- 场景 ---------- */
+const canvas=document.getElementById('sky');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:false,powerPreference:'high-performance'});
+const pixelRatio=()=>Math.min(low()?1:1.5,window.devicePixelRatio||1);
+renderer.setPixelRatio(pixelRatio());renderer.setClearColor(0x04060c,1);
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(55,1,.1,4000);camera.position.set(0,26,118);
+const controls=new THREE.OrbitControls(camera,canvas);
+controls.enableDamping=true;controls.dampingFactor=.08;controls.minDistance=12;controls.maxDistance=460;controls.autoRotateSpeed=.35;
+let dirty=true;controls.addEventListener('change',()=>{dirty=true;});
+
+{const g=new THREE.BufferGeometry(),n=1800,p=new Float32Array(n*3),r=rng(5);
+ for(let i=0;i<n;i++){const u=r()*2-1,th=r()*Math.PI*2,rad=500+r()*900,s=Math.sqrt(1-u*u);p[i*3]=Math.cos(th)*s*rad;p[i*3+1]=u*rad;p[i*3+2]=Math.sin(th)*s*rad;}
+ g.setAttribute('position',new THREE.BufferAttribute(p,3));
+ scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x9fb3ff,size:1.3,sizeAttenuation:false,transparent:true,opacity:.55,depthWrite:false})));}
+
+const VS=`attribute vec3 aColor;attribute float aSize;attribute float aPhase;uniform float uTime;uniform float uScale;uniform float uTw;varying vec3 vColor;
+void main(){vColor=aColor;vec4 mv=modelViewMatrix*vec4(position,1.0);float tw=1.0-uTw+uTw*sin(uTime*1.7+aPhase);
+gl_PointSize=aSize*tw*uScale/max(1.0,-mv.z);gl_Position=projectionMatrix*mv;}`;
+/* 亮度：浅处约 0.3，最深处约 0.9；只有深处的星带一点白芯，辉光阈值 0.6。 */
+const FS=`varying vec3 vColor;void main(){vec2 c=gl_PointCoord-0.5;float d=length(c)*2.0;if(d>1.0)discard;
+float core=exp(-d*d*22.0);float halo=exp(-d*4.5)*0.42*(1.0-d);float lum=max(vColor.r,max(vColor.g,vColor.b));
+vec3 rgb=vColor*(core*1.05+halo)+vec3(1.0)*core*0.38*smoothstep(0.5,1.0,lum);
+gl_FragColor=vec4(rgb,core+halo);}`;
+const mkMat=tw=>new THREE.ShaderMaterial({uniforms:{uTime:{value:0},uScale:{value:320},uTw:{value:tw}},vertexShader:VS,fragmentShader:FS,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending});
+
+const pos=new Float32Array(N*3),col=new Float32Array(N*3),size=new Float32Array(N),phase=new Float32Array(N),depth=new Float32Array(N);
+{const r=rng(9);ITEMS.forEach((m,i)=>{pos.set(m.pos,i*3);depth[i]=m.depth;phase[i]=r()*6.283;});}
+const geo=new THREE.BufferGeometry();
+geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+geo.setAttribute('aColor',new THREE.BufferAttribute(col,3));
+geo.setAttribute('aSize',new THREE.BufferAttribute(size,1));
+geo.setAttribute('aPhase',new THREE.BufferAttribute(phase,1));
+const starMat=mkMat(.15);
+const stars=new THREE.Points(geo,starMat);scene.add(stars);geo.computeBoundingSphere();
+
+function mkLines(max,opacity){
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(Math.max(1,max)*6),3));
+  g.setAttribute('color',new THREE.BufferAttribute(new Float32Array(Math.max(1,max)*6),3));
+  const l=new THREE.LineSegments(g,new THREE.LineBasicMaterial({vertexColors:true,transparent:true,opacity,blending:THREE.AdditiveBlending,depthWrite:false}));
+  l.frustumCulled=false;scene.add(l);return l;
+}
+
+/* ---------- 关联弧线：每颗星取最相近的两条，方向从浅到深；记忆多时只留最强的一批 ---------- */
+let EDGES=[];
+{const seen=new Set(),r=rng(11);
+ ITEMS.forEach((m,i)=>m.near.slice(0,2).forEach(([j,s])=>{if(s<.62||s>.999||j<0||j>=N)return;const key=i<j?i+'-'+j:j+'-'+i;if(seen.has(key))return;seen.add(key);
+   const from=depth[i]<=depth[j]?i:j,to=from===i?j:i;EDGES.push({a:from,b:to,w:Math.min(1,(s-.6)/.3),off:r()});}));
+ EDGES.sort((x,y)=>y.w-x.w);EDGES=EDGES.slice(0,4000);}
+const FLOW_EDGES=EDGES.slice(0,1500);
+const CHAIN=[];
+{const bySession=new Map();ITEMS.forEach((m,i)=>{if(m.session===null)return;const list=bySession.get(m.session)??[];list.push(i);bySession.set(m.session,list);});
+ bySession.forEach(list=>{for(let k=1;k<list.length;k++)CHAIN.push([list[k-1],list[k]]);});}
+
+const SEG=24,TRAIL=5;
+const curveLines=mkLines(EDGES.length*SEG,1),chainLines=mkLines(CHAIN.length,.5),queryLines=mkLines(4,.95);
+chainLines.visible=false;
+const flowGeo=new THREE.BufferGeometry(),FP=Math.max(1,FLOW_EDGES.length*TRAIL);
+flowGeo.setAttribute('position',new THREE.BufferAttribute(new Float32Array(FP*3),3));
+flowGeo.setAttribute('aColor',new THREE.BufferAttribute(new Float32Array(FP*3),3));
+flowGeo.setAttribute('aSize',new THREE.BufferAttribute(new Float32Array(FP),1));
+flowGeo.setAttribute('aPhase',new THREE.BufferAttribute(new Float32Array(FP),1));
+const flowMat=mkMat(0);
+const flow=new THREE.Points(flowGeo,flowMat);flow.frustumCulled=false;scene.add(flow);
+const _a=[0,0,0],_b=[0,0,0],_c=[0,0,0];
+// 弧线控制点：从中点向外鼓起，像星系的丝状结构。每条边的控制点只算一次。
+const CTRL=new Float32Array(EDGES.length*3);
+EDGES.forEach((e,k)=>{
+  const a=e.a,b=e.b,mx=(pos[a*3]+pos[b*3])/2,my=(pos[a*3+1]+pos[b*3+1])/2,mz=(pos[a*3+2]+pos[b*3+2])/2;
+  const len=Math.hypot(pos[b*3]-pos[a*3],pos[b*3+1]-pos[a*3+1],pos[b*3+2]-pos[a*3+2]),ol=Math.hypot(mx,my+.001,mz)||1,f=len*.28/ol;
+  CTRL[k*3]=mx+mx*f;CTRL[k*3+1]=my+(my+.001)*f+len*.08;CTRL[k*3+2]=mz+mz*f;e.k=k;
+});
+function load(e){for(let q=0;q<3;q++){_a[q]=pos[e.a*3+q];_b[q]=pos[e.b*3+q];_c[q]=CTRL[e.k*3+q];}}
+function bez(u,out,o){const v=1-u;for(let q=0;q<3;q++)out[o+q]=v*v*_a[q]+2*v*u*_c[q]+u*u*_b[q];}
+{const p=curveLines.geometry.attributes.position.array;let n=0;
+ for(const e of EDGES){load(e);for(let s=0;s<SEG;s++){bez(s/SEG,p,n*3);bez((s+1)/SEG,p,n*3+3);n+=2;}}
+ curveLines.geometry.setDrawRange(0,n);curveLines.geometry.attributes.position.needsUpdate=true;}
+function updCurveColors(gain){
+  const c=curveLines.geometry.attributes.color.array;let n=0;
+  for(const e of EDGES){
+    for(let s=0;s<SEG;s++){for(const [u,o] of [[s/SEG,0],[(s+1)/SEG,3]]){const prof=(.12+.88*Math.pow(Math.abs(2*u-1),2))*(.15+.85*e.w)*gain;
+      for(let q=0;q<3;q++)c[n*3+o+q]=(col[e.a*3+q]*(1-u)+col[e.b*3+q]*u)*prof;}n+=2;}}
+  curveLines.geometry.attributes.color.needsUpdate=true;
+}
+function updFlow(sec,gain){
+  const p=flowGeo.attributes.position.array,c=flowGeo.attributes.aColor.array,sz=flowGeo.attributes.aSize.array;let n=0;
+  for(const e of FLOW_EDGES){load(e);const speed=.08+.22*e.w,head=(sec*speed+e.off)%1;
+    for(let t=0;t<TRAIL;t++){const u=head-t*.022;
+      if(u<=0){sz[n]=0;n++;continue;}
+      bez(u,p,n*3);const fade=Math.sin(Math.PI*u)*Math.pow(1-t/TRAIL,1.6)*(.35+.65*e.w)*gain;
+      for(let q=0;q<3;q++)c[n*3+q]=(BASE[e.a*3+q]*(1-u)+BASE[e.b*3+q]*u)*.85*fade+.1*fade;
+      sz[n]=(t===0?4.2:3.6-t*.5)*(.75+.4*e.w);n++;}}
+  for(let k=n;k<FP;k++)sz[k]=0;
+  flowGeo.attributes.position.needsUpdate=true;flowGeo.attributes.aColor.needsUpdate=true;flowGeo.attributes.aSize.needsUpdate=true;
+}
+
+/* ---------- 星云：每个星团一团柔光（位置和大小只算一次）---------- */
+const glowTex=(()=>{const S=512,cv=document.createElement('canvas');cv.width=cv.height=S;const g=cv.getContext('2d');
+  const gr=g.createRadialGradient(S/2,S/2,0,S/2,S/2,S/2);
+  for(let k=0;k<=24;k++){const x=k/24,a=Math.exp(-x*x*4.2)*(1-x);gr.addColorStop(x,`rgba(255,255,255,${a.toFixed(4)})`);}
+  g.fillStyle=gr;g.fillRect(0,0,S,S);
+  const img=g.getImageData(0,0,S,S),d=img.data,r=rng(3); // 轻微抖动，避免渐变出现一圈圈的色带
+  for(let i=3;i<d.length;i+=4){d[i]=Math.max(0,Math.min(255,d[i]+(r()+r()-1)*2));}
+  g.putImageData(img,0,0);
+  const t=new THREE.CanvasTexture(cv);t.minFilter=THREE.LinearMipmapLinearFilter;return t;})();
+const clusterDepth=CL.map(()=>[0,0]);ITEMS.forEach((m,i)=>{const s=clusterDepth[m.cluster];if(s){s[0]+=depth[i];s[1]++;}});
+const nebulae=CL.map((t,k)=>{const s=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex,color:new THREE.Color(t.color),transparent:true,opacity:.05,blending:THREE.AdditiveBlending,depthWrite:false}));
+  const [x,y,z]=t.center;let r=0,n=0;ITEMS.forEach((m,i)=>{if(m.cluster===k){r+=(pos[i*3]-x)**2+(pos[i*3+1]-y)**2+(pos[i*3+2]-z)**2;n++;}});r=n?Math.sqrt(r/n):10;
+  s.position.set(x,y,z);const sc=Math.max(16,Math.min(70,r*2.6));s.scale.set(sc,sc,1);scene.add(s);return s;});
+[[-700,260,-900,'#4b3aa8',1500],[820,-300,-700,'#0f6f86',1300],[0,600,-1100,'#2a2f7a',1700]].forEach(([x,y,z,c,sc])=>{
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex,color:new THREE.Color(c),transparent:true,opacity:.16,blending:THREE.AdditiveBlending,depthWrite:false}));
+  s.position.set(x,y,z);s.scale.set(sc,sc,1);scene.add(s);});
+function updNebulae(){
+  const quiet=search||focusConv!==null?.4:1;
+  CL.forEach((t,k)=>{const s=clusterDepth[k];nebulae[k].material.opacity=(mode==='topic'?.03+.06*(s[1]?s[0]/s[1]:0):.02)*quiet;});
+}
+
+/* ---------- 辉光后期（省电时关掉）---------- */
+let composer=null,bloom=null,dither=null;
+if(THREE.EffectComposer&&THREE.RenderPass&&THREE.UnrealBloomPass){
+  const hdr=new THREE.WebGLRenderTarget(window.innerWidth,window.innerHeight,{type:renderer.capabilities.isWebGL2?THREE.HalfFloatType:THREE.UnsignedByteType});
+  composer=new THREE.EffectComposer(renderer,hdr);composer.addPass(new THREE.RenderPass(scene,camera));
+  bloom=new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth,window.innerHeight),.55,.45,.6);composer.addPass(bloom);
+  if(THREE.ShaderPass){ // 最后一道：极轻的颗粒抖动，把 8 位输出的色带打散
+    dither=new THREE.ShaderPass({uniforms:{tDiffuse:{value:null},uTime:{value:0}},
+      vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+      fragmentShader:`uniform sampler2D tDiffuse;uniform float uTime;varying vec2 vUv;
+        float h(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233))+uTime)*43758.5453);}
+        void main(){vec4 c=texture2D(tDiffuse,vUv);float n=(h(gl_FragCoord.xy)+h(gl_FragCoord.xy+vec2(17.3,5.1))-1.0)*(1.6/255.0);
+        gl_FragColor=vec4(max(c.rgb+n,0.0),1.0);}`});
+    composer.addPass(dither);
+  }
+}
+
+const qGeo=new THREE.BufferGeometry();
+qGeo.setAttribute('position',new THREE.BufferAttribute(new Float32Array(3),3));
+qGeo.setAttribute('aColor',new THREE.BufferAttribute(new Float32Array([1,.85,.5]),3));
+qGeo.setAttribute('aSize',new THREE.BufferAttribute(new Float32Array([16]),1));
+qGeo.setAttribute('aPhase',new THREE.BufferAttribute(new Float32Array([0]),1));
+const qMat=mkMat(.25);
+const qStar=new THREE.Points(qGeo,qMat);qStar.visible=false;qStar.frustumCulled=false;scene.add(qStar);
+
+/* ---------- 颜色 ---------- */
+let mode='topic';
+const BASE=new Float32Array(N*3),BSIZE=new Float32Array(N);
+const C=new THREE.Color(),C2=new THREE.Color();
+const timed=ITEMS.map((m,i)=>i).filter(i=>Number.isFinite(ITEMS[i].time));
+const tmin=timed.length?ITEMS[timed[0]].time:null,tmax=timed.length?ITEMS[timed[timed.length-1]].time:null;
+const trank=new Float32Array(N).fill(-1);timed.forEach((i,k)=>{trank[i]=timed.length>1?k/(timed.length-1):1;});
+const hueOf=n=>((n*137.508)%360)/360;
+function setBase(){
+  ITEMS.forEach((m,i)=>{
+    if(mode==='topic')C.set(CL[m.cluster]?.color??'#8e9bb8');
+    else if(mode==='role')C.set(m.kind==='user'?'#8fe9ff':m.kind==='assistant'?'#c9a2ff':'#ffd27a');
+    else if(mode==='conv'){if(m.session===null)C.set('#6b7590');else C.setHSL(hueOf(m.session),.75,.68);}
+    else{const t=trank[i];if(t<0)C.set('#6b7590');else C.set('#2f4db8').lerp(C2.set('#7aa8ff'),Math.min(1,t*2)).lerp(C2.set('#fff1cf'),Math.max(0,t*2-1));}
+    BASE[i*3]=C.r;BASE[i*3+1]=C.g;BASE[i*3+2]=C.b;
+    BSIZE[i]=m.kind==='user'?9:7.2;
+  });
+  renderLegend();dirty=true;
+}
+const fmtDate=t=>{const d=new Date(t);return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;};
+const fmtTime=t=>{if(!Number.isFinite(t))return '时间不明';const d=new Date(t),p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;};
+function renderLegend(){
+  const el=document.getElementById('legend');el.innerHTML='';
+  if(mode==='topic'){CL.forEach((t,i)=>{const b=document.createElement('button');b.type='button';b.className='lg';
+    b.innerHTML=`<i style="color:${t.color};background:${t.color}"></i>${esc(t.keywords.join(' · ')||'星团 '+(i+1))}<em>${t.size}</em>`;b.onclick=()=>flyTo(t.center,65);el.appendChild(b);});
+    el.insertAdjacentHTML('beforeend','<p class="note">星团由程序按向量自动分组，关键词从原话里挑出，没有经过模型改写。</p>');}
+  else if(mode==='time'){el.innerHTML=tmin===null?'<p class="note">这些原话没有时间。</p>':`<div class="ramp"></div><div class="rampl"><span>${fmtDate(tmin)}</span><span>${fmtDate(tmax)}</span></div><p class="note">按先后排序着色，越新越亮、越偏暖色。</p>`;}
+  else if(mode==='role'){el.innerHTML=`<div class="lg"><i style="color:#8fe9ff;background:#8fe9ff"></i>你说的话</div><div class="lg"><i style="color:#c9a2ff;background:#c9a2ff"></i>助手的回复</div><div class="lg"><i style="color:#ffd27a;background:#ffd27a"></i>导入的笔记</div><p class="note">你说的话星星稍大。</p>`;}
+  else{el.innerHTML=`<p class="note">每个对话一种颜色。点一颗星，会只突出它所在的那个对话。</p>`;}
+}
+
+/* ---------- 状态 ---------- */
+let selected=-1,hovered=-1,focusConv=null,search=null,fly=null;
+const clock=performance.now(),now=()=>performance.now();
+const ease=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+function flyTo(p,dist){
+  const t=new THREE.Vector3(p[0],p[1],p[2]);
+  const dir=camera.position.clone().sub(controls.target).normalize();
+  fly={t0:now(),dur:reduced()?1:1200,fT:controls.target.clone(),tT:t,fP:camera.position.clone(),tP:t.clone().add(dir.multiplyScalar(dist))};dirty=true;
+}
+const at=i=>[pos[i*3],pos[i*3+1],pos[i*3+2]];
+function select(i,fromHost){
+  selected=i;focusConv=i>=0&&document.getElementById('optChain').checked?ITEMS[i].session:null;
+  chainLines.visible=document.getElementById('optChain').checked;
+  if(i>=0)flyTo(at(i),55);
+  // 外层页面的原话侧栏占右侧，打开时让出位置
+  document.getElementById('ctrl').style.visibility=i>=0?'hidden':'';
+  if(!fromHost)memoryMap.select(i);
+  dirty=true;
+}
+
+/* ---------- 外层页面的搜索结果 ---------- */
+memoryMap.on('search',result=>{
+  if(!result||!result.hits.length){search=null;qStar.visible=false;dirty=true;return;}
+  const hits=result.hits.filter(h=>h.index>=0&&h.index<N);
+  const top=hits.filter(h=>h.top),anchor=(top.length?top:hits).slice(0,3);
+  const qp=[0,0,0];anchor.forEach(h=>{for(let k=0;k<3;k++)qp[k]+=pos[h.index*3+k]/anchor.length;});qp[1]+=7;
+  search={t0:now(),qp,cand:new Set(hits.map(h=>h.index)),winners:new Set(top.map(h=>h.index))};
+  qGeo.attributes.position.array.set(qp);qGeo.attributes.position.needsUpdate=true;qStar.visible=true;
+  flyTo(qp,90);
+});
+memoryMap.on('focus',i=>select(Number.isInteger(i)?i:-1,true));
+memoryMap.on('options',next=>{opts={...next};applyOptions();});
+
+/* ---------- 交互 ---------- */
+const ray=new THREE.Raycaster();ray.params.Points.threshold=1.6;
+const mouse=new THREE.Vector2();let downAt=null;
+function pickAt(x,y){const r=canvas.getBoundingClientRect();mouse.set((x-r.left)/r.width*2-1,-(y-r.top)/r.height*2+1);
+  ray.setFromCamera(mouse,camera);const hit=ray.intersectObject(stars);return hit.length?hit[0].index:-1;}
+const tip=document.getElementById('tip'),KIND={user:'你说的',assistant:'助手说的',note:'笔记'};
+canvas.addEventListener('pointermove',e=>{
+  if(e.pointerType!=='mouse'||e.buttons)return;
+  const h=pickAt(e.clientX,e.clientY);if(h!==hovered){hovered=h;dirty=true;}
+  if(hovered>=0){const m=ITEMS[hovered],cl=CL[m.cluster];
+    tip.innerHTML=`${esc(KIND[m.kind]??'原话')} · ${esc(fmtTime(m.time))}<small>${esc(cl?.keywords.join(' · ')||'')} · 深度 ${Math.round(m.depth*100)} · 点击看原话</small>`;
+    tip.style.left=Math.min(e.clientX+14,window.innerWidth-296)+'px';tip.style.top=(e.clientY+14)+'px';tip.hidden=false;canvas.style.cursor='pointer';}
+  else{tip.hidden=true;canvas.style.cursor='';}
+});
+canvas.addEventListener('pointerleave',()=>{hovered=-1;tip.hidden=true;dirty=true;});
+canvas.addEventListener('pointerdown',e=>{downAt=[e.clientX,e.clientY];});
+canvas.addEventListener('pointerup',e=>{
+  if(!downAt)return;const moved=Math.hypot(e.clientX-downAt[0],e.clientY-downAt[1]);downAt=null;if(moved>5)return;
+  select(pickAt(e.clientX,e.clientY),false);
+});
+document.getElementById('modes').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;mode=b.dataset.c;
+  document.querySelectorAll('#modes button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));setBase();});
+const optFlow=document.getElementById('optFlow'),optSpin=document.getElementById('optSpin');
+document.getElementById('optNear').onchange=e=>{curveLines.visible=e.target.checked;dirty=true;};
+optFlow.onchange=()=>{applyOptions();};
+optSpin.onchange=()=>{applyOptions();};
+document.getElementById('optChain').onchange=e=>{chainLines.visible=e.target.checked;focusConv=e.target.checked&&selected>=0?ITEMS[selected].session:null;dirty=true;};
+document.getElementById('optLabel').onchange=e=>{document.getElementById('labels').hidden=!e.target.checked;dirty=true;};
+document.getElementById('toggle').onclick=()=>document.getElementById('ctrl').classList.toggle('closed');
+if(window.innerWidth<=960)document.getElementById('ctrl').classList.add('closed');
+
+const labelEls=CL.map(t=>{const d=document.createElement('div');d.className='lab';d.style.color=t.color;
+  d.textContent=t.keywords.slice(0,2).join(' · ');document.getElementById('labels').appendChild(d);return d;});
+
+/* ---------- 每帧 ---------- */
+function applyOptions(){
+  flow.visible=optFlow.checked&&!low()&&!reduced();
+  controls.autoRotate=optSpin.checked&&!low()&&!reduced();
+  starMat.uniforms.uTw.value=low()||reduced()?0:.15;qMat.uniforms.uTw.value=low()||reduced()?0:.25;
+  renderer.setPixelRatio(pixelRatio());resize();dirty=true;
+}
+function resize(){const w=window.innerWidth,h=window.innerHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();
+  const sc=h*.42*renderer.getPixelRatio();starMat.uniforms.uScale.value=sc;qMat.uniforms.uScale.value=sc;flowMat.uniforms.uScale.value=sc;
+  if(composer){composer.setPixelRatio(renderer.getPixelRatio());composer.setSize(w,h);}dirty=true;}
+window.addEventListener('resize',resize);
+function updChain(){
+  const list=focusConv!==null?CHAIN.filter(([a])=>ITEMS[a].session===focusConv):CHAIN;
+  const p=chainLines.geometry.attributes.position.array,c=chainLines.geometry.attributes.color.array;
+  list.forEach(([a,b],k)=>{for(let q=0;q<3;q++){p[k*6+q]=pos[a*3+q];p[k*6+3+q]=pos[b*3+q];c[k*6+q]=col[a*3+q];c[k*6+3+q]=col[b*3+q];}});
+  chainLines.geometry.setDrawRange(0,list.length*2);chainLines.geometry.attributes.position.needsUpdate=true;chainLines.geometry.attributes.color.needsUpdate=true;
+}
+const V=new THREE.Vector3(),GOLD=new THREE.Color('#ffd27a'),CYAN=new THREE.Color('#9ff1ff');
+let lastColorKey='';
+function frame(){
+  requestAnimationFrame(frame);
+  const t=now(),sec=(t-clock)/1000,animated=!low()&&!reduced();
+  if(fly){const k=Math.min(1,(t-fly.t0)/fly.dur),e=ease(k);controls.target.lerpVectors(fly.fT,fly.tT,e);camera.position.lerpVectors(fly.fP,fly.tP,e);if(k>=1)fly=null;dirty=true;}
+  const se=search?(t-search.t0)/1000:0,searching=search&&se<1.8;
+  controls.update();
+  if(!animated&&!dirty&&!searching)return;
+  dirty=false;
+  starMat.uniforms.uTime.value=sec;qMat.uniforms.uTime.value=sec*2;
+  const colorKey=[mode,selected,hovered,focusConv,search?search.t0:0,searching?Math.floor(se*20):'done'].join('|');
+  if(colorKey!==lastColorKey){
+    lastColorKey=colorKey;
+    for(let i=0;i<N;i++){
+      C.setRGB(BASE[i*3],BASE[i*3+1],BASE[i*3+2]);const dp=depth[i];let s=BSIZE[i]*(.7+.7*dp),mult=.42+.5*dp;
+      if(search){
+        if(!search.cand.has(i)){mult*=.28;s*=.85;}
+        else if(se<1.1){C.lerp(CYAN,.5);mult=.85;s*=1.5;}
+        else if(search.winners.has(i)){C.lerp(GOLD,.8);mult=1.05;s*=2.1;}
+        else{mult=.45;s*=1.05;}
+      }
+      if(focusConv!==null&&ITEMS[i].session!==focusConv)mult*=.18;
+      if(i===selected){C.lerp(C2.setRGB(1,1,1),.45);s*=2.2;mult=Math.max(mult,.95);}
+      else if(i===hovered){s*=1.4;mult=Math.max(mult,.8);}
+      col[i*3]=C.r*mult;col[i*3+1]=C.g*mult;col[i*3+2]=C.b*mult;size[i]=s;
+    }
+    geo.attributes.aColor.needsUpdate=true;geo.attributes.aSize.needsUpdate=true;
+    const quiet=search||focusConv!==null?.3:1;
+    if(curveLines.visible)updCurveColors(.38*quiet);
+    updNebulae();
+    if(chainLines.visible)updChain();
+  }
+  if(flow.visible)updFlow(sec,search||focusConv!==null?.3:1);
+  flowMat.uniforms.uTime.value=sec;if(dither)dither.uniforms.uTime.value=sec%10;
+  if(search&&se>1.1&&search.winners.size){
+    const w=[...search.winners],p=queryLines.geometry.attributes.position.array,c=queryLines.geometry.attributes.color.array,grow=Math.min(1,(se-1.1)/.6);
+    w.slice(0,4).forEach((i,k)=>{for(let q=0;q<3;q++){p[k*6+q]=search.qp[q];p[k*6+3+q]=search.qp[q]+(pos[i*3+q]-search.qp[q])*grow;}c.set([1,.82,.45,1,.82,.45],k*6);});
+    queryLines.geometry.setDrawRange(0,Math.min(4,w.length)*2);queryLines.geometry.attributes.position.needsUpdate=true;queryLines.geometry.attributes.color.needsUpdate=true;queryLines.visible=true;
+  }else queryLines.visible=false;
+  if(!document.getElementById('labels').hidden){
+    const W=window.innerWidth,H=window.innerHeight;
+    CL.forEach((tp,k)=>{const el=labelEls[k];if(tp.size<LABEL_MIN||!tp.keywords.length){el.style.opacity=0;return;}
+      V.set(tp.center[0],tp.center[1]+12,tp.center[2]);const dist=V.distanceTo(camera.position);V.project(camera);
+      if(V.z>1){el.style.opacity=0;return;}
+      el.style.left=((V.x+1)/2*W)+'px';el.style.top=((1-V.y)/2*H)+'px';
+      const near=Math.max(0,Math.min(1,(220-dist)/120));
+      el.style.opacity=((search||focusConv!==null)?.15:.62)*(.35+.65*near);});
+  }
+  if(composer&&!low())composer.render();else renderer.render(scene,camera);
+}
+setBase();applyOptions();
+requestAnimationFrame(frame);
+}
+})();
+</script>
+</body>
+</html>
