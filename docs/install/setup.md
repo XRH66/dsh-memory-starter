@@ -59,6 +59,15 @@ dsh plugin --profile web add "github:XRH66/dsh-global-settings#$settingsCommit"
 
 人设插件可以不装；不装时记忆照常工作，只是没有全局人设和状态面板。
 
+连不上 GitHub 或想离线安装时，可以到 [Releases 页](https://github.com/XRH66/dsh-memory-starter/releases)下载对应版本的安装包（如 `dsh-memory-starter-0.8.0.tgz`），用本地文件代替上面第一条命令：
+
+```powershell
+$tgz = 'D:\Downloads\dsh-memory-starter-0.8.0.tgz'           # 改成你下载的位置
+dsh plugin --profile web add ('file:' + ($tgz -replace '\\', '/'))
+```
+
+安装包只含插件运行需要的文件，和按标签安装的内容相同。
+
 ## 4. 人设与自我档案（可选）
 
 复制虚构的起始示例，之后改成自己的内容。已有文件时命令会停下，不会覆盖：
