@@ -251,11 +251,92 @@ test('raw context drops whole old messages for small token budgets and preserves
     row.text, row.embedding.prefix + first, shortPrefix + first, row.embedding.prefix + second, shortPrefix + second,
   ]);
   const inputs = f.calls.filter(call => call.op === 'embed').flatMap(call => call.texts);
-  assert.deepEqual(inputs, [first, shortPrefix + second]);
+  assert.deepEqual(inputs, [first, shortPrefix + second, second]);
   assert.deepEqual(storedChunks(f.indexFile, snapshot, row.id), [
     { start: 0, end: first.length, tokenBound: first.length, textHash: sourceTextHash(inputs[0]) },
     { start: first.length, end: row.text.length, tokenBound: inputs[1].length, textHash: sourceTextHash(inputs[1]) },
+    { start: first.length, end: row.text.length, tokenBound: second.length, textHash: sourceTextHash(second) },
   ]);
+});
+
+test('contextual raw originals encode background plus body while other sources stay single', async t => {
+  const f = await fixture(t);
+  const contextual = contextualDoc('contextual', '正文事实', [backgroundMessage('background', '前文背景')]);
+  const plainRaw = doc('plain-raw', 'raw', '单独正文');
+  const note = doc('note', 'document', '资料正文');
+  f.setRows([contextual, plainRaw, note]);
+  await f.choose();
+  const { profile: snapshot } = await f.api.prepare({ grant: f.g });
+  assert.deepEqual(f.calls.filter(call => call.op === 'embed' && call.kind === 'document').flatMap(call => call.texts), [
+    contextual.embedding.prefix + contextual.text,
+    contextual.text,
+    plainRaw.text,
+    note.text,
+  ]);
+  assert.deepEqual(storedChunks(f.indexFile, snapshot, contextual.id), [
+    { start: 0, end: contextual.text.length,
+      tokenBound: contextual.embedding.prefix.length + contextual.text.length,
+      textHash: sourceTextHash(contextual.embedding.prefix + contextual.text) },
+    { start: 0, end: contextual.text.length, tokenBound: contextual.text.length,
+      textHash: sourceTextHash(contextual.text) },
+  ]);
+  assert.equal(storedChunks(f.indexFile, snapshot, plainRaw.id).length, 1);
+  assert.equal(storedChunks(f.indexFile, snapshot, note.id).length, 1);
+});
+
+test('a changed raw embedding proof reencodes once and then reuses the new index', async t => {
+  const f = await fixture(t);
+  const current = contextualDoc('upgrade', '升级后的正文', [backgroundMessage('earlier', '升级前的背景')]);
+  const legacy = {
+    ...current,
+    anchor: {
+      ...current.anchor,
+      embedding: { ...current.anchor.embedding, version: 'raw-context-v1' },
+    },
+  };
+  f.setRows([legacy]);
+  await f.choose();
+  await f.api.prepare({ grant: f.g });
+  f.setRows([current]);
+  const before = f.calls.filter(call => call.op === 'embed' && call.kind === 'document').flatMap(call => call.texts).length;
+  const upgraded = await f.api.incremental({ grant: f.g });
+  assert.notEqual(upgraded.profile.indexId, undefined);
+  assert.deepEqual(f.calls.filter(call => call.op === 'embed' && call.kind === 'document').flatMap(call => call.texts).slice(before), [
+    current.embedding.prefix + current.text,
+    current.text,
+  ]);
+  const encoded = f.calls.filter(call => call.op === 'embed' && call.kind === 'document').flatMap(call => call.texts).length;
+  const repeated = await f.api.incremental({ grant: f.g });
+  assert.equal(repeated.unchanged, true);
+  assert.equal(f.calls.filter(call => call.op === 'embed' && call.kind === 'document').flatMap(call => call.texts).length, encoded);
+});
+
+test('two chunks of one original count as one candidate and contribute their best similarity', async t => {
+  const f = await fixture(t);
+  const target = contextualDoc('target', 'target body', [backgroundMessage('target-background', 'target context')]);
+  const others = Array.from({ length: 10 }, (_, index) =>
+    contextualDoc(`other-${index}`, `other body ${index}`, [backgroundMessage(`background-${index}`, `other context ${index}`)]));
+  f.setRows([target, ...others]);
+  f.hooks.vectors = (texts, { kind }) => texts.map(text => {
+    const vector = Array(512).fill(0);
+    if (kind === 'query' || text === target.text) vector[0] = 1;
+    else if (text.startsWith('背景｜')) {
+      vector[0] = 0.05;
+      vector[1] = 1;
+    } else {
+      vector[0] = 0.5;
+      vector[1] = 1;
+    }
+    return vector;
+  });
+  await f.choose();
+  await f.api.prepare({ grant: f.g });
+  const result = await f.api.query({ grant: f.g, query: 'fixture', limit: 10 });
+  assert.equal(result.records.length, 10);
+  assert.equal(new Set(result.records.map(record => record.id)).size, 10);
+  assert.equal(result.records[0].id, target.id);
+  assert.equal(result.records[0].score, 1);
+  assert.deepEqual(result.records[0].anchor.match, { start: 0, end: target.text.length });
 });
 
 test('raw context anchor is rechecked before document dispatch and in queries, and background edits reencode', async t => {
@@ -302,7 +383,7 @@ test('raw context anchor is rechecked before document dispatch and in queries, a
   const { profile: next } = await f.api.incremental({ grant: f.g });
   assert.notEqual(next.indexId, first.indexId);
   assert.deepEqual(f.calls.slice(beforeIncremental).filter(call => call.op === 'embed').flatMap(call => call.texts),
-    [changed.embedding.prefix + changed.text]);
+    [changed.embedding.prefix + changed.text, changed.text]);
   assert.deepEqual((await f.api.query({ ...query, profile: next })).records.map(record => record.anchor.embedding),
     [changed.anchor.embedding]);
 });
@@ -1006,11 +1087,14 @@ test('raw context reaches the real embedding backend for long chunks and keeps o
   const inputs = f.requests.flat(), spans = [[0, 599], [599, text.length]];
   const bodies = spans.map(([start, end]) => text.slice(start, end));
   assert.equal(bodies.join(''), text);
-  assert.deepEqual(inputs, [...bodies.map(body => center.embedding.prefix + body), plain.text, nonRaw.text]);
+  assert.deepEqual(inputs, [...bodies.flatMap(body => [center.embedding.prefix + body, body]), plain.text, nonRaw.text]);
   assert.ok(inputs[0].length > 600);
-  assert.deepEqual(storedChunks(f.indexFile, snapshot, center.id), spans.map(([start, end], i) => ({
-    start, end, tokenBound: Buffer.byteLength(inputs[i], 'utf8') + 16, textHash: sourceTextHash(inputs[i]),
-  })));
+  const stored = storedChunks(f.indexFile, snapshot, center.id);
+  assert.deepEqual(stored.map(({ start, end, textHash }) => ({ start, end, textHash })), spans.flatMap(([start, end], i) => [
+    { start, end, textHash: sourceTextHash(inputs[i * 2]) },
+    { start, end, textHash: sourceTextHash(bodies[i]) },
+  ]));
+  for (let i = 0; i < spans.length; i++) assert.ok(stored[i * 2 + 1].tokenBound < stored[i * 2].tokenBound);
   const result = await f.api.query({ query: '本地服务限制', grant: f.grant, domains: ['raw'] });
   const record = result.records.find(record => record.id === center.id);
   assert.deepEqual(record.anchor.match, { start: 0, end: 599 });

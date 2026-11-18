@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRawEmbeddingContext, planRawEmbeddingChunk } from '../lib/raw-rag/embedding-material.js';
+import {
+  RAW_EMBEDDING_CONTEXT_VERSION,
+  buildRawEmbeddingContext,
+  planRawEmbeddingChunk,
+  planRawEmbeddingVariants,
+} from '../lib/raw-rag/embedding-material.js';
 import { sourceTextHash } from '../lib/source-lineage.js';
 
 const source = { id: 'center', revision: 1, role: 'user', text: '就按刚才的限制执行' };
@@ -8,7 +13,7 @@ const message = (id, text, role = 'user') => ({ id, revision: 1, ref: { storage:
 
 test('raw context formats full messages and fingerprints the ordered sources and center role', () => {
   const context = [message('a', '只允许本地执行。\n不要上传附件。'), message('b', '明白。', 'assistant')];
-  const version = 'raw-context-v1';
+  const version = RAW_EMBEDDING_CONTEXT_VERSION;
   const result = buildRawEmbeddingContext(source, context);
   assert.deepEqual(result, {
     background: ['背景｜用户：只允许本地执行。\n不要上传附件。', '背景｜助手：明白。'],
@@ -51,4 +56,18 @@ test('raw context chunk requires a single exact span inside the model budget', a
     assert.deepEqual(await planRawEmbeddingChunk(chunk, embedding, async text => makePlan(text), 20),
       { ...chunk, textHash: sourceTextHash(chunk.text) });
   }
+});
+
+test('raw context chunks add one body-only variant only when the contextual encoding fits', async () => {
+  const embedding = buildRawEmbeddingContext(source, [message('a', '不要外传')]);
+  const chunk = { start: 20, end: 23, text: '正文 ', tokenBound: 3 };
+  const plan = async text => [{ start: 0, end: text.length, text, tokenBound: Array.from(text).length }];
+  const contextual = await planRawEmbeddingChunk(chunk, embedding, plan, 80);
+  assert.deepEqual(await planRawEmbeddingVariants(chunk, embedding, plan, 80), [
+    contextual,
+    { ...chunk, textHash: sourceTextHash(chunk.text) },
+  ]);
+  assert.deepEqual(await planRawEmbeddingVariants(chunk, null, plan, 80), [
+    { ...chunk, textHash: sourceTextHash(chunk.text) },
+  ]);
 });

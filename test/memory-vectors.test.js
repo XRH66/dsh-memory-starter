@@ -152,6 +152,9 @@ async function fixture(t,overrides={}){
     return {sources,nextBefore:sources.length===limit?sources.at(-1).position:null};
   }};},queryReader(){return {get(ref){
     const row=(ref.storage==='message'?messages:legacy).get(ref.id);return row&&row.revision===ref.revision&&!row.hidden?{...row,ref:{...ref}}:null;
+  },embeddingContext(ref,{limit=4}={}){
+    const row=(ref.storage==='message'?messages:legacy).get(ref.id);
+    return Array.isArray(row?.context)?row.context.slice(-limit).map(item=>structuredClone(item)):[];
   },legacyPage({after='',limit}){
     calls.push({op:'legacy',after});const all=[...legacy.values()].filter(row=>!row.hidden).sort((a,b)=>a.id.localeCompare(b.id));const offset=after?all.findIndex(row=>row.id===after)+1:0;
     const sources=all.slice(offset,offset+limit);return {sources,nextAfter:offset+limit<all.length?sources.at(-1).id:null};
@@ -191,6 +194,102 @@ async function fixture(t,overrides={}){
     disable(){enabled=false;},async restart(){await api.close();api=createMemoryVectors(options);await api.ready();},
     async prepare(){const grant=manager();try{await api.registerCurrentConfig({grant});return await api.prepare({grant});}finally{grant.cancel();}}};
 }
+
+test('embedding version maintenance rebuilds legacy contextual originals once and keeps the active snapshot until ready',async t=>{
+  const f=await fixture(t,{queueConfig:{debounceMs:0,timers:{setTimeout(){return {unref(){}};},clearTimeout(){}}}});
+  const background=f.source('context-background',0);
+  const target={...f.source('context-target',1),context:[background]};
+  f.messages.set(background.id,background);f.messages.set(target.id,target);
+  let grant=f.manager();
+  await f.api.ready();await f.api.registerCurrentConfig({grant});
+  await f.api.prepare({grant});
+  const oldSnapshot=await f.api.getSnapshot({grant});
+  const archive=(await f.api.listArchives({grant})).find(row=>row.active);
+  assert.equal(archive.documents,2);
+  assert.equal(archive.chunks,3);
+  grant.cancel();await f.api.close();
+
+  const db=new DatabaseSync(path.join(f.directory,'vectors.sqlite'));
+  try{
+    const snapshot=db.prepare('SELECT index_identity FROM vector_snapshots WHERE id=?').get(oldSnapshot.indexId);
+    const legacyIdentity=JSON.stringify(JSON.parse(snapshot.index_identity).slice(0,3));
+    const document=db.prepare(`SELECT d.* FROM vector_members m JOIN vector_documents d ON d.version_id=m.document_version_id
+      WHERE m.snapshot_id=? AND m.doc_id=?`).get(oldSnapshot.indexId,target.id);
+    assert.ok(document);
+    const anchor=JSON.parse(document.anchor);
+    anchor.embedding={...anchor.embedding,version:'raw-context-v1'};
+    db.exec('BEGIN IMMEDIATE');
+    try{
+      db.prepare('UPDATE vector_snapshots SET index_identity=? WHERE id=?').run(legacyIdentity,oldSnapshot.indexId);
+      db.prepare('UPDATE vector_documents SET anchor=? WHERE version_id=?').run(JSON.stringify(anchor),document.version_id);
+      db.prepare('DELETE FROM vector_chunks WHERE document_version_id=? AND ordinal=1').run(document.version_id);
+      db.exec('COMMIT');
+    }catch(error){db.exec('ROLLBACK');throw error;}
+    oldSnapshot.indexIdentity=legacyIdentity;
+    const profileStore=JSON.parse(await fs.readFile(path.join(f.directory,'profiles.json'),'utf8'));
+    profileStore.scopes[0].active.indexIdentity=legacyIdentity;
+    await fs.writeFile(path.join(f.directory,'profiles.json'),JSON.stringify(profileStore));
+  }finally{db.close();}
+
+  let startDocument,releaseDocument,documentCalls=0;
+  const started=new Promise(resolve=>{startDocument=resolve;});
+  const blocked=new Promise(resolve=>{releaseDocument=resolve;});
+  f.hooks.embed=async(_texts,{kind})=>{
+    if(kind!=='document')return;
+    documentCalls++;
+    startDocument();
+    await blocked;
+  };
+  await f.restart();
+  grant=f.manager();t.after(()=>grant.cancel());
+  await f.api.registerCurrentConfig({grant});
+  const queued=JSON.parse(await fs.readFile(path.join(f.directory,'vector-queue.json'),'utf8'));
+  assert.ok(queued.catalogues?.some(row=>row.id.includes('embedding-material-version')));
+  assert.ok(queued.jobs?.some(row=>row.id.includes('embedding-material-version')&&row.state==='pending'));
+  const rebuilding=f.api.flush();
+  await started;
+  assert.deepEqual(await f.api.getSnapshot({grant}),oldSnapshot,'old active snapshot remains installed during rebuild');
+  releaseDocument();
+  await rebuilding;
+  const next=await f.api.getSnapshot({grant});
+  assert.notEqual(next.indexId,oldSnapshot.indexId);
+  assert.equal(documentCalls,2);
+  const upgradedDb=new DatabaseSync(path.join(f.directory,'vectors.sqlite'),{readOnly:true});
+  try{
+    assert.equal(upgradedDb.prepare(`SELECT COUNT(*) AS n FROM vector_members m JOIN vector_chunks c ON c.document_version_id=m.document_version_id
+      WHERE m.snapshot_id=? AND m.doc_id=?`).get(next.indexId,target.id).n,2);
+  }finally{upgradedDb.close();}
+  const encoded=f.calls.filter(call=>call.op==='embed'&&call.kind==='document').flatMap(call=>call.texts).length;
+  await f.api.flush();
+  assert.equal(f.calls.filter(call=>call.op==='embed'&&call.kind==='document').flatMap(call=>call.texts).length,encoded);
+});
+
+test('removing an original removes both contextual vectors from the active index',async t=>{
+  const f=await fixture(t,{queueConfig:{debounceMs:0,timers:{setTimeout(){return {unref(){}};},clearTimeout(){}}}});
+  const background=f.source('delete-background',0);
+  const target={...f.source('delete-target',1),context:[background]};
+  f.messages.set(background.id,background);f.messages.set(target.id,target);
+  const grant=f.manager();t.after(()=>grant.cancel());
+  await f.api.ready();await f.api.registerCurrentConfig({grant});
+  await f.api.prepare({grant});
+  const before=await f.api.getSnapshot({grant});
+  const beforeDb=new DatabaseSync(path.join(f.directory,'vectors.sqlite'),{readOnly:true});
+  try{
+    assert.equal(beforeDb.prepare(`SELECT COUNT(*) AS n FROM vector_members m JOIN vector_chunks c ON c.document_version_id=m.document_version_id
+      WHERE m.snapshot_id=? AND m.doc_id=?`).get(before.indexId,target.id).n,2);
+  }finally{beforeDb.close();}
+  f.messages.delete(target.id);
+  await f.api.notifyChanged({ownerSubject:f.access.ownerSubject,project:'main',id:target.id,revision:target.revision,kind:'message'});
+  await f.api.flush();
+  const after=await f.api.getSnapshot({grant});
+  const afterDb=new DatabaseSync(path.join(f.directory,'vectors.sqlite'),{readOnly:true});
+  try{
+    assert.equal(afterDb.prepare(`SELECT COUNT(*) AS n FROM vector_members m JOIN vector_chunks c ON c.document_version_id=m.document_version_id
+      WHERE m.snapshot_id=? AND m.doc_id=?`).get(after.indexId,target.id).n,0);
+  }finally{afterDb.close();}
+  const result=await f.api.query({grant,query:'fictional',deadline:Date.now()+2000});
+  assert.equal(result.records.some(record=>record.id===target.id),false);
+});
 
 test('portable registers 4B without loading, indexes retained documents and skips entries',async t=>{
   const f=await fixture(t);
