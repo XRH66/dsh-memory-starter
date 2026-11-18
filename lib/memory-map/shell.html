@@ -205,7 +205,7 @@ async function loadData(wait=1500){
   if(st==='disabled'){center('记忆星图已关闭','在 DSH 设置 → 记忆框架 →「记忆」页打开「记忆星图」开关后，刷新这个页面。');frame.hidden=true;return;}
   if(st==='no-vectors'){center('还没有可画的向量','星图按向量摆放原话。先在 DSH 设置 → 记忆框架里打开「原话检索」并配好向量模型。');return;}
   if(st==='no-index'){center('向量索引还没建好','配好向量模型后，DSH 会自动给原话建索引，进度在设置页的「状态」里。建好后刷新这个页面。');pollTimer=setTimeout(()=>loadData(),10000);return;}
-  if(response.status===403){center('需要从 DSH 打开','请在已经登录 DSH 的浏览器里，从 DSH 设置 → 记忆框架打开记忆星图。');return;}
+  if(response.status===403){center('需要从 DSH 打开','请在已经登录 DSH 的浏览器里，从 DSH 左侧栏的「记忆星图」打开。');return;}
   center('星图暂时打不开',value?.error??('请求失败（'+response.status+'）'));
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&data&&!pollTimer)loadData(0);});
@@ -293,7 +293,7 @@ $('rebuild').onclick=async()=>{
   const {response,value}=await api('/views').catch(()=>({response:{ok:false},value:null}));
   if(!response.ok||!value?.ok){
     if(value?.state==='disabled'){center('记忆星图已关闭','在 DSH 设置 → 记忆框架 →「记忆」页打开「记忆星图」开关后，刷新这个页面。');$('stats').textContent='已关闭';return;}
-    center('星图暂时打不开',value?.error??'请从 DSH 设置页打开');$('stats').textContent='';return;
+    center('星图暂时打不开',value?.error??'请从 DSH 左侧栏的「记忆星图」打开');$('stats').textContent='';return;
   }
   views=value.views;
   $('viewSelect').innerHTML=views.map(v=>`<option value="${esc(v.id)}">${esc(v.name)}${v.builtin?'':'（自定义）'}</option>`).join('');
