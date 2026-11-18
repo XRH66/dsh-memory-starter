@@ -47,7 +47,9 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--cyan);outline-o
 @media (max-width:960px){
   .hint{display:none}
   .toggle{display:block}
-  .ctrl{top:56px;max-height:50%}
+  /* On narrow screens the shell's brand panel owns the top-left, so settings sit above the search bar. */
+  .toggle{top:auto;bottom:calc(env(safe-area-inset-bottom,0px) + 96px)}
+  .ctrl{top:auto;bottom:calc(env(safe-area-inset-bottom,0px) + 140px);left:16px;right:16px;width:auto;max-height:42%}
 }
 </style>
 </head>

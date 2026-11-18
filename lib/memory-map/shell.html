@@ -20,7 +20,7 @@ body{margin:0;overflow:hidden;background:var(--void);color:var(--ink);font-famil
 .brand{top:calc(env(safe-area-inset-top,0px) + 16px);left:max(16px,env(safe-area-inset-left,0px));width:min(360px,calc(100% - 32px));padding:12px 14px;display:flex;flex-direction:column;gap:8px;max-height:calc(100% - 140px)}
 .brand header{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .brand h1{margin:0;font-size:19px;letter-spacing:.06em}
-.brand p{margin:0;color:var(--muted);font-size:12px}
+.brand p{margin:0;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
 .bar{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 select,button,input{font:inherit;color:var(--ink)}
 select,.btn{font-size:13px;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:6px;padding:3px 9px;cursor:pointer}
@@ -177,7 +177,8 @@ window.addEventListener('message',e=>{
 function applyData(next){
   const first=!data;data=next;indexById=new Map(data.items.map((item,i)=>[item.id,i]));
   const s=data.stats;
-  $('stats').textContent=`${s.items} 条原话 · ${s.sessions} 个对话 · ${s.clusters} 个星团`+(s.truncated?' · 只画了最近的部分':'')+(data.model?.modelKey?` · ${data.model.modelKey}`:'');
+  $('stats').textContent=`${s.items} 条原话 · ${s.sessions} 个对话 · ${s.clusters} 个星团`+(s.truncated?' · 只画了最近的部分':'');
+  $('stats').title=data.model?.modelKey?'向量模型：'+data.model.modelKey:'';
   frame.hidden=false;center(null);
   if(viewReady){if(first)frame.contentWindow.postMessage({type:'memory-map',event:'init',data,options},'*');else send('data',data);}
   if(selected>=0&&selected>=data.items.length)closeDetail(true);
