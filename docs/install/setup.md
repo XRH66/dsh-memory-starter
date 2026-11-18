@@ -62,7 +62,7 @@ dsh plugin --profile web add "github:XRH66/dsh-global-settings#$settingsCommit"
 连不上 GitHub 或想离线安装时，可以到 [Releases 页](https://github.com/XRH66/dsh-memory-starter/releases)下载对应版本的安装包（如 `dsh-memory-starter-0.8.0.tgz`），用本地文件代替上面第一条命令：
 
 ```powershell
-$tgz = 'D:\Downloads\dsh-memory-starter-0.8.0.tgz'           # 改成你下载的位置
+$tgz = '<下载目录>\dsh-memory-starter-0.8.0.tgz'            # 换成安装包实际所在的位置
 dsh plugin --profile web add ('file:' + ($tgz -replace '\\', '/'))
 ```
 
